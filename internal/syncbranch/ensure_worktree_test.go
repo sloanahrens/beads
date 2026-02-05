@@ -311,9 +311,18 @@ func TestFreshCloneScenario(t *testing.T) {
 	}
 
 	// Verify getBeadsWorktreePath returns the worktree path
+	// Use EvalSymlinks to canonicalize paths on macOS where /var -> /private/var
 	repoRoot := localDir
 	gotPath := getBeadsWorktreePath(ctx, repoRoot, "beads-sync")
-	if gotPath != worktreePath {
+	canonGot, err := filepath.EvalSymlinks(gotPath)
+	if err != nil {
+		canonGot = gotPath
+	}
+	canonExpected, err := filepath.EvalSymlinks(worktreePath)
+	if err != nil {
+		canonExpected = worktreePath
+	}
+	if canonGot != canonExpected {
 		t.Errorf("getBeadsWorktreePath returned %q, expected %q", gotPath, worktreePath)
 	}
 

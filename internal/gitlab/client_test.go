@@ -817,6 +817,8 @@ func TestFetchIssues_ContextCancellation(t *testing.T) {
 	var requestCount atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
+		// Small delay so context cancellation can win the race against pagination
+		time.Sleep(100 * time.Microsecond)
 		w.Header().Set("Content-Type", "application/json")
 		// Always return X-Next-Page to continue pagination
 		w.Header().Set("X-Next-Page", "2")
@@ -857,6 +859,8 @@ func TestFetchIssuesSince_ContextCancellation(t *testing.T) {
 	var requestCount atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
+		// Small delay so context cancellation can win the race against pagination
+		time.Sleep(100 * time.Microsecond)
 		w.Header().Set("Content-Type", "application/json")
 		// Always return X-Next-Page to continue pagination
 		w.Header().Set("X-Next-Page", "2")
