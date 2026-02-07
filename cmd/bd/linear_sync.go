@@ -284,6 +284,9 @@ func doPushToLinear(ctx context.Context, dryRun bool, createOnly bool, updateRef
 
 	mappingConfig := loadLinearMappingConfig(ctx)
 
+	// Cache for resolving beads assignee emails to Linear user IDs
+	assigneeCache := make(map[string]string) // email -> Linear user ID
+
 	for _, issue := range toCreate {
 		if dryRun {
 			stats.Created++
@@ -295,7 +298,23 @@ func doPushToLinear(ctx context.Context, dryRun bool, createOnly bool, updateRef
 
 		description := linear.BuildLinearDescription(issue)
 
-		linearIssue, err := client.CreateIssue(ctx, issue.Title, description, linearPriority, stateID, nil)
+		// Resolve assignee email to Linear user ID
+		var assigneeID string
+		if issue.Assignee != "" {
+			if cached, ok := assigneeCache[issue.Assignee]; ok {
+				assigneeID = cached
+			} else {
+				user, err := client.FindUserByEmail(ctx, issue.Assignee)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to look up assignee '%s': %v\n", issue.Assignee, err)
+				} else if user != nil {
+					assigneeID = user.ID
+				}
+				assigneeCache[issue.Assignee] = assigneeID
+			}
+		}
+
+		linearIssue, err := client.CreateIssue(ctx, issue.Title, description, linearPriority, stateID, nil, assigneeID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to create issue '%s' in Linear: %v\n", issue.Title, err)
 			stats.Errors++

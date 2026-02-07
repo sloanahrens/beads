@@ -387,8 +387,56 @@ func (c *Client) GetTeamStates(ctx context.Context) ([]State, error) {
 	return teamResp.Team.States.Nodes, nil
 }
 
+// FindUserByEmail searches for a Linear user by email address.
+// Returns nil if no user is found.
+func (c *Client) FindUserByEmail(ctx context.Context, email string) (*User, error) {
+	query := `
+		query Users($filter: UserFilter!) {
+			users(filter: $filter) {
+				nodes {
+					id
+					name
+					email
+					displayName
+				}
+			}
+		}
+	`
+
+	req := &GraphQLRequest{
+		Query: query,
+		Variables: map[string]interface{}{
+			"filter": map[string]interface{}{
+				"email": map[string]interface{}{
+					"eq": email,
+				},
+			},
+		},
+	}
+
+	data, err := c.Execute(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search users: %w", err)
+	}
+
+	var resp struct {
+		Users struct {
+			Nodes []User `json:"nodes"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse users response: %w", err)
+	}
+
+	if len(resp.Users.Nodes) == 0 {
+		return nil, nil
+	}
+
+	return &resp.Users.Nodes[0], nil
+}
+
 // CreateIssue creates a new issue in Linear.
-func (c *Client) CreateIssue(ctx context.Context, title, description string, priority int, stateID string, labelIDs []string) (*Issue, error) {
+func (c *Client) CreateIssue(ctx context.Context, title, description string, priority int, stateID string, labelIDs []string, assigneeID string) (*Issue, error) {
 	query := `
 		mutation CreateIssue($input: IssueCreateInput!) {
 			issueCreate(input: $input) {
@@ -433,6 +481,10 @@ func (c *Client) CreateIssue(ctx context.Context, title, description string, pri
 
 	if len(labelIDs) > 0 {
 		input["labelIds"] = labelIDs
+	}
+
+	if assigneeID != "" {
+		input["assigneeId"] = assigneeID
 	}
 
 	req := &GraphQLRequest{
