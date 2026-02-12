@@ -48,11 +48,11 @@ func TestBootstrapFromJSONL(t *testing.T) {
 			Labels:      []string{"urgent", "backend"},
 		},
 		{
-			ID:          "test-003",
-			Title:       "Closed issue",
-			Status:      types.StatusClosed,
-			Priority:    3,
-			IssueType:   types.TypeTask,
+			ID:        "test-003",
+			Title:     "Closed issue",
+			Status:    types.StatusClosed,
+			Priority:  3,
+			IssueType: types.TypeTask,
 		},
 	}
 
@@ -445,6 +445,286 @@ func TestBootstrapWithRoutesAndInteractions(t *testing.T) {
 	}
 	if interactionCount != 2 {
 		t.Errorf("expected 2 interactions in table, got %d", interactionCount)
+	}
+}
+
+func TestParseJSONLValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	jsonlPath := filepath.Join(tmpDir, "test.jsonl")
+
+	// Create issues with various validation problems
+	now := time.Now()
+
+	t.Run("empty ID rejected", func(t *testing.T) {
+		issue := types.Issue{Title: "No ID", Status: types.StatusOpen, IssueType: types.TypeTask}
+		data, _ := json.Marshal(issue)
+		if err := os.WriteFile(jsonlPath, append(data, '\n'), 0644); err != nil {
+			t.Fatal(err)
+		}
+		issues, errs := parseJSONLWithErrors(jsonlPath)
+		if len(issues) != 0 {
+			t.Errorf("expected 0 issues, got %d", len(issues))
+		}
+		if len(errs) != 1 || !strings.Contains(errs[0].Message, "empty ID") {
+			t.Errorf("expected empty ID error, got %+v", errs)
+		}
+	})
+
+	t.Run("invalid status rejected", func(t *testing.T) {
+		// Marshal manually to inject invalid status
+		content := `{"id":"test-1","title":"Bad status","status":"opne","type":"task"}` + "\n"
+		if err := os.WriteFile(jsonlPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		issues, errs := parseJSONLWithErrors(jsonlPath)
+		if len(issues) != 0 {
+			t.Errorf("expected 0 issues, got %d", len(issues))
+		}
+		if len(errs) != 1 || !strings.Contains(errs[0].Message, "invalid status") {
+			t.Errorf("expected invalid status error, got %+v", errs)
+		}
+	})
+
+	t.Run("closed_at fixed for non-closed", func(t *testing.T) {
+		issue := types.Issue{
+			ID: "test-1", Title: "Open with closed_at", Status: types.StatusOpen,
+			IssueType: types.TypeTask, ClosedAt: &now,
+		}
+		data, _ := json.Marshal(issue)
+		if err := os.WriteFile(jsonlPath, append(data, '\n'), 0644); err != nil {
+			t.Fatal(err)
+		}
+		issues, errs := parseJSONLWithErrors(jsonlPath)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors, got %+v", errs)
+		}
+		if len(issues) != 1 {
+			t.Fatalf("expected 1 issue, got %d", len(issues))
+		}
+		if issues[0].ClosedAt != nil {
+			t.Error("expected closed_at to be cleared for open issue")
+		}
+	})
+
+	t.Run("tombstone missing deleted_at gets fixed", func(t *testing.T) {
+		issue := types.Issue{
+			ID: "test-1", Title: "Tombstone no deleted_at", Status: types.StatusTombstone,
+			IssueType: types.TypeTask,
+		}
+		data, _ := json.Marshal(issue)
+		if err := os.WriteFile(jsonlPath, append(data, '\n'), 0644); err != nil {
+			t.Fatal(err)
+		}
+		issues, errs := parseJSONLWithErrors(jsonlPath)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors, got %+v", errs)
+		}
+		if len(issues) != 1 {
+			t.Fatalf("expected 1 issue, got %d", len(issues))
+		}
+		if issues[0].DeletedAt == nil {
+			t.Error("expected deleted_at to be set for tombstone")
+		}
+	})
+
+	t.Run("non-tombstone with deleted_at gets cleared", func(t *testing.T) {
+		issue := types.Issue{
+			ID: "test-1", Title: "Open with deleted_at", Status: types.StatusOpen,
+			IssueType: types.TypeTask, DeletedAt: &now,
+		}
+		data, _ := json.Marshal(issue)
+		if err := os.WriteFile(jsonlPath, append(data, '\n'), 0644); err != nil {
+			t.Fatal(err)
+		}
+		issues, errs := parseJSONLWithErrors(jsonlPath)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors, got %+v", errs)
+		}
+		if len(issues) != 1 {
+			t.Fatalf("expected 1 issue, got %d", len(issues))
+		}
+		if issues[0].DeletedAt != nil {
+			t.Error("expected deleted_at to be cleared for open issue")
+		}
+	})
+}
+
+func TestBootstrapTombstoneResurrectionProtection(t *testing.T) {
+	// If JSONL has both a live and tombstone version of the same ID,
+	// the tombstone should win (prevent resurrection)
+	tmpDir := t.TempDir()
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	doltDir := filepath.Join(beadsDir, "dolt")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	liveIssue := types.Issue{
+		ID: "test-001", Title: "Live version", Status: types.StatusOpen, IssueType: types.TypeTask,
+	}
+	tombstoneIssue := types.Issue{
+		ID: "test-001", Title: "Live version", Status: types.StatusTombstone,
+		IssueType: types.TypeTask, DeletedAt: &now,
+	}
+
+	liveData, _ := json.Marshal(liveIssue)
+	tombData, _ := json.Marshal(tombstoneIssue)
+
+	// Live version appears first, tombstone second (chronological order)
+	content := string(liveData) + "\n" + string(tombData) + "\n"
+	jsonlPath := filepath.Join(beadsDir, "issues.jsonl")
+	if err := os.WriteFile(jsonlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	bootstrapped, result, err := Bootstrap(ctx, BootstrapConfig{
+		BeadsDir: beadsDir, DoltPath: doltDir, LockTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+	if !bootstrapped {
+		t.Fatal("expected bootstrap")
+	}
+
+	// Should import the tombstone version, skip the live version
+	if result.IssuesImported != 1 {
+		t.Errorf("expected 1 imported, got %d", result.IssuesImported)
+	}
+	if result.IssuesSkipped != 1 {
+		t.Errorf("expected 1 skipped, got %d", result.IssuesSkipped)
+	}
+
+	// Verify the imported issue is the tombstone
+	store, err := New(ctx, &Config{Path: doltDir})
+	if err != nil {
+		t.Fatalf("failed to open store: %v", err)
+	}
+	defer store.Close()
+
+	issue, err := store.GetIssue(ctx, "test-001")
+	if err != nil {
+		t.Fatalf("failed to get issue: %v", err)
+	}
+	if issue == nil {
+		t.Fatal("expected issue to exist")
+	}
+	if issue.Status != types.StatusTombstone {
+		t.Errorf("expected tombstone status, got %s", issue.Status)
+	}
+}
+
+func TestBootstrapDuplicateExternalRef(t *testing.T) {
+	tmpDir := t.TempDir()
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	doltDir := filepath.Join(beadsDir, "dolt")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	extRef := "https://linear.app/team/PROJ-123"
+	issue1 := types.Issue{
+		ID: "test-001", Title: "First", Status: types.StatusOpen,
+		IssueType: types.TypeTask, ExternalRef: &extRef,
+	}
+	issue2 := types.Issue{
+		ID: "test-002", Title: "Second with same ref", Status: types.StatusOpen,
+		IssueType: types.TypeTask, ExternalRef: &extRef,
+	}
+
+	data1, _ := json.Marshal(issue1)
+	data2, _ := json.Marshal(issue2)
+	content := string(data1) + "\n" + string(data2) + "\n"
+
+	jsonlPath := filepath.Join(beadsDir, "issues.jsonl")
+	if err := os.WriteFile(jsonlPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	bootstrapped, result, err := Bootstrap(ctx, BootstrapConfig{
+		BeadsDir: beadsDir, DoltPath: doltDir, LockTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+	if !bootstrapped {
+		t.Fatal("expected bootstrap")
+	}
+
+	// First issue imported, second skipped (duplicate external_ref)
+	if result.IssuesImported != 1 {
+		t.Errorf("expected 1 imported, got %d", result.IssuesImported)
+	}
+	if result.IssuesSkipped != 1 {
+		t.Errorf("expected 1 skipped, got %d", result.IssuesSkipped)
+	}
+}
+
+func TestBootstrapRecognizesPrefixDatabase(t *testing.T) {
+	// When a prefix-based database exists (e.g. "beads_hq" from `bd migrate --to-dolt`),
+	// Bootstrap() should recognize it and NOT re-bootstrap from JSONL.
+	// This is the regression test for issue #1669.
+	tmpDir := t.TempDir()
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	doltDir := filepath.Join(beadsDir, "dolt")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatalf("failed to create beads dir: %v", err)
+	}
+
+	// Create a Dolt store with a prefix-based database name
+	ctx := context.Background()
+	store, err := New(ctx, &Config{Path: doltDir, Database: "beads_hq"})
+	if err != nil {
+		t.Fatalf("failed to create store with prefix db: %v", err)
+	}
+	if err := store.SetConfig(ctx, "issue_prefix", "hq"); err != nil {
+		t.Fatalf("failed to set config: %v", err)
+	}
+	store.Close()
+
+	// Create JSONL file that would trigger a bootstrap if the DB is not detected
+	jsonlPath := filepath.Join(beadsDir, "issues.jsonl")
+	issue := types.Issue{
+		ID:     "hq-001",
+		Title:  "Should not be imported",
+		Status: types.StatusOpen,
+	}
+	data, _ := json.Marshal(issue)
+	if err := os.WriteFile(jsonlPath, append(data, '\n'), 0644); err != nil {
+		t.Fatalf("failed to write JSONL: %v", err)
+	}
+
+	// Attempt bootstrap with the correct database name - should be no-op
+	bootstrapped, result, err := Bootstrap(ctx, BootstrapConfig{
+		BeadsDir:    beadsDir,
+		DoltPath:    doltDir,
+		LockTimeout: 10 * time.Second,
+		Database:    "beads_hq",
+	})
+
+	if err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+	if bootstrapped {
+		t.Error("expected no bootstrap when prefix-named Dolt DB already exists")
+	}
+	if result != nil {
+		t.Error("expected nil result when no bootstrap performed")
+	}
+
+	// Verify original config is preserved (not overwritten by re-bootstrap)
+	store, err = New(ctx, &Config{Path: doltDir, Database: "beads_hq"})
+	if err != nil {
+		t.Fatalf("failed to reopen store: %v", err)
+	}
+	defer store.Close()
+
+	prefix, _ := store.GetConfig(ctx, "issue_prefix")
+	if prefix != "hq" {
+		t.Errorf("expected prefix 'hq', got '%s'", prefix)
 	}
 }
 

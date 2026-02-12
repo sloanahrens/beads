@@ -19,6 +19,37 @@ import (
 	"github.com/steveyegge/beads/internal/utils"
 )
 
+// isBusyLockError checks if an error is a transient SQLite busy/locked error.
+func isBusyLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy")
+}
+
+// withBusyRetry retries an operation with bounded exponential backoff on transient busy locks.
+func withBusyRetry(op func() error) error {
+	const maxAttempts = 6
+	backoff := 10 * time.Millisecond
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := op()
+		if err == nil {
+			return nil
+		}
+		if !isBusyLockError(err) {
+			return err
+		}
+		lastErr = err
+		if attempt < maxAttempts {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return lastErr
+}
+
 // OrphanHandling is an alias for storage.OrphanHandling for backward compatibility.
 // Deprecated: Use storage.OrphanHandling directly.
 type OrphanHandling = storage.OrphanHandling
@@ -193,7 +224,7 @@ func ImportIssues(ctx context.Context, dbPath string, store storage.Storage, iss
 	if err != nil {
 		return result, err
 	}
-	if opts.DryRun && result.Collisions == 0 {
+	if opts.DryRun {
 		return result, nil
 	}
 
@@ -383,6 +414,7 @@ func detectUpdates(ctx context.Context, store storage.Storage, issues []*types.I
 	result.Collisions = collisionCount
 	if opts.DryRun {
 		result.Created = newCount
+		result.Updated = collisionCount
 		result.Unchanged = exactCount
 	}
 	return issues, nil
@@ -421,7 +453,7 @@ func handleRename(ctx context.Context, s storage.Storage, existing *types.Issue,
 			deletedID := ""
 			existingCheck, checkErr := s.GetIssue(ctx, existing.ID)
 			if checkErr == nil && existingCheck != nil {
-				if err := s.DeleteIssue(ctx, existing.ID); err != nil {
+				if err := withBusyRetry(func() error { return s.DeleteIssue(ctx, existing.ID) }); err != nil {
 					return "", fmt.Errorf("failed to delete old ID %s: %w", existing.ID, err)
 				}
 				deletedID = existing.ID
@@ -468,12 +500,12 @@ func handleRename(ctx context.Context, s storage.Storage, existing *types.Issue,
 
 	// Delete old ID
 	oldID := existing.ID
-	if err := s.DeleteIssue(ctx, oldID); err != nil {
+	if err := withBusyRetry(func() error { return s.DeleteIssue(ctx, oldID) }); err != nil {
 		return "", fmt.Errorf("failed to delete old ID %s: %w", oldID, err)
 	}
 
 	// Create with new ID
-	if err := s.CreateIssue(ctx, incoming, "import-rename"); err != nil {
+	if err := withBusyRetry(func() error { return s.CreateIssue(ctx, incoming, "import-rename") }); err != nil {
 		// Another writer may have created the target concurrently. If the target now exists
 		// with the same content, treat the rename as already complete.
 		targetIssue, getErr := s.GetIssue(ctx, incoming.ID)
@@ -502,7 +534,7 @@ func handleRenameTx(ctx context.Context, tx storage.Transaction, existing *types
 			deletedID := ""
 			existingCheck, checkErr := tx.GetIssue(ctx, existing.ID)
 			if checkErr == nil && existingCheck != nil {
-				if err := tx.DeleteIssue(ctx, existing.ID); err != nil {
+				if err := withBusyRetry(func() error { return tx.DeleteIssue(ctx, existing.ID) }); err != nil {
 					return "", fmt.Errorf("failed to delete old ID %s: %w", existing.ID, err)
 				}
 				deletedID = existing.ID
@@ -549,12 +581,12 @@ func handleRenameTx(ctx context.Context, tx storage.Transaction, existing *types
 
 	// Delete old ID
 	oldID := existing.ID
-	if err := tx.DeleteIssue(ctx, oldID); err != nil {
+	if err := withBusyRetry(func() error { return tx.DeleteIssue(ctx, oldID) }); err != nil {
 		return "", fmt.Errorf("failed to delete old ID %s: %w", oldID, err)
 	}
 
 	// Create with new ID
-	if err := tx.CreateIssue(ctx, incoming, "import-rename"); err != nil {
+	if err := withBusyRetry(func() error { return tx.CreateIssue(ctx, incoming, "import-rename") }); err != nil {
 		// Another writer may have created the target concurrently. If the target now exists
 		// with the same content, treat the rename as already complete.
 		targetIssue, getErr := tx.GetIssue(ctx, incoming.ID)
@@ -1207,17 +1239,29 @@ func importLabelsTx(ctx context.Context, tx storage.Transaction, issues []*types
 		if err != nil {
 			return fmt.Errorf("error getting labels for %s: %w", issue.ID, err)
 		}
-		set := make(map[string]bool, len(currentLabels))
+		currentSet := make(map[string]bool, len(currentLabels))
 		for _, l := range currentLabels {
-			set[l] = true
+			currentSet[l] = true
 		}
+		importSet := make(map[string]bool, len(issue.Labels))
 		for _, label := range issue.Labels {
-			if set[label] {
+			importSet[label] = true
+			if currentSet[label] {
 				continue
 			}
 			if err := tx.AddLabel(ctx, issue.ID, label, "import"); err != nil {
 				if opts.Strict {
 					return fmt.Errorf("error adding label %s to %s: %w", label, issue.ID, err)
+				}
+			}
+		}
+		// Remove labels that exist in DB but not in import data
+		for _, label := range currentLabels {
+			if !importSet[label] {
+				if err := tx.RemoveLabel(ctx, issue.ID, label, "import"); err != nil {
+					if opts.Strict {
+						return fmt.Errorf("error removing label %s from %s: %w", label, issue.ID, err)
+					}
 				}
 			}
 		}
@@ -1464,12 +1508,27 @@ func importLabels(ctx context.Context, store storage.Storage, issues []*types.Is
 			currentLabelSet[label] = true
 		}
 
+		importLabelSet := make(map[string]bool, len(issue.Labels))
+
 		// Add missing labels
 		for _, label := range issue.Labels {
+			importLabelSet[label] = true
 			if !currentLabelSet[label] {
 				if err := store.AddLabel(ctx, issue.ID, label, "import"); err != nil {
 					if opts.Strict {
 						return fmt.Errorf("error adding label %s to %s: %w", label, issue.ID, err)
+					}
+					continue
+				}
+			}
+		}
+
+		// Remove labels that exist in DB but not in import data
+		for _, label := range currentLabels {
+			if !importLabelSet[label] {
+				if err := store.RemoveLabel(ctx, issue.ID, label, "import"); err != nil {
+					if opts.Strict {
+						return fmt.Errorf("error removing label %s from %s: %w", label, issue.ID, err)
 					}
 					continue
 				}

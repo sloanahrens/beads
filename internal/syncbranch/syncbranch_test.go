@@ -1,3 +1,5 @@
+//go:build cgo
+
 package syncbranch
 
 import (
@@ -7,7 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
 func TestValidateBranchName(t *testing.T) {
@@ -23,7 +26,7 @@ func TestValidateBranchName(t *testing.T) {
 		{"branch with underscore", "feature_branch", false},
 		{"branch with dot", "release-1.0", false},
 		{"complex valid branch", "feature/user-auth_v2.1", false},
-		
+
 		{"invalid: HEAD", "HEAD", true},
 		{"invalid: single dot", ".", true},
 		{"invalid: double dot", "..", true},
@@ -80,9 +83,9 @@ func TestValidateSyncBranchName(t *testing.T) {
 	}
 }
 
-func newTestStore(t *testing.T) *sqlite.SQLiteStorage {
+func newTestStore(t *testing.T) storage.Storage {
 	t.Helper()
-	store, err := sqlite.New(context.Background(), "file::memory:?mode=memory&cache=private")
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Failed to create test database: %v", err)
 	}
@@ -100,7 +103,7 @@ func TestGet(t *testing.T) {
 	t.Run("returns empty when not set", func(t *testing.T) {
 		store := newTestStore(t)
 		defer store.Close()
-		
+
 		branch, err := Get(ctx, store)
 		if err != nil {
 			t.Fatalf("Get() error = %v", err)
@@ -113,11 +116,11 @@ func TestGet(t *testing.T) {
 	t.Run("returns database config value", func(t *testing.T) {
 		store := newTestStore(t)
 		defer store.Close()
-		
+
 		if err := store.SetConfig(ctx, ConfigKey, "beads-metadata"); err != nil {
 			t.Fatalf("SetConfig() error = %v", err)
 		}
-		
+
 		branch, err := Get(ctx, store)
 		if err != nil {
 			t.Fatalf("Get() error = %v", err)
@@ -130,16 +133,16 @@ func TestGet(t *testing.T) {
 	t.Run("environment variable overrides database", func(t *testing.T) {
 		store := newTestStore(t)
 		defer store.Close()
-		
+
 		// Set database config
 		if err := store.SetConfig(ctx, ConfigKey, "beads-metadata"); err != nil {
 			t.Fatalf("SetConfig() error = %v", err)
 		}
-		
+
 		// Set environment variable
 		os.Setenv(EnvVar, "env-branch")
 		defer os.Unsetenv(EnvVar)
-		
+
 		branch, err := Get(ctx, store)
 		if err != nil {
 			t.Fatalf("Get() error = %v", err)
@@ -152,10 +155,10 @@ func TestGet(t *testing.T) {
 	t.Run("returns error for invalid env var", func(t *testing.T) {
 		store := newTestStore(t)
 		defer store.Close()
-		
+
 		os.Setenv(EnvVar, "invalid..branch")
 		defer os.Unsetenv(EnvVar)
-		
+
 		_, err := Get(ctx, store)
 		if err == nil {
 			t.Error("Get() expected error for invalid env var, got nil")
@@ -165,12 +168,12 @@ func TestGet(t *testing.T) {
 	t.Run("returns error for invalid db config", func(t *testing.T) {
 		store := newTestStore(t)
 		defer store.Close()
-		
+
 		// Directly set invalid value (bypassing validation)
 		if err := store.SetConfig(ctx, ConfigKey, "invalid..branch"); err != nil {
 			t.Fatalf("SetConfig() error = %v", err)
 		}
-		
+
 		_, err := Get(ctx, store)
 		if err == nil {
 			t.Error("Get() expected error for invalid db config, got nil")
@@ -184,11 +187,11 @@ func TestSet(t *testing.T) {
 	t.Run("sets valid branch name", func(t *testing.T) {
 		store := newTestStore(t)
 		defer store.Close()
-		
+
 		if err := Set(ctx, store, "beads-metadata"); err != nil {
 			t.Fatalf("Set() error = %v", err)
 		}
-		
+
 		value, err := store.GetConfig(ctx, ConfigKey)
 		if err != nil {
 			t.Fatalf("GetConfig() error = %v", err)
@@ -201,11 +204,11 @@ func TestSet(t *testing.T) {
 	t.Run("allows empty string", func(t *testing.T) {
 		store := newTestStore(t)
 		defer store.Close()
-		
+
 		if err := Set(ctx, store, ""); err != nil {
 			t.Fatalf("Set() error = %v for empty string", err)
 		}
-		
+
 		value, err := store.GetConfig(ctx, ConfigKey)
 		if err != nil {
 			t.Fatalf("GetConfig() error = %v", err)
@@ -465,60 +468,70 @@ func TestIsConfiguredWithDB(t *testing.T) {
 }
 
 func TestGetConfigFromDB(t *testing.T) {
-	t.Run("returns empty for nonexistent database", func(t *testing.T) {
-		result := getConfigFromDB("/nonexistent/path/beads.db", ConfigKey)
+	t.Run("returns empty for nonexistent directory", func(t *testing.T) {
+		result := getConfigFromDB("/nonexistent/path/.beads", ConfigKey)
 		if result != "" {
-			t.Errorf("getConfigFromDB() for nonexistent db = %q, want empty", result)
+			t.Errorf("getConfigFromDB() for nonexistent dir = %q, want empty", result)
 		}
 	})
 
 	t.Run("returns empty when key not found", func(t *testing.T) {
-		// Create a temporary database
-		tmpDir, _ := os.MkdirTemp("", "test-beads-db-*")
-		defer os.RemoveAll(tmpDir)
-		dbPath := tmpDir + "/beads.db"
+		beadsDir := setupTestBeadsDir(t)
+		ctx := context.Background()
 
-		// Create a valid SQLite database with the config table
-		store, err := sqlite.New(context.Background(), "file:"+dbPath)
+		// Use beads.db as the Dolt directory (matches DefaultConfig().DatabasePath)
+		store, err := dolt.New(ctx, &dolt.Config{Path: filepath.Join(beadsDir, "beads.db")})
 		if err != nil {
 			t.Fatalf("Failed to create test database: %v", err)
 		}
 		store.Close()
 
-		result := getConfigFromDB(dbPath, "nonexistent.key")
+		result := getConfigFromDB(beadsDir, "nonexistent.key")
 		if result != "" {
 			t.Errorf("getConfigFromDB() for missing key = %q, want empty", result)
 		}
 	})
 
 	t.Run("returns value when key exists", func(t *testing.T) {
-		// Create a temporary database
-		tmpDir, _ := os.MkdirTemp("", "test-beads-db-*")
-		defer os.RemoveAll(tmpDir)
-		dbPath := tmpDir + "/beads.db"
-
-		// Create a valid SQLite database with the config table
+		beadsDir := setupTestBeadsDir(t)
 		ctx := context.Background()
-		// Use the same connection string format as getConfigFromDB expects
-		store, err := sqlite.New(ctx, "file:"+dbPath+"?_journal_mode=DELETE")
+
+		// Use beads.db as the Dolt directory (matches DefaultConfig().DatabasePath)
+		dbPath := filepath.Join(beadsDir, "beads.db")
+		store, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
 		if err != nil {
 			t.Fatalf("Failed to create test database: %v", err)
 		}
-		// Set issue_prefix first (required by storage)
 		if err := store.SetConfig(ctx, "issue_prefix", "bd"); err != nil {
 			store.Close()
 			t.Fatalf("Failed to set issue_prefix: %v", err)
 		}
-		// Set the config value we're testing
 		if err := store.SetConfig(ctx, ConfigKey, "test-sync-branch"); err != nil {
 			store.Close()
 			t.Fatalf("Failed to set config: %v", err)
 		}
 		store.Close()
 
-		result := getConfigFromDB(dbPath, ConfigKey)
+		result := getConfigFromDB(beadsDir, ConfigKey)
 		if result != "test-sync-branch" {
 			t.Errorf("getConfigFromDB() = %q, want %q", result, "test-sync-branch")
 		}
 	})
+}
+
+// setupTestBeadsDir creates a temporary .beads directory for testing.
+// Includes metadata.json with dolt backend so factory.NewFromConfigWithOptions
+// correctly opens the Dolt database created by the tests.
+func setupTestBeadsDir(t *testing.T) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.Mkdir(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(beadsDir, "metadata.json")
+	if err := os.WriteFile(metadataPath, []byte(`{"database":"beads.db","backend":"dolt"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return beadsDir
 }

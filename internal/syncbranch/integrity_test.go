@@ -1,10 +1,13 @@
+//go:build cgo
+
 package syncbranch
 
 import (
 	"context"
 	"testing"
 
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
 func TestGetStoredRemoteSHA(t *testing.T) {
@@ -13,12 +16,12 @@ func TestGetStoredRemoteSHA(t *testing.T) {
 	defer store.Close()
 
 	// Test getting SHA when not set
-	sha, err := GetStoredRemoteSHA(ctx, store)
+	sha, err := getStoredRemoteSHA(ctx, store)
 	if err != nil {
-		t.Fatalf("GetStoredRemoteSHA() error = %v", err)
+		t.Fatalf("getStoredRemoteSHA() error = %v", err)
 	}
 	if sha != "" {
-		t.Errorf("GetStoredRemoteSHA() = %q, want empty string", sha)
+		t.Errorf("getStoredRemoteSHA() = %q, want empty string", sha)
 	}
 
 	// Set a SHA
@@ -28,12 +31,12 @@ func TestGetStoredRemoteSHA(t *testing.T) {
 	}
 
 	// Test getting SHA when set
-	sha, err = GetStoredRemoteSHA(ctx, store)
+	sha, err = getStoredRemoteSHA(ctx, store)
 	if err != nil {
-		t.Fatalf("GetStoredRemoteSHA() error = %v", err)
+		t.Fatalf("getStoredRemoteSHA() error = %v", err)
 	}
 	if sha != testSHA {
-		t.Errorf("GetStoredRemoteSHA() = %q, want %q", sha, testSHA)
+		t.Errorf("getStoredRemoteSHA() = %q, want %q", sha, testSHA)
 	}
 }
 
@@ -49,14 +52,14 @@ func TestClearStoredRemoteSHA(t *testing.T) {
 	}
 
 	// Clear it
-	if err := ClearStoredRemoteSHA(ctx, store); err != nil {
-		t.Fatalf("ClearStoredRemoteSHA() error = %v", err)
+	if err := clearStoredRemoteSHA(ctx, store); err != nil {
+		t.Fatalf("clearStoredRemoteSHA() error = %v", err)
 	}
 
 	// Verify it's gone
-	sha, err := GetStoredRemoteSHA(ctx, store)
+	sha, err := getStoredRemoteSHA(ctx, store)
 	if err != nil {
-		t.Fatalf("GetStoredRemoteSHA() error = %v", err)
+		t.Fatalf("getStoredRemoteSHA() error = %v", err)
 	}
 	if sha != "" {
 		t.Errorf("SHA should be empty after clear, got %q", sha)
@@ -64,8 +67,8 @@ func TestClearStoredRemoteSHA(t *testing.T) {
 }
 
 func TestForcePushStatus(t *testing.T) {
-	// Test ForcePushStatus struct
-	status := &ForcePushStatus{
+	// Test forcePushStatus struct
+	status := &forcePushStatus{
 		Detected:         true,
 		StoredSHA:        "abc123",
 		CurrentRemoteSHA: "def456",
@@ -88,9 +91,9 @@ func TestForcePushStatus(t *testing.T) {
 // newTestStoreIntegrity creates a test store for integrity tests
 // Note: This is a duplicate of newTestStore from syncbranch_test.go
 // but we need it here since tests are in the same package
-func newTestStoreIntegrity(t *testing.T) *sqlite.SQLiteStorage {
+func newTestStoreIntegrity(t *testing.T) storage.Storage {
 	t.Helper()
-	store, err := sqlite.New(context.Background(), "file::memory:?mode=memory&cache=private")
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Failed to create test database: %v", err)
 	}
@@ -107,11 +110,11 @@ func TestCheckForcePush_NoStoredSHA(t *testing.T) {
 	store := newTestStoreIntegrity(t)
 	defer store.Close()
 
-	// When no stored SHA exists, CheckForcePush should return "first sync" status
+	// When no stored SHA exists, checkForcePush should return "first sync" status
 	// Note: We can't fully test this without a git repo, but we can test the early return
-	status, err := CheckForcePush(ctx, store, "/nonexistent", "beads-sync")
+	status, err := checkForcePush(ctx, store, "/nonexistent", "beads-sync")
 	if err != nil {
-		t.Fatalf("CheckForcePush() error = %v", err)
+		t.Fatalf("checkForcePush() error = %v", err)
 	}
 	if status.Detected {
 		t.Error("Expected Detected to be false when no stored SHA")

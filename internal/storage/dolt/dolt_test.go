@@ -1,12 +1,18 @@
+//go:build cgo
+
 package dolt
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -30,7 +36,21 @@ func skipIfNoDolt(t *testing.T) {
 	}
 }
 
-// setupTestStore creates a test store with a temporary directory
+// uniqueTestDBName generates a unique database name for test isolation.
+// Each test gets its own database, preventing cross-test interference and
+// avoiding any risk of connecting to production data.
+func uniqueTestDBName(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("failed to generate random bytes: %v", err)
+	}
+	return "testdb_" + hex.EncodeToString(buf)
+}
+
+// setupTestStore creates a test store with its own isolated database.
+// Each test gets a unique database name to prevent cross-test data leakage
+// and avoid any risk of touching production data.
 func setupTestStore(t *testing.T) (*DoltStore, func()) {
 	t.Helper()
 	skipIfNoDolt(t)
@@ -43,11 +63,13 @@ func setupTestStore(t *testing.T) (*DoltStore, func()) {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 
+	dbName := uniqueTestDBName(t)
+
 	cfg := &Config{
 		Path:           tmpDir,
 		CommitterName:  "test",
 		CommitterEmail: "test@example.com",
-		Database:       "testdb",
+		Database:       dbName,
 	}
 
 	store, err := New(ctx, cfg)
@@ -64,6 +86,10 @@ func setupTestStore(t *testing.T) (*DoltStore, func()) {
 	}
 
 	cleanup := func() {
+		// Drop the test database to avoid accumulating garbage
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer dropCancel()
+		_, _ = store.db.ExecContext(dropCtx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
 		store.Close()
 		os.RemoveAll(tmpDir)
 	}
@@ -81,18 +107,22 @@ func TestNewDoltStore(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
+	dbName := uniqueTestDBName(t)
 	cfg := &Config{
 		Path:           tmpDir,
 		CommitterName:  "test",
 		CommitterEmail: "test@example.com",
-		Database:       "testdb",
+		Database:       dbName,
 	}
 
 	store, err := New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("failed to create Dolt store: %v", err)
 	}
-	defer store.Close()
+	defer func() {
+		_, _ = store.db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
+		store.Close()
+	}()
 
 	// Verify store path
 	if store.Path() != tmpDir {
@@ -686,60 +716,6 @@ func TestDoltStoreDeleteIssue(t *testing.T) {
 	}
 }
 
-func TestDoltStoreDirtyTracking(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
-
-	ctx, cancel := testContext(t)
-	defer cancel()
-
-	// Create an issue (marks it dirty)
-	issue := &types.Issue{
-		ID:          "test-dirty-issue",
-		Title:       "Dirty Issue",
-		Description: "Will be dirty",
-		Status:      types.StatusOpen,
-		Priority:    2,
-		IssueType:   types.TypeTask,
-	}
-
-	if err := store.CreateIssue(ctx, issue, "tester"); err != nil {
-		t.Fatalf("failed to create issue: %v", err)
-	}
-
-	// Get dirty issues
-	dirtyIDs, err := store.GetDirtyIssues(ctx)
-	if err != nil {
-		t.Fatalf("failed to get dirty issues: %v", err)
-	}
-	found := false
-	for _, id := range dirtyIDs {
-		if id == issue.ID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected issue to be in dirty list")
-	}
-
-	// Clear dirty issues
-	if err := store.ClearDirtyIssuesByID(ctx, []string{issue.ID}); err != nil {
-		t.Fatalf("failed to clear dirty issues: %v", err)
-	}
-
-	// Verify it's cleared
-	dirtyIDs, err = store.GetDirtyIssues(ctx)
-	if err != nil {
-		t.Fatalf("failed to get dirty issues after clear: %v", err)
-	}
-	for _, id := range dirtyIDs {
-		if id == issue.ID {
-			t.Error("expected issue to be cleared from dirty list")
-		}
-	}
-}
-
 func TestDoltStoreStatistics(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
@@ -831,6 +807,34 @@ func TestValidateTableName(t *testing.T) {
 	}
 }
 
+func TestValidateDatabaseName(t *testing.T) {
+	tests := []struct {
+		name    string
+		dbName  string
+		wantErr bool
+	}{
+		{"valid simple", "beads", false},
+		{"valid with underscore", "beads_test", false},
+		{"valid with hyphen", "beads-test", false},
+		{"valid with numbers", "beads123", false},
+		{"empty", "", true},
+		{"too long", string(make([]byte, 100)), true},
+		{"starts with number", "123beads", true},
+		{"with backtick injection", "beads`; DROP DATABASE beads; --", true},
+		{"with space", "my database", true},
+		{"with semicolon", "beads;evil", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabaseName(tt.dbName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateDatabaseName(%q) error = %v, wantErr %v", tt.dbName, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestDoltStoreGetReadyWork(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
@@ -916,7 +920,7 @@ func TestDoltStoreGetReadyWork(t *testing.T) {
 func TestCloseWithTimeout(t *testing.T) {
 	// Test 1: Fast close succeeds
 	t.Run("fast close succeeds", func(t *testing.T) {
-		err := closeWithTimeout("test", func() error {
+		err := doltutil.CloseWithTimeout("test", func() error {
 			return nil
 		})
 		if err != nil {
@@ -927,7 +931,7 @@ func TestCloseWithTimeout(t *testing.T) {
 	// Test 2: Fast close with error returns error
 	t.Run("fast close with error", func(t *testing.T) {
 		expectedErr := context.Canceled
-		err := closeWithTimeout("test", func() error {
+		err := doltutil.CloseWithTimeout("test", func() error {
 			return expectedErr
 		})
 		if err != expectedErr {
@@ -938,15 +942,15 @@ func TestCloseWithTimeout(t *testing.T) {
 	// Test 3: Slow close times out (use shorter timeout for test)
 	t.Run("slow close times out", func(t *testing.T) {
 		// Save original timeout and restore after test
-		originalTimeout := closeTimeout
-		// Note: closeTimeout is a const, so we can't actually change it
+		originalTimeout := doltutil.CloseTimeout
+		// Note: CloseTimeout is a const, so we can't actually change it
 		// This test verifies the timeout mechanism works conceptually
 		// In practice, the 5s timeout is reasonable for production use
 
 		// This test would take 5+ seconds with the real timeout,
 		// so we just verify the function signature works correctly
 		start := time.Now()
-		err := closeWithTimeout("test", func() error {
+		err := doltutil.CloseWithTimeout("test", func() error {
 			// Return immediately for this test
 			return nil
 		})

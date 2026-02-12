@@ -1,3 +1,5 @@
+//go:build cgo
+
 package main
 
 import (
@@ -9,7 +11,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -29,7 +31,7 @@ func TestMultiWorkspaceDeletionSync(t *testing.T) {
 	ctx := context.Background()
 
 	// Create stores for both clones
-	storeA, err := sqlite.New(context.Background(), cloneADB)
+	storeA, err := dolt.New(context.Background(), &dolt.Config{Path: cloneADB})
 	if err != nil {
 		t.Fatalf("Failed to create store A: %v", err)
 	}
@@ -39,7 +41,7 @@ func TestMultiWorkspaceDeletionSync(t *testing.T) {
 		t.Fatalf("Failed to set issue_prefix for store A: %v", err)
 	}
 
-	storeB, err := sqlite.New(context.Background(), cloneBDB)
+	storeB, err := dolt.New(context.Background(), &dolt.Config{Path: cloneBDB})
 	if err != nil {
 		t.Fatalf("Failed to create store B: %v", err)
 	}
@@ -183,7 +185,7 @@ func TestDeletionWithLocalModification(t *testing.T) {
 
 	ctx := context.Background()
 
-	store, err := sqlite.New(context.Background(), dbPath)
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
@@ -399,6 +401,7 @@ func TestSnapshotManagement(t *testing.T) {
 // TestMultiRepoDeletionTracking tests deletion tracking with multi-repo mode
 // This is the test for bd-4oob: snapshot files need to be created per-JSONL file
 func TestMultiRepoDeletionTracking(t *testing.T) {
+	t.Skip("JSONL multi-repo sync removed in Phase 2: ExportToMultiRepo is a no-op on Dolt backend")
 	initConfigForTest(t)
 	// Setup workspace directories
 	primaryDir := t.TempDir()
@@ -418,7 +421,7 @@ func TestMultiRepoDeletionTracking(t *testing.T) {
 	dbPath := filepath.Join(primaryBeadsDir, "beads.db")
 	ctx := context.Background()
 
-	store, err := sqlite.New(context.Background(), dbPath)
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
@@ -470,7 +473,7 @@ func TestMultiRepoDeletionTracking(t *testing.T) {
 		t.Fatalf("ExportToMultiRepo failed: %v", err)
 	}
 	if results == nil {
-		t.Fatal("Expected multi-repo results, got nil")
+		t.Skip("ExportToMultiRepo is a no-op on Dolt backend (JSONL multi-repo not supported)")
 	}
 	if results["."] != 1 {
 		t.Errorf("Expected 1 issue in primary repo, got %d", results["."])
@@ -588,7 +591,7 @@ func TestGetMultiRepoJSONLPaths_Duplicates(t *testing.T) {
 	initConfigForTest(t)
 	// Setup temp dirs
 	primaryDir := t.TempDir()
-	
+
 	// Create .beads directories
 	if err := os.MkdirAll(filepath.Join(primaryDir, ".beads"), 0755); err != nil {
 		t.Fatalf("Failed to create .beads dir: %v", err)
@@ -603,14 +606,14 @@ func TestGetMultiRepoJSONLPaths_Duplicates(t *testing.T) {
 	}()
 
 	paths := getMultiRepoJSONLPaths()
-	
+
 	// Current implementation doesn't dedupe - just verify it returns all entries
 	// (This documents current behavior; future improvement could dedupe)
 	expectedCount := 3 // primary + 2 duplicates
 	if len(paths) != expectedCount {
 		t.Errorf("Expected %d paths, got %d: %v", expectedCount, len(paths), paths)
 	}
-	
+
 	// All should point to same JSONL location
 	expectedJSONL := filepath.Join(primaryDir, ".beads", "issues.jsonl")
 	for i, p := range paths {
@@ -627,7 +630,7 @@ func TestGetMultiRepoJSONLPaths_PathsWithSpaces(t *testing.T) {
 	baseDir := t.TempDir()
 	primaryDir := filepath.Join(baseDir, "my project")
 	additionalDir := filepath.Join(baseDir, "other repo")
-	
+
 	// Create .beads directories
 	if err := os.MkdirAll(filepath.Join(primaryDir, ".beads"), 0755); err != nil {
 		t.Fatalf("Failed to create primary .beads: %v", err)
@@ -644,15 +647,15 @@ func TestGetMultiRepoJSONLPaths_PathsWithSpaces(t *testing.T) {
 	}()
 
 	paths := getMultiRepoJSONLPaths()
-	
+
 	if len(paths) != 2 {
 		t.Fatalf("Expected 2 paths, got %d", len(paths))
 	}
-	
+
 	// Verify paths are constructed correctly
 	expectedPrimary := filepath.Join(primaryDir, ".beads", "issues.jsonl")
 	expectedAdditional := filepath.Join(additionalDir, ".beads", "issues.jsonl")
-	
+
 	if paths[0] != expectedPrimary {
 		t.Errorf("Primary path = %s, want %s", paths[0], expectedPrimary)
 	}
@@ -674,17 +677,17 @@ func TestGetMultiRepoJSONLPaths_RelativePaths(t *testing.T) {
 	}()
 
 	paths := getMultiRepoJSONLPaths()
-	
+
 	if len(paths) != 3 {
 		t.Fatalf("Expected 3 paths, got %d", len(paths))
 	}
-	
+
 	// Current implementation: relative paths are NOT expanded to absolute
 	// They're used as-is with filepath.Join
 	expectedPrimary := filepath.Join(".", ".beads", "issues.jsonl")
 	expectedOther := filepath.Join("../other", ".beads", "issues.jsonl")
 	expectedBar := filepath.Join("./foo/../bar", ".beads", "issues.jsonl")
-	
+
 	if paths[0] != expectedPrimary {
 		t.Errorf("Primary path = %s, want %s", paths[0], expectedPrimary)
 	}
@@ -708,15 +711,15 @@ func TestGetMultiRepoJSONLPaths_TildeExpansion(t *testing.T) {
 	}()
 
 	paths := getMultiRepoJSONLPaths()
-	
+
 	if len(paths) != 2 {
 		t.Fatalf("Expected 2 paths, got %d", len(paths))
 	}
-	
+
 	// Tilde should be literal (NOT expanded) in current implementation
 	expectedPrimary := filepath.Join("~/repos/main", ".beads", "issues.jsonl")
 	expectedAdditional := filepath.Join("~/repos/other", ".beads", "issues.jsonl")
-	
+
 	if paths[0] != expectedPrimary {
 		t.Errorf("Primary path = %s, want %s", paths[0], expectedPrimary)
 	}
@@ -872,7 +875,7 @@ func TestMultiRepoFlushPrefixFiltering(t *testing.T) {
 	dbPath := filepath.Join(additionalBeadsDir, "beads.db")
 	ctx := context.Background()
 
-	store, err := sqlite.New(context.Background(), dbPath)
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}

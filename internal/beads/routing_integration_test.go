@@ -1,5 +1,5 @@
-//go:build integration
-// +build integration
+//go:build cgo && integration
+// +build cgo,integration
 
 package beads_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/routing"
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
 func TestRoutingIntegration(t *testing.T) {
@@ -52,8 +52,11 @@ func TestRoutingIntegration(t *testing.T) {
 			setupGit: func(t *testing.T, dir string) {
 				runGitCmd(t, dir, "git", "init")
 				runGitCmd(t, dir, "git", "remote", "add", "origin", "git@github.com:owner/repo.git")
+				// Set explicit role to avoid relying on deprecated URL heuristic,
+				// which can be flaky when git config rewrites SSH to HTTPS.
+				runGitCmd(t, dir, "git", "config", "beads.role", "maintainer")
 			},
-			expectedRole:       routing.Maintainer, // SSH = maintainer
+			expectedRole:       routing.Maintainer,
 			expectedTargetRepo: ".",
 		},
 	}
@@ -62,7 +65,7 @@ func TestRoutingIntegration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create temp directory
 			tmpDir := t.TempDir()
-			
+
 			// Set up git
 			tt.setupGit(t, tmpDir)
 
@@ -141,8 +144,7 @@ func TestMultiRepoEndToEnd(t *testing.T) {
 	}
 
 	// Initialize database
-	dbPath := filepath.Join(beadsDir, "beads.db")
-	store, err := sqlite.New(context.Background(), dbPath)
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: beadsDir})
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}

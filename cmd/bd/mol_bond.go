@@ -89,12 +89,7 @@ func runMolBond(cmd *cobra.Command, args []string) {
 
 	// mol bond requires direct store access
 	if store == nil {
-		if daemonClient != nil {
-			fmt.Fprintf(os.Stderr, "Error: mol bond requires direct database access\n")
-			fmt.Fprintf(os.Stderr, "Hint: use --no-daemon flag: bd --no-daemon mol bond %s %s ...\n", args[0], args[1])
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: no database connection\n")
-		}
+		fmt.Fprintf(os.Stderr, "Error: no database connection\n")
 		os.Exit(1)
 	}
 
@@ -261,9 +256,6 @@ func runMolBond(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Schedule auto-flush - wisps are in main DB now, but JSONL export skips them
-	markDirtyAndScheduleFlush()
-
 	if jsonOutput {
 		outputJSON(result)
 		return
@@ -426,9 +418,9 @@ func bondProtoMolWithSubgraph(ctx context.Context, s storage.Storage, protoSubgr
 
 	// Build CloneOptions for spawning
 	opts := CloneOptions{
-		Vars:  vars,
-		Actor: actorName,
-		Ephemeral:  makeEphemeral,
+		Vars:      vars,
+		Actor:     actorName,
+		Ephemeral: makeEphemeral,
 	}
 
 	// Dynamic bonding: use custom IDs if childRef is provided

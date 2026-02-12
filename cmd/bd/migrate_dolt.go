@@ -15,7 +15,7 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dolt"
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 )
@@ -112,7 +112,13 @@ func handleToDoltMigration(dryRun bool, autoYes bool) {
 	// Create Dolt database
 	printProgress("Creating Dolt database...")
 
-	doltStore, err := dolt.New(ctx, &dolt.Config{Path: doltPath})
+	// Use prefix-based database name to avoid cross-rig contamination (bd-u8rda).
+	// E.g., prefix "gt" → database "beads_gt", prefix "bd" → database "beads_bd".
+	dbName := "beads"
+	if data.prefix != "" {
+		dbName = "beads_" + data.prefix
+	}
+	doltStore, err := dolt.New(ctx, &dolt.Config{Path: doltPath, Database: dbName})
 	if err != nil {
 		exitWithError("dolt_create_failed", err.Error(), "")
 	}
@@ -124,6 +130,15 @@ func handleToDoltMigration(dryRun bool, autoYes bool) {
 		// Cleanup partial Dolt directory
 		_ = os.RemoveAll(doltPath)
 		exitWithError("import_failed", importErr.Error(), "partial Dolt directory has been cleaned up")
+	}
+
+	// Set sync.mode to dolt-native in the DB so ShouldExportJSONL skips
+	// the expensive JSONL export. Without this, the migrated DB has no
+	// sync.mode set, defaulting to git-portable (10-25s export tax per write).
+	if err := doltStore.SetConfig(ctx, SyncModeConfigKey, SyncModeDoltNative); err != nil {
+		printWarning(fmt.Sprintf("failed to set sync.mode in DB: %v", err))
+	} else {
+		printSuccess("Set sync.mode = dolt-native in database")
 	}
 
 	// Commit the migration
@@ -139,6 +154,8 @@ func handleToDoltMigration(dryRun bool, autoYes bool) {
 	// Update metadata.json
 	cfg.Backend = configfile.BackendDolt
 	cfg.Database = "dolt"
+	cfg.DoltDatabase = dbName
+	cfg.DoltServerPort = configfile.DefaultDoltServerPort
 	if err := cfg.Save(beadsDir); err != nil {
 		exitWithError("config_save_failed", err.Error(),
 			"data was imported but metadata.json was not updated - manually set backend to 'dolt'")
@@ -261,7 +278,7 @@ func handleToSQLiteMigration(dryRun bool, autoYes bool) {
 	// Create SQLite database
 	printProgress("Creating SQLite database...")
 
-	sqliteStore, err := sqlite.New(ctx, sqlitePath)
+	sqliteStore, err := factory.New(ctx, configfile.BackendDolt, sqlitePath)
 	if err != nil {
 		exitWithError("sqlite_create_failed", err.Error(), "")
 	}
@@ -297,7 +314,7 @@ func handleToSQLiteMigration(dryRun bool, autoYes bool) {
 
 // extractFromSQLite extracts all data from a SQLite database
 func extractFromSQLite(ctx context.Context, dbPath string) (*migrationData, error) {
-	store, err := sqlite.NewReadOnly(ctx, dbPath)
+	store, err := factory.NewWithOptions(ctx, configfile.BackendDolt, dbPath, factory.Options{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 	}
@@ -482,7 +499,9 @@ func importToDolt(ctx context.Context, store *dolt.DoltStore, data *migrationDat
 
 		// Insert labels
 		for _, label := range issue.Labels {
-			_, _ = tx.ExecContext(ctx, `INSERT INTO labels (issue_id, label) VALUES (?, ?)`, issue.ID, label)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO labels (issue_id, label) VALUES (?, ?)`, issue.ID, label); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to insert label %q for issue %s: %v\n", label, issue.ID, err)
+			}
 		}
 
 		imported++
@@ -498,13 +517,16 @@ func importToDolt(ctx context.Context, store *dolt.DoltStore, data *migrationDat
 		for _, dep := range issue.Dependencies {
 			var exists int
 			if err := tx.QueryRowContext(ctx, "SELECT 1 FROM issues WHERE id = ?", dep.DependsOnID).Scan(&exists); err != nil {
-				continue // Target doesn't exist
+				fmt.Fprintf(os.Stderr, "Warning: skipping dependency %s -> %s: target issue not found\n", dep.IssueID, dep.DependsOnID)
+				continue
 			}
-			_, _ = tx.ExecContext(ctx, `
+			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO dependencies (issue_id, depends_on_id, type, created_by, created_at)
 				VALUES (?, ?, ?, ?, ?)
 				ON DUPLICATE KEY UPDATE type = type
-			`, dep.IssueID, dep.DependsOnID, dep.Type, dep.CreatedBy, dep.CreatedAt)
+			`, dep.IssueID, dep.DependsOnID, dep.Type, dep.CreatedBy, dep.CreatedAt); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to insert dependency %s -> %s: %v\n", dep.IssueID, dep.DependsOnID, err)
+			}
 		}
 	}
 
@@ -536,7 +558,7 @@ func importToDolt(ctx context.Context, store *dolt.DoltStore, data *migrationDat
 }
 
 // importToSQLite imports all data to SQLite, returning (imported, skipped, error)
-func importToSQLite(ctx context.Context, store *sqlite.SQLiteStorage, data *migrationData) (int, int, error) {
+func importToSQLite(ctx context.Context, store storage.Storage, data *migrationData) (int, int, error) {
 	// Set all config values first
 	for key, value := range data.config {
 		if err := store.SetConfig(ctx, key, value); err != nil {
@@ -580,7 +602,9 @@ func importToSQLite(ctx context.Context, store *sqlite.SQLiteStorage, data *migr
 			}
 
 			for _, label := range savedLabels {
-				_ = tx.AddLabel(ctx, issue.ID, label, "migration")
+				if err := tx.AddLabel(ctx, issue.ID, label, "migration"); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to add label %q for issue %s: %v\n", label, issue.ID, err)
+				}
 			}
 
 			issue.Labels = savedLabels
@@ -596,7 +620,9 @@ func importToSQLite(ctx context.Context, store *sqlite.SQLiteStorage, data *migr
 		printProgress("Importing dependencies...")
 		for _, issue := range data.issues {
 			for _, dep := range issue.Dependencies {
-				_ = tx.AddDependency(ctx, dep, "migration")
+				if err := tx.AddDependency(ctx, dep, "migration"); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to add dependency %s -> %s: %v\n", dep.IssueID, dep.DependsOnID, err)
+				}
 			}
 		}
 
@@ -845,4 +871,9 @@ func formatJSONArray(arr []string) string {
 		return ""
 	}
 	return string(data)
+}
+
+// listMigrations returns registered Dolt migrations (CGO build).
+func listMigrations() []string {
+	return dolt.ListMigrations()
 }

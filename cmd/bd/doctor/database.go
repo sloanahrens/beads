@@ -21,10 +21,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// localConfig represents the config.yaml structure for no-db mode detection
+// localConfig represents the config.yaml structure for no-db and prefer-dolt detection
 type localConfig struct {
 	SyncBranch string `yaml:"sync-branch"`
 	NoDb       bool   `yaml:"no-db"`
+	PreferDolt bool   `yaml:"prefer-dolt"`
 }
 
 // CheckDatabaseVersion checks the database version and migration status
@@ -66,7 +67,7 @@ func CheckDatabaseVersion(path string, cliVersion string) DoctorCheck {
 				Status:  StatusError,
 				Message: "Unable to open database",
 				Detail:  fmt.Sprintf("Storage: Dolt\n\nError: %v", err),
-				Fix:     "Run 'bd init --backend dolt' (or remove and re-init .beads/dolt if corrupted)",
+				Fix:     "Run 'bd doctor --fix' to recover from JSONL backup, or manually: rm -rf .beads/dolt && bd init --backend dolt",
 			}
 		}
 		defer func() { _ = store.Close() }()
@@ -78,7 +79,7 @@ func CheckDatabaseVersion(path string, cliVersion string) DoctorCheck {
 				Status:  StatusError,
 				Message: "Unable to read database version",
 				Detail:  fmt.Sprintf("Storage: Dolt\n\nError: %v", err),
-				Fix:     "Database may be corrupted. Try re-initializing the dolt database with 'bd init --backend dolt'",
+				Fix:     "Database may be corrupted. Run 'bd doctor --fix' to recover from JSONL backup",
 			}
 		}
 		if dbVersion == "" {
@@ -247,7 +248,7 @@ func CheckSchemaCompatibility(path string) DoctorCheck {
 				Status:  StatusError,
 				Message: "Database schema is incomplete or incompatible",
 				Detail:  fmt.Sprintf("Storage: Dolt\n\nError: %v", err),
-				Fix:     "Re-run 'bd init --backend dolt' or remove and re-initialize .beads/dolt if corrupted",
+				Fix:     "Run 'bd doctor --fix' to recover from JSONL backup, or manually: rm -rf .beads/dolt && bd init --backend dolt",
 			}
 		}
 
@@ -291,8 +292,8 @@ func CheckSchemaCompatibility(path string) DoctorCheck {
 	}
 	defer db.Close()
 
-	// Run schema probe (defined in internal/storage/sqlite/schema_probe.go)
-	// This is a simplified version since we can't import the internal package directly
+	// Run schema probe against SQLite database
+	// This is a simplified version for legacy SQLite databases
 	// Check all critical tables and columns
 	criticalChecks := map[string][]string{
 		"issues":         {"id", "title", "content_hash", "external_ref", "compacted_at", "close_reason", "pinned", "sender", "ephemeral"},
@@ -367,7 +368,7 @@ func CheckDatabaseIntegrity(path string) DoctorCheck {
 				Status:  StatusError,
 				Message: "Failed to open database",
 				Detail:  fmt.Sprintf("Storage: Dolt\n\nError: %v", err),
-				Fix:     "Re-run 'bd init --backend dolt' or remove and re-initialize .beads/dolt if corrupted",
+				Fix:     "Run 'bd doctor --fix' to recover from JSONL backup, or manually: rm -rf .beads/dolt && bd init --backend dolt",
 			}
 		}
 		defer func() { _ = store.Close() }()
@@ -717,7 +718,7 @@ func CheckDatabaseJSONLSync(path string) DoctorCheck {
 
 		// Only warn if majority of issues have wrong prefix
 		// BUT: recognize that <prefix>-mol and <prefix>-wisp are valid variants
-		// created by molecule/wisp workflows (see internal/storage/sqlite/queries.go:166-170)
+		// created by molecule/wisp workflows
 		if mostCommonPrefix != dbPrefix && maxCount > jsonlCount/2 {
 			// Check if the common prefix is a known workflow variant of the db prefix
 			isValidVariant := false

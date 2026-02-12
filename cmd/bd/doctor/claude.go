@@ -18,6 +18,7 @@ func CheckClaude() DoctorCheck {
 	hasPlugin := isBeadsPluginInstalled()
 	hasMCP := isMCPServerInstalled()
 	hasHooks := hasClaudeHooks()
+	inClaudeCode := os.Getenv("CLAUDECODE") == "1"
 
 	// Plugin now provides hooks directly via plugin.json, so if plugin is installed
 	// we consider hooks to be available (plugin hooks + any user-configured hooks)
@@ -59,7 +60,16 @@ func CheckClaude() DoctorCheck {
 				"\n" +
 				"See: bd setup claude --help",
 		}
+	} else if !inClaudeCode {
+		// Not in Claude Code - skip plugin suggestion
+		return DoctorCheck{
+			Name:    "Claude Integration",
+			Status:  "ok",
+			Message: "CLI-only mode",
+			Detail:  "To enable Claude integration, run bd setup claude",
+		}
 	} else {
+		// In Claude Code but plugin not installed
 		return DoctorCheck{
 			Name:    "Claude Integration",
 			Status:  "warning",
@@ -252,7 +262,8 @@ func hasBeadsHooks(settingsPath string) bool {
 				if !ok {
 					continue
 				}
-				if cmdMap["command"] == "bd prime" {
+				cmdStr, _ := cmdMap["command"].(string)
+				if cmdStr == "bd prime" || cmdStr == "bd prime --stealth" {
 					return true
 				}
 			}
@@ -325,7 +336,7 @@ func CheckBdInPath() DoctorCheck {
 			Detail:  "Claude hooks execute 'bd prime' and won't work without bd in PATH",
 			Fix: "Install bd globally:\n" +
 				"  • Homebrew: brew install beads\n" +
-				"  • Script: curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash\n" +
+				"  • Script: " + installScriptCommand + "\n" +
 				"  • Or add bd to your PATH",
 		}
 	}
@@ -381,8 +392,8 @@ func CheckDocumentationBdPrimeReference(repoPath string) DoctorCheck {
 			Message: "Documentation references 'bd prime' but command not found",
 			Detail:  "Files: " + strings.Join(filesWithBdPrime, ", "),
 			Fix: "Upgrade bd to get the 'bd prime' command:\n" +
-				"  • Homebrew: brew upgrade bd\n" +
-				"  • Script: curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash\n" +
+				"  • Homebrew: brew upgrade beads\n" +
+				"  • Script: " + installScriptCommand + "\n" +
 				"  Or remove 'bd prime' references from documentation if using older version",
 		}
 	}
@@ -569,4 +580,185 @@ func fetchLatestPyPIVersion(packageName string) (string, error) {
 	}
 
 	return data.Info.Version, nil
+}
+
+// CheckClaudeSettingsHealth validates that Claude Code settings files are well-formed JSON.
+// Malformed settings silently break hooks and plugin detection.
+func CheckClaudeSettingsHealth() DoctorCheck {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return DoctorCheck{
+			Name:    "Claude Settings Health",
+			Status:  StatusOK,
+			Message: "N/A (unable to determine home directory)",
+		}
+	}
+
+	settingsFiles := []struct {
+		path  string
+		label string
+	}{
+		{filepath.Join(home, ".claude", "settings.json"), "~/.claude/settings.json"},
+		{filepath.Join(".claude", "settings.json"), ".claude/settings.json"},
+		{filepath.Join(".claude", "settings.local.json"), ".claude/settings.local.json"},
+	}
+
+	var malformed []string
+	var checked int
+	for _, sf := range settingsFiles {
+		data, err := os.ReadFile(sf.path) // #nosec G304 -- paths are constructed from known safe locations
+		if err != nil {
+			continue // File doesn't exist, skip
+		}
+		checked++
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			malformed = append(malformed, fmt.Sprintf("%s: %v", sf.label, err))
+		}
+	}
+
+	if checked == 0 {
+		return DoctorCheck{
+			Name:    "Claude Settings Health",
+			Status:  StatusOK,
+			Message: "No Claude Code settings files found",
+		}
+	}
+
+	if len(malformed) > 0 {
+		return DoctorCheck{
+			Name:    "Claude Settings Health",
+			Status:  StatusError,
+			Message: fmt.Sprintf("%d malformed settings file(s)", len(malformed)),
+			Detail:  strings.Join(malformed, "\n"),
+			Fix:     "Fix the JSON syntax in the listed file(s). Malformed settings break hooks and plugin detection.",
+		}
+	}
+
+	return DoctorCheck{
+		Name:    "Claude Settings Health",
+		Status:  StatusOK,
+		Message: fmt.Sprintf("%d settings file(s) valid", checked),
+	}
+}
+
+// CheckClaudeHookCompleteness verifies that when hooks are installed, both
+// SessionStart and PreCompact events are covered. Having only one means
+// context injection works on session start but not after compaction (or vice versa).
+func CheckClaudeHookCompleteness() DoctorCheck {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return DoctorCheck{
+			Name:    "Claude Hook Completeness",
+			Status:  StatusOK,
+			Message: "N/A (unable to determine home directory)",
+		}
+	}
+
+	settingsFiles := []string{
+		filepath.Join(home, ".claude", "settings.json"),
+		filepath.Join(".claude", "settings.json"),
+		filepath.Join(".claude", "settings.local.json"),
+	}
+
+	// Check if any settings file has hooks at all
+	var hasAnyHook bool
+	var hasSessionStart, hasPreCompact bool
+
+	for _, sf := range settingsFiles {
+		ss, pc := checkHookEvents(sf)
+		if ss || pc {
+			hasAnyHook = true
+		}
+		if ss {
+			hasSessionStart = true
+		}
+		if pc {
+			hasPreCompact = true
+		}
+	}
+
+	if !hasAnyHook {
+		// No hooks installed at all - CheckClaude already reports this
+		return DoctorCheck{
+			Name:    "Claude Hook Completeness",
+			Status:  StatusOK,
+			Message: "N/A (no hooks installed)",
+		}
+	}
+
+	if hasSessionStart && hasPreCompact {
+		return DoctorCheck{
+			Name:    "Claude Hook Completeness",
+			Status:  StatusOK,
+			Message: "Both SessionStart and PreCompact hooks present",
+		}
+	}
+
+	var missing []string
+	if !hasSessionStart {
+		missing = append(missing, "SessionStart")
+	}
+	if !hasPreCompact {
+		missing = append(missing, "PreCompact")
+	}
+
+	return DoctorCheck{
+		Name:    "Claude Hook Completeness",
+		Status:  StatusWarning,
+		Message: fmt.Sprintf("Missing hook event(s): %s", strings.Join(missing, ", ")),
+		Detail: "SessionStart injects context on new sessions.\n" +
+			"PreCompact preserves context before compaction.\n" +
+			"Both are needed for reliable workflow context.",
+		Fix: "Run 'bd setup claude' to install both hooks, or\n" +
+			"install the beads plugin which includes hooks automatically.",
+	}
+}
+
+// checkHookEvents returns which bd-prime hook events are present in a settings file.
+func checkHookEvents(settingsPath string) (hasSessionStart, hasPreCompact bool) {
+	data, err := os.ReadFile(settingsPath) // #nosec G304 -- paths are constructed from known safe locations
+	if err != nil {
+		return false, false
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return false, false
+	}
+
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		return false, false
+	}
+
+	checkEvent := func(eventName string) bool {
+		eventHooks, ok := hooks[eventName].([]interface{})
+		if !ok {
+			return false
+		}
+		for _, hook := range eventHooks {
+			hookMap, ok := hook.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			commands, ok := hookMap["hooks"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, cmd := range commands {
+				cmdMap, ok := cmd.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				cmdStr, _ := cmdMap["command"].(string)
+				if cmdStr == "bd prime" || cmdStr == "bd prime --stealth" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	return checkEvent("SessionStart"), checkEvent("PreCompact")
 }

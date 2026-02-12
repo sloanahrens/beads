@@ -1,14 +1,18 @@
+//go:build cgo
+
 package main
 
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/steveyegge/beads/internal/config"
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
 func TestConfigCommands(t *testing.T) {
@@ -197,14 +201,14 @@ func TestYamlOnlyConfigWithoutDatabase(t *testing.T) {
 }
 
 // setupTestDB creates a temporary test database
-func setupTestDB(t *testing.T) (*sqlite.SQLiteStorage, func()) {
+func setupTestDB(t *testing.T) (storage.Storage, func()) {
 	tmpDir, err := os.MkdirTemp("", "bd-test-config-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
 	testDB := filepath.Join(tmpDir, "test.db")
-	store, err := sqlite.New(context.Background(), testDB)
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: testDB})
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("Failed to create test database: %v", err)
@@ -224,6 +228,60 @@ func setupTestDB(t *testing.T) (*sqlite.SQLiteStorage, func()) {
 	}
 
 	return store, cleanup
+}
+
+// TestBeadsRoleGitConfig verifies that beads.role is stored in git config,
+// not SQLite, so that bd doctor can find it (GH#1531).
+func TestBeadsRoleGitConfig(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "bd-test-beads-role-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize a git repo
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+
+	t.Run("set contributor role writes to git config", func(t *testing.T) {
+		cmd := exec.Command("git", "config", "beads.role", "contributor")
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git config set failed: %v", err)
+		}
+
+		// Verify it's readable from git config
+		cmd = exec.Command("git", "config", "--get", "beads.role")
+		cmd.Dir = tmpDir
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git config get failed: %v", err)
+		}
+		if got := strings.TrimSpace(string(output)); got != "contributor" {
+			t.Errorf("expected 'contributor', got %q", got)
+		}
+	})
+
+	t.Run("set maintainer role writes to git config", func(t *testing.T) {
+		cmd := exec.Command("git", "config", "beads.role", "maintainer")
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git config set failed: %v", err)
+		}
+
+		cmd = exec.Command("git", "config", "--get", "beads.role")
+		cmd.Dir = tmpDir
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git config get failed: %v", err)
+		}
+		if got := strings.TrimSpace(string(output)); got != "maintainer" {
+			t.Errorf("expected 'maintainer', got %q", got)
+		}
+	})
 }
 
 // TestIsValidRemoteURL tests the remote URL validation function

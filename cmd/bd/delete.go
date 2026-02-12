@@ -10,76 +10,10 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/rpc"
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 )
-
-// deleteViaDaemon uses the RPC daemon to delete issues
-func deleteViaDaemon(issueIDs []string, force, dryRun, cascade bool, jsonOutput bool, reason string) {
-	// NOTE: The daemon's delete handler implements the core deletion logic.
-	// cascade and detailed dependency handling are not yet implemented in the RPC layer.
-	// For now, we pass force=true to the daemon and rely on its simpler deletion logic.
-	
-	deleteArgs := &rpc.DeleteArgs{
-		IDs:     issueIDs,
-		Force:   force,
-		DryRun:  dryRun,
-		Cascade: cascade,
-		Reason:  reason,
-	}
-	
-	resp, err := daemonClient.Delete(deleteArgs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	
-	if !resp.Success {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", resp.Error)
-		os.Exit(1)
-	}
-	
-	// Parse response
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
-		os.Exit(1)
-	}
-	
-	if jsonOutput {
-		outputJSON(result)
-		return
-	}
-	
-	// Pretty print for human output
-	if dryRun {
-		fmt.Printf("Dry run - would delete %v issue(s)\n", result["issue_count"])
-		return
-	}
-	
-	deletedCount := int(result["deleted_count"].(float64))
-	totalCount := int(result["total_count"].(float64))
-
-	if deletedCount > 0 {
-		if deletedCount == 1 {
-			fmt.Printf("%s Deleted %s\n", ui.RenderPass("✓"), issueIDs[0])
-		} else {
-			fmt.Printf("%s Deleted %d issue(s)\n", ui.RenderPass("✓"), deletedCount)
-		}
-	}
-
-	if errors, ok := result["errors"].([]interface{}); ok && len(errors) > 0 {
-		fmt.Printf("\n%s Warnings:\n", ui.RenderWarn("⚠"))
-		for _, e := range errors {
-			fmt.Printf("  %s\n", e)
-		}
-		if deletedCount < totalCount {
-			os.Exit(1)
-		}
-	}
-}
 
 var deleteCmd = &cobra.Command{
 	Use:     "delete <issue-id> [issue-id...]",
@@ -150,13 +84,7 @@ the issues will not resurrect from remote branches.`,
 		}
 		// Remove duplicates
 		issueIDs = uniqueStrings(issueIDs)
-		
-		// Use daemon if available, otherwise use direct mode
-		if daemonClient != nil {
-			deleteViaDaemon(issueIDs, force, dryRun, cascade, jsonOutput, reason)
-			return
-		}
-		
+
 		// Direct mode - ensure store is available
 		if store == nil {
 			if err := ensureStoreActive(); err != nil {
@@ -164,14 +92,14 @@ the issues will not resurrect from remote branches.`,
 				os.Exit(1)
 			}
 		}
-		
+
 		// Handle batch deletion in direct mode
 		// Also use batch path for cascade (which needs to expand dependents)
 		if len(issueIDs) > 1 || cascade {
 			deleteBatch(cmd, issueIDs, force, dryRun, cascade, jsonOutput, hardDelete, reason)
 			return
 		}
-		
+
 		// Single issue deletion (legacy behavior)
 		issueID := issueIDs[0]
 		ctx := rootCtx
@@ -314,8 +242,6 @@ the issues will not resurrect from remote branches.`,
 			os.Exit(1)
 		}
 		// Note: No longer call removeIssueFromJSONL - tombstone will be exported to JSONL
-		// Schedule auto-flush to update neighbors
-		markDirtyAndScheduleFlush()
 		totalDepsRemoved := outgoingRemoved + inboundRemoved
 		if jsonOutput {
 			outputJSON(map[string]interface{}{
@@ -330,6 +256,7 @@ the issues will not resurrect from remote branches.`,
 		}
 	},
 }
+
 // createTombstone converts an issue to a tombstone record
 // Note: This is a direct database operation since Storage interface doesn't have CreateTombstone
 func createTombstone(ctx context.Context, issueID string, actor string, reason string) error {
@@ -357,6 +284,7 @@ func deleteIssue(ctx context.Context, issueID string) error {
 	}
 	return fmt.Errorf("delete operation not supported by this storage backend")
 }
+
 // removeIssueFromJSONL removes a deleted issue from the JSONL file
 // Auto-flush cannot see deletions because the dirty_issues row is deleted with the issue
 func removeIssueFromJSONL(issueID string) error {
@@ -422,7 +350,9 @@ func removeIssueFromJSONL(issueID string) error {
 	}
 	return nil
 }
+
 // deleteBatch handles deletion of multiple issues
+//
 //nolint:unparam // cmd parameter required for potential future use
 func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, cascade bool, jsonOutput bool, hardDelete bool, reason string) {
 	// Ensure we have a direct store
@@ -433,10 +363,10 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 		}
 	}
 	ctx := rootCtx
-	// Type assert to SQLite storage
-	d, ok := store.(*sqlite.SQLiteStorage)
+	// Type assert to BatchDeleter interface (supported by SQLite and Dolt backends)
+	d, ok := store.(storage.BatchDeleter)
 	if !ok {
-		// Fallback for non-SQLite storage (e.g., MemoryStorage in --no-db mode)
+		// Fallback for storage that doesn't implement BatchDeleter (e.g., MemoryStorage in --no-db mode)
 		deleteBatchFallback(issueIDs, force, dryRun, cascade, jsonOutput, hardDelete, reason)
 		return
 	}
@@ -541,8 +471,6 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 	// Update text references in connected issues (using pre-collected issues)
 	updatedCount := updateTextReferencesInIssues(ctx, issueIDs, connectedIssues)
 	// Note: No longer remove from JSONL - tombstones will be exported to JSONL
-	// Schedule auto-flush
-	markDirtyAndScheduleFlush()
 	// Output results
 	if jsonOutput {
 		outputJSON(map[string]interface{}{
@@ -686,9 +614,6 @@ func deleteBatchFallback(issueIDs []string, force bool, dryRun bool, cascade boo
 		}
 	}
 
-	// Schedule auto-flush
-	markDirtyAndScheduleFlush()
-
 	// Output results
 	if jsonOutput {
 		outputJSON(map[string]interface{}{
@@ -720,6 +645,7 @@ func showDeletionPreview(issueIDs []string, issues map[string]*types.Issue, casc
 		fmt.Printf("\n%s\n", ui.RenderFail(depError.Error()))
 	}
 }
+
 // updateTextReferencesInIssues updates text references to deleted issues in pre-collected connected issues
 func updateTextReferencesInIssues(ctx context.Context, deletedIDs []string, connectedIssues map[string]*types.Issue) int {
 	updatedCount := 0
@@ -765,6 +691,7 @@ func updateTextReferencesInIssues(ctx context.Context, deletedIDs []string, conn
 	}
 	return updatedCount
 }
+
 // readIssueIDsFromFile reads issue IDs from a file (one per line)
 func readIssueIDsFromFile(filename string) ([]string, error) {
 	// #nosec G304 - user-provided file path is intentional
@@ -788,6 +715,7 @@ func readIssueIDsFromFile(filename string) ([]string, error) {
 	}
 	return ids, nil
 }
+
 // uniqueStrings removes duplicates from a slice of strings
 func uniqueStrings(slice []string) []string {
 	seen := make(map[string]bool)

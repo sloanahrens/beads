@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,64 +18,9 @@ import (
 // Graph edges (replies-to, relates-to, duplicates, supersedes) are now managed
 // exclusively through the dependency API. Use AddDependency() instead.
 
-// parseNullableTimeString parses a nullable time string from database TEXT columns.
-// The ncruces/go-sqlite3 driver only auto-converts TEXT→time.Time for columns declared
-// as DATETIME/DATE/TIME/TIMESTAMP. For TEXT columns (like deleted_at), we must parse manually.
-// Supports RFC3339, RFC3339Nano, and SQLite's native format.
-func parseNullableTimeString(ns sql.NullString) *time.Time {
-	if !ns.Valid || ns.String == "" {
-		return nil
-	}
-	// Try RFC3339Nano first (more precise), then RFC3339, then SQLite format
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(layout, ns.String); err == nil {
-			return &t
-		}
-	}
-	return nil // Unparseable - shouldn't happen with valid data
-}
-
-// parseTimeString parses a time string from database TEXT columns (non-nullable).
-// Similar to parseNullableTimeString but for required timestamp fields like created_at/updated_at.
-// Returns zero time if parsing fails, which maintains backwards compatibility.
-func parseTimeString(s string) time.Time {
-	if s == "" {
-		return time.Time{}
-	}
-	// Try RFC3339Nano first (more precise), then RFC3339, then SQLite format
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
-		}
-	}
-	return time.Time{} // Unparseable - shouldn't happen with valid data
-}
-
-// parseJSONStringArray parses a JSON string array from database TEXT column.
-// Returns empty slice if the string is empty or invalid JSON.
-func parseJSONStringArray(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var result []string
-	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		return nil // Invalid JSON - shouldn't happen with valid data
-	}
-	return result
-}
-
-// formatJSONStringArray formats a string slice as JSON for database storage.
-// Returns empty string if the slice is nil or empty.
-func formatJSONStringArray(arr []string) string {
-	if len(arr) == 0 {
-		return ""
-	}
-	data, err := json.Marshal(arr)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
+// Parsing utilities (parseTimeString, parseNullableTimeString, etc.) moved to parsing.go
+// Search operations (SearchIssues, filterByLabelRegex) moved to search.go
+// Delete operations (DeleteIssue, DeleteIssues, helpers) moved to delete.go
 
 // REMOVED: getNextIDForPrefix and AllocateNextID - sequential ID generation
 // no longer needed with hash-based IDs
@@ -152,15 +98,15 @@ func (s *SQLiteStorage) CreateIssue(ctx context.Context, issue *types.Issue, act
 	}
 	defer func() { _ = conn.Close() }()
 
-	// Start IMMEDIATE transaction to acquire write lock early and prevent race conditions.
+	// Start IMMEDIATE transaction with retry logic for SQLITE_BUSY.
 	// IMMEDIATE acquires a RESERVED lock immediately, preventing other IMMEDIATE or EXCLUSIVE
 	// transactions from starting. This serializes ID generation across concurrent writers.
 	//
 	// We use raw Exec instead of BeginTx because database/sql doesn't support transaction
 	// modes in BeginTx, and modernc.org/sqlite's BeginTx always uses DEFERRED mode.
 	//
-	// The connection's busy_timeout pragma (30s) handles retries if locked.
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+	// Retries with exponential backoff handle cases where busy_timeout alone is insufficient.
+	if err := beginImmediateWithRetry(ctx, conn); err != nil {
 		return fmt.Errorf("failed to begin immediate transaction: %w", err)
 	}
 
@@ -176,7 +122,7 @@ func (s *SQLiteStorage) CreateIssue(ctx context.Context, issue *types.Issue, act
 	// Get prefix from config (needed for both ID generation and validation)
 	var configPrefix string
 	err = conn.QueryRowContext(ctx, `SELECT value FROM config WHERE key = ?`, "issue_prefix").Scan(&configPrefix)
-	if err == sql.ErrNoRows || configPrefix == "" {
+	if errors.Is(err, sql.ErrNoRows) || configPrefix == "" {
 		// CRITICAL: Reject operation if issue_prefix config is missing
 		// This prevents duplicate issues with wrong prefix
 		return fmt.Errorf("database not initialized: issue_prefix config is missing (run 'bd init --prefix <prefix>' first)")
@@ -205,13 +151,13 @@ func (s *SQLiteStorage) CreateIssue(ctx context.Context, issue *types.Issue, act
 		issue.ID = generatedID
 	} else {
 		// Validate that explicitly provided ID matches the configured prefix
-		if err := ValidateIssueIDPrefix(issue.ID, prefix); err != nil {
+		if err := validateIssueIDPrefix(issue.ID, prefix); err != nil {
 			return wrapDBError("validate issue ID prefix", err)
 		}
 
 		// For hierarchical IDs (bd-a3f8e9.1), ensure parent exists
-		// Use IsHierarchicalID to correctly handle prefixes with dots (GH#508)
-		if isHierarchical, parentID := IsHierarchicalID(issue.ID); isHierarchical {
+		// Use isHierarchicalID to correctly handle prefixes with dots (GH#508)
+		if isHierarchical, parentID := isHierarchicalID(issue.ID); isHierarchical {
 			// Try to resurrect entire parent chain if any parents are missing
 			// Use the conn-based version to participate in the same transaction
 			resurrected, err := s.tryResurrectParentChainWithConn(ctx, conn, issue.ID)
@@ -389,7 +335,7 @@ func (s *SQLiteStorage) GetIssue(ctx context.Context, id string) (*types.Issue, 
 		&dueAt, &deferUntil, &metadata,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -554,7 +500,7 @@ func (s *SQLiteStorage) GetCloseReason(ctx context.Context, issueID string) (str
 		LIMIT 1
 	`, issueID, types.EventClosed).Scan(&comment)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
@@ -677,7 +623,7 @@ func (s *SQLiteStorage) GetIssueByExternalRef(ctx context.Context, externalRef s
 		&awaitType, &awaitID, &timeoutNs, &waiters,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -802,6 +748,8 @@ var allowedUpdateFields = map[string]bool{
 	"closed_at":           true,
 	"close_reason":        true,
 	"closed_by_session":   true,
+	// Source repo field (for multi-repo migration)
+	"source_repo": true,
 	// Messaging fields
 	"sender": true,
 	"wisp":   true, // Database column is 'ephemeral', mapped in UpdateIssue
@@ -950,6 +898,13 @@ func (s *SQLiteStorage) UpdateIssue(ctx context.Context, id string, updates map[
 		if key == "waiters" {
 			waitersJSON, _ := json.Marshal(value)
 			args = append(args, string(waitersJSON))
+		} else if key == "metadata" {
+			// GH#1417: Normalize metadata to string, accepting string/[]byte/json.RawMessage
+			metadataStr, err := storage.NormalizeMetadataValue(value)
+			if err != nil {
+				return fmt.Errorf("invalid metadata: %w", err)
+			}
+			args = append(args, metadataStr)
 		} else {
 			args = append(args, value)
 		}
@@ -1522,665 +1477,4 @@ func (s *SQLiteStorage) CreateTombstone(ctx context.Context, id string, actor st
 
 		return nil
 	})
-}
-
-// DeleteIssue permanently removes an issue from the database
-func (s *SQLiteStorage) DeleteIssue(ctx context.Context, id string) error {
-	return s.withTx(ctx, func(conn *sql.Conn) error {
-		// Mark issues that depend on this one as dirty so they get re-exported
-		// without the stale dependency reference (fixes orphan deps in JSONL)
-		rows, err := conn.QueryContext(ctx, `SELECT issue_id FROM dependencies WHERE depends_on_id = ?`, id)
-		if err != nil {
-			return fmt.Errorf("failed to query dependent issues: %w", err)
-		}
-		var dependentIDs []string
-		for rows.Next() {
-			var depID string
-			if err := rows.Scan(&depID); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("failed to scan dependent issue ID: %w", err)
-			}
-			dependentIDs = append(dependentIDs, depID)
-		}
-		_ = rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to iterate dependent issues: %w", err)
-		}
-
-		if len(dependentIDs) > 0 {
-			if err := markIssuesDirtyTx(ctx, conn, dependentIDs); err != nil {
-				return fmt.Errorf("failed to mark dependent issues dirty: %w", err)
-			}
-		}
-
-		// Delete dependencies (both directions)
-		_, err = conn.ExecContext(ctx, `DELETE FROM dependencies WHERE issue_id = ? OR depends_on_id = ?`, id, id)
-		if err != nil {
-			return fmt.Errorf("failed to delete dependencies: %w", err)
-		}
-
-		// Delete events
-		_, err = conn.ExecContext(ctx, `DELETE FROM events WHERE issue_id = ?`, id)
-		if err != nil {
-			return fmt.Errorf("failed to delete events: %w", err)
-		}
-
-		// Delete comments (no FK cascade on this table)
-		_, err = conn.ExecContext(ctx, `DELETE FROM comments WHERE issue_id = ?`, id)
-		if err != nil {
-			return fmt.Errorf("failed to delete comments: %w", err)
-		}
-
-		// Delete from dirty_issues
-		_, err = conn.ExecContext(ctx, `DELETE FROM dirty_issues WHERE issue_id = ?`, id)
-		if err != nil {
-			return fmt.Errorf("failed to delete dirty marker: %w", err)
-		}
-
-		// Delete the issue itself
-		result, err := conn.ExecContext(ctx, `DELETE FROM issues WHERE id = ?`, id)
-		if err != nil {
-			return fmt.Errorf("failed to delete issue: %w", err)
-		}
-
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("failed to check rows affected: %w", err)
-		}
-		if rowsAffected == 0 {
-			return fmt.Errorf("issue not found: %s", id)
-		}
-
-		return nil
-	})
-}
-
-// DeleteIssues deletes multiple issues in a single transaction
-// If cascade is true, recursively deletes dependents
-// If cascade is false but force is true, deletes issues and orphans their dependents
-// If cascade and force are both false, returns an error if any issue has dependents
-// If dryRun is true, only computes statistics without deleting
-func (s *SQLiteStorage) DeleteIssues(ctx context.Context, ids []string, cascade bool, force bool, dryRun bool) (*types.DeleteIssuesResult, error) {
-	if len(ids) == 0 {
-		return &types.DeleteIssuesResult{}, nil
-	}
-
-	idSet := buildIDSet(ids)
-	result := &types.DeleteIssuesResult{}
-
-	// Execute in transaction using BEGIN IMMEDIATE (GH#1272 fix)
-	err := s.withTx(ctx, func(conn *sql.Conn) error {
-		expandedIDs, err := s.resolveDeleteSet(ctx, conn, ids, idSet, cascade, force, result)
-		if err != nil {
-			return wrapDBError("resolve delete set", err)
-		}
-
-		inClause, args := buildSQLInClause(expandedIDs)
-		if err := s.populateDeleteStats(ctx, conn, inClause, args, result); err != nil {
-			return err
-		}
-
-		if dryRun {
-			return nil
-		}
-
-		if err := s.executeDelete(ctx, conn, inClause, args, result); err != nil {
-			return err
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	// REMOVED: Counter sync after deletion - no longer needed with hash IDs
-
-	return result, nil
-}
-
-func buildIDSet(ids []string) map[string]bool {
-	idSet := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		idSet[id] = true
-	}
-	return idSet
-}
-
-func (s *SQLiteStorage) resolveDeleteSet(ctx context.Context, exec dbExecutor, ids []string, idSet map[string]bool, cascade bool, force bool, result *types.DeleteIssuesResult) ([]string, error) {
-	if cascade {
-		return s.expandWithDependents(ctx, exec, ids, idSet)
-	}
-	if !force {
-		return ids, s.validateNoDependents(ctx, exec, ids, idSet, result)
-	}
-	return ids, s.trackOrphanedIssues(ctx, exec, ids, idSet, result)
-}
-
-func (s *SQLiteStorage) expandWithDependents(ctx context.Context, exec dbExecutor, ids []string, _ map[string]bool) ([]string, error) {
-	allToDelete, err := s.findAllDependentsRecursive(ctx, exec, ids)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find dependents: %w", err)
-	}
-	expandedIDs := make([]string, 0, len(allToDelete))
-	for id := range allToDelete {
-		expandedIDs = append(expandedIDs, id)
-	}
-	return expandedIDs, nil
-}
-
-func (s *SQLiteStorage) validateNoDependents(ctx context.Context, exec dbExecutor, ids []string, idSet map[string]bool, result *types.DeleteIssuesResult) error {
-	for _, id := range ids {
-		if err := s.checkSingleIssueValidation(ctx, exec, id, idSet, result); err != nil {
-			return wrapDBError("check dependents", err)
-		}
-	}
-	return nil
-}
-
-func (s *SQLiteStorage) checkSingleIssueValidation(ctx context.Context, exec dbExecutor, id string, idSet map[string]bool, result *types.DeleteIssuesResult) error {
-	var depCount int
-	err := exec.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM dependencies WHERE depends_on_id = ?`, id).Scan(&depCount)
-	if err != nil {
-		return fmt.Errorf("failed to check dependents for %s: %w", id, err)
-	}
-	if depCount == 0 {
-		return nil
-	}
-
-	rows, err := exec.QueryContext(ctx,
-		`SELECT issue_id FROM dependencies WHERE depends_on_id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("failed to get dependents for %s: %w", id, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	hasExternal := false
-	for rows.Next() {
-		var depID string
-		if err := rows.Scan(&depID); err != nil {
-			return fmt.Errorf("failed to scan dependent: %w", err)
-		}
-		if !idSet[depID] {
-			hasExternal = true
-			result.OrphanedIssues = append(result.OrphanedIssues, depID)
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("failed to iterate dependents for %s: %w", id, err)
-	}
-
-	if hasExternal {
-		return fmt.Errorf("issue %s has dependents not in deletion set; use --cascade to delete them or --force to orphan them", id)
-	}
-	return nil
-}
-
-func (s *SQLiteStorage) trackOrphanedIssues(ctx context.Context, exec dbExecutor, ids []string, idSet map[string]bool, result *types.DeleteIssuesResult) error {
-	orphanSet := make(map[string]bool)
-	for _, id := range ids {
-		if err := s.collectOrphansForID(ctx, exec, id, idSet, orphanSet); err != nil {
-			return wrapDBError("collect orphans", err)
-		}
-	}
-	for orphanID := range orphanSet {
-		result.OrphanedIssues = append(result.OrphanedIssues, orphanID)
-	}
-	return nil
-}
-
-func (s *SQLiteStorage) collectOrphansForID(ctx context.Context, exec dbExecutor, id string, idSet map[string]bool, orphanSet map[string]bool) error {
-	rows, err := exec.QueryContext(ctx,
-		`SELECT issue_id FROM dependencies WHERE depends_on_id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("failed to get dependents for %s: %w", id, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var depID string
-		if err := rows.Scan(&depID); err != nil {
-			return fmt.Errorf("failed to scan dependent: %w", err)
-		}
-		if !idSet[depID] {
-			orphanSet[depID] = true
-		}
-	}
-	return rows.Err()
-}
-
-func buildSQLInClause(ids []string) (string, []interface{}) {
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
-	}
-	return strings.Join(placeholders, ","), args
-}
-
-func (s *SQLiteStorage) populateDeleteStats(ctx context.Context, exec dbExecutor, inClause string, args []interface{}, result *types.DeleteIssuesResult) error {
-	counts := []struct {
-		query string
-		dest  *int
-	}{
-		{fmt.Sprintf(`SELECT COUNT(*) FROM dependencies WHERE issue_id IN (%s) OR depends_on_id IN (%s)`, inClause, inClause), &result.DependenciesCount},
-		{fmt.Sprintf(`SELECT COUNT(*) FROM labels WHERE issue_id IN (%s)`, inClause), &result.LabelsCount},
-		{fmt.Sprintf(`SELECT COUNT(*) FROM events WHERE issue_id IN (%s)`, inClause), &result.EventsCount},
-	}
-
-	for _, c := range counts {
-		queryArgs := args
-		if c.dest == &result.DependenciesCount {
-			queryArgs = append(args, args...)
-		}
-		if err := exec.QueryRowContext(ctx, c.query, queryArgs...).Scan(c.dest); err != nil {
-			return fmt.Errorf("failed to count: %w", err)
-		}
-	}
-
-	result.DeletedCount = len(args)
-	return nil
-}
-
-func (s *SQLiteStorage) executeDelete(ctx context.Context, exec dbExecutor, inClause string, args []interface{}, result *types.DeleteIssuesResult) error {
-	// Note: This method now creates tombstones instead of hard-deleting
-	// Only dependencies are deleted - issues are converted to tombstones
-
-	// 1. Delete dependencies - tombstones don't block other issues
-	_, err := exec.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM dependencies WHERE issue_id IN (%s) OR depends_on_id IN (%s)`, inClause, inClause),
-		append(args, args...)...)
-	if err != nil {
-		return fmt.Errorf("failed to delete dependencies: %w", err)
-	}
-
-	// 2. Get issue types before converting to tombstones (need for original_type)
-	issueTypes := make(map[string]string)
-	rows, err := exec.QueryContext(ctx,
-		fmt.Sprintf(`SELECT id, issue_type FROM issues WHERE id IN (%s)`, inClause),
-		args...)
-	if err != nil {
-		return fmt.Errorf("failed to get issue types: %w", err)
-	}
-	for rows.Next() {
-		var id, issueType string
-		if err := rows.Scan(&id, &issueType); err != nil {
-			_ = rows.Close() // #nosec G104 - error handling not critical in error path
-			return fmt.Errorf("failed to scan issue type: %w", err)
-		}
-		issueTypes[id] = issueType
-	}
-	_ = rows.Close()
-
-	// 3. Convert issues to tombstones (only for issues that exist)
-	// Note: closed_at must be set to NULL because of CHECK constraint:
-	// (status = 'closed') = (closed_at IS NOT NULL)
-	now := time.Now()
-	deletedCount := 0
-	for id, originalType := range issueTypes {
-		execResult, err := exec.ExecContext(ctx, `
-			UPDATE issues
-			SET status = ?,
-			    closed_at = NULL,
-			    deleted_at = ?,
-			    deleted_by = ?,
-			    delete_reason = ?,
-			    original_type = ?,
-			    updated_at = ?
-			WHERE id = ?
-		`, types.StatusTombstone, now, "batch delete", "batch delete", originalType, now, id)
-		if err != nil {
-			return fmt.Errorf("failed to create tombstone for %s: %w", id, err)
-		}
-
-		rowsAffected, _ := execResult.RowsAffected()
-		if rowsAffected == 0 {
-			continue // Issue doesn't exist, skip
-		}
-		deletedCount++
-
-		// Record tombstone creation event
-		_, err = exec.ExecContext(ctx, `
-			INSERT INTO events (issue_id, event_type, actor, comment)
-			VALUES (?, ?, ?, ?)
-		`, id, "deleted", "batch delete", "batch delete")
-		if err != nil {
-			return fmt.Errorf("failed to record tombstone event for %s: %w", id, err)
-		}
-
-		// Mark issue as dirty for incremental export
-		_, err = exec.ExecContext(ctx, `
-			INSERT INTO dirty_issues (issue_id, marked_at)
-			VALUES (?, ?)
-			ON CONFLICT (issue_id) DO UPDATE SET marked_at = excluded.marked_at
-		`, id, now)
-		if err != nil {
-			return fmt.Errorf("failed to mark issue dirty for %s: %w", id, err)
-		}
-	}
-
-	// 4. Invalidate blocked issues cache since statuses changed
-	if err := s.invalidateBlockedCache(ctx, exec); err != nil {
-		return fmt.Errorf("failed to invalidate blocked cache: %w", err)
-	}
-
-	result.DeletedCount = deletedCount
-	return nil
-}
-
-// findAllDependentsRecursive finds all issues that depend on the given issues, recursively
-func (s *SQLiteStorage) findAllDependentsRecursive(ctx context.Context, exec dbExecutor, ids []string) (map[string]bool, error) {
-	result := make(map[string]bool)
-	for _, id := range ids {
-		result[id] = true
-	}
-
-	toProcess := make([]string, len(ids))
-	copy(toProcess, ids)
-
-	for len(toProcess) > 0 {
-		current := toProcess[0]
-		toProcess = toProcess[1:]
-
-		rows, err := exec.QueryContext(ctx,
-			`SELECT issue_id FROM dependencies WHERE depends_on_id = ?`, current)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var depID string
-			if err := rows.Scan(&depID); err != nil {
-				return nil, err
-			}
-			if !result[depID] {
-				result[depID] = true
-				toProcess = append(toProcess, depID)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-	}
-
-	return result, nil
-}
-
-// SearchIssues finds issues matching query and filters
-func (s *SQLiteStorage) SearchIssues(ctx context.Context, query string, filter types.IssueFilter) ([]*types.Issue, error) {
-	// Check for external database file modifications (daemon mode)
-	s.checkFreshness()
-
-	// Hold read lock during database operations to prevent reconnect() from
-	// closing the connection mid-query (GH#607 race condition fix)
-	s.reconnectMu.RLock()
-	defer s.reconnectMu.RUnlock()
-
-	whereClauses := []string{}
-	args := []interface{}{}
-
-	if query != "" {
-		whereClauses = append(whereClauses, "(title LIKE ? OR description LIKE ? OR id LIKE ?)")
-		pattern := "%" + query + "%"
-		args = append(args, pattern, pattern, pattern)
-	}
-
-	if filter.TitleSearch != "" {
-		whereClauses = append(whereClauses, "title LIKE ?")
-		pattern := "%" + filter.TitleSearch + "%"
-		args = append(args, pattern)
-	}
-
-	// Pattern matching
-	if filter.TitleContains != "" {
-		whereClauses = append(whereClauses, "title LIKE ?")
-		args = append(args, "%"+filter.TitleContains+"%")
-	}
-	if filter.DescriptionContains != "" {
-		whereClauses = append(whereClauses, "description LIKE ?")
-		args = append(args, "%"+filter.DescriptionContains+"%")
-	}
-	if filter.NotesContains != "" {
-		whereClauses = append(whereClauses, "notes LIKE ?")
-		args = append(args, "%"+filter.NotesContains+"%")
-	}
-
-	if filter.Status != nil {
-		whereClauses = append(whereClauses, "status = ?")
-		args = append(args, *filter.Status)
-	} else if !filter.IncludeTombstones {
-		// Exclude tombstones by default unless explicitly filtering for them
-		whereClauses = append(whereClauses, "status != ?")
-		args = append(args, types.StatusTombstone)
-	}
-
-	// Status exclusion (for default non-closed behavior, GH#788)
-	if len(filter.ExcludeStatus) > 0 {
-		placeholders := make([]string, len(filter.ExcludeStatus))
-		for i, s := range filter.ExcludeStatus {
-			placeholders[i] = "?"
-			args = append(args, string(s))
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("status NOT IN (%s)", strings.Join(placeholders, ",")))
-	}
-
-	// Type exclusion (for hiding internal types like gates, bd-7zka.2)
-	if len(filter.ExcludeTypes) > 0 {
-		placeholders := make([]string, len(filter.ExcludeTypes))
-		for i, t := range filter.ExcludeTypes {
-			placeholders[i] = "?"
-			args = append(args, string(t))
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("issue_type NOT IN (%s)", strings.Join(placeholders, ",")))
-	}
-
-	if filter.Priority != nil {
-		whereClauses = append(whereClauses, "priority = ?")
-		args = append(args, *filter.Priority)
-	}
-
-	// Priority ranges
-	if filter.PriorityMin != nil {
-		whereClauses = append(whereClauses, "priority >= ?")
-		args = append(args, *filter.PriorityMin)
-	}
-	if filter.PriorityMax != nil {
-		whereClauses = append(whereClauses, "priority <= ?")
-		args = append(args, *filter.PriorityMax)
-	}
-
-	if filter.IssueType != nil {
-		whereClauses = append(whereClauses, "issue_type = ?")
-		args = append(args, *filter.IssueType)
-	}
-
-	if filter.Assignee != nil {
-		whereClauses = append(whereClauses, "assignee = ?")
-		args = append(args, *filter.Assignee)
-	}
-
-	// Date ranges
-	if filter.CreatedAfter != nil {
-		whereClauses = append(whereClauses, "created_at > ?")
-		args = append(args, filter.CreatedAfter.Format(time.RFC3339))
-	}
-	if filter.CreatedBefore != nil {
-		whereClauses = append(whereClauses, "created_at < ?")
-		args = append(args, filter.CreatedBefore.Format(time.RFC3339))
-	}
-	if filter.UpdatedAfter != nil {
-		whereClauses = append(whereClauses, "updated_at > ?")
-		args = append(args, filter.UpdatedAfter.Format(time.RFC3339))
-	}
-	if filter.UpdatedBefore != nil {
-		whereClauses = append(whereClauses, "updated_at < ?")
-		args = append(args, filter.UpdatedBefore.Format(time.RFC3339))
-	}
-	if filter.ClosedAfter != nil {
-		whereClauses = append(whereClauses, "closed_at > ?")
-		args = append(args, filter.ClosedAfter.Format(time.RFC3339))
-	}
-	if filter.ClosedBefore != nil {
-		whereClauses = append(whereClauses, "closed_at < ?")
-		args = append(args, filter.ClosedBefore.Format(time.RFC3339))
-	}
-
-	// Empty/null checks
-	if filter.EmptyDescription {
-		whereClauses = append(whereClauses, "(description IS NULL OR description = '')")
-	}
-	if filter.NoAssignee {
-		whereClauses = append(whereClauses, "(assignee IS NULL OR assignee = '')")
-	}
-	if filter.NoLabels {
-		whereClauses = append(whereClauses, "id NOT IN (SELECT DISTINCT issue_id FROM labels)")
-	}
-
-	// Label filtering: issue must have ALL specified labels
-	if len(filter.Labels) > 0 {
-		for _, label := range filter.Labels {
-			whereClauses = append(whereClauses, "id IN (SELECT issue_id FROM labels WHERE label = ?)")
-			args = append(args, label)
-		}
-	}
-
-	// Label filtering (OR): issue must have AT LEAST ONE of these labels
-	if len(filter.LabelsAny) > 0 {
-		placeholders := make([]string, len(filter.LabelsAny))
-		for i, label := range filter.LabelsAny {
-			placeholders[i] = "?"
-			args = append(args, label)
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("id IN (SELECT issue_id FROM labels WHERE label IN (%s))", strings.Join(placeholders, ", ")))
-	}
-
-	// ID filtering: match specific issue IDs
-	if len(filter.IDs) > 0 {
-		placeholders := make([]string, len(filter.IDs))
-		for i, id := range filter.IDs {
-			placeholders[i] = "?"
-			args = append(args, id)
-		}
-		whereClauses = append(whereClauses, fmt.Sprintf("id IN (%s)", strings.Join(placeholders, ", ")))
-	}
-
-	// ID prefix filtering (for shell completion)
-	if filter.IDPrefix != "" {
-		whereClauses = append(whereClauses, "id LIKE ?")
-		args = append(args, filter.IDPrefix+"%")
-	}
-	if filter.SpecIDPrefix != "" {
-		whereClauses = append(whereClauses, "spec_id LIKE ?")
-		args = append(args, filter.SpecIDPrefix+"%")
-	}
-
-	// Wisp filtering
-	if filter.Ephemeral != nil {
-		if *filter.Ephemeral {
-			whereClauses = append(whereClauses, "ephemeral = 1") // SQL column is still 'ephemeral'
-		} else {
-			whereClauses = append(whereClauses, "(ephemeral = 0 OR ephemeral IS NULL)")
-		}
-	}
-
-	// Pinned filtering
-	if filter.Pinned != nil {
-		if *filter.Pinned {
-			whereClauses = append(whereClauses, "pinned = 1")
-		} else {
-			whereClauses = append(whereClauses, "(pinned = 0 OR pinned IS NULL)")
-		}
-	}
-
-	// Template filtering
-	if filter.IsTemplate != nil {
-		if *filter.IsTemplate {
-			whereClauses = append(whereClauses, "is_template = 1")
-		} else {
-			whereClauses = append(whereClauses, "(is_template = 0 OR is_template IS NULL)")
-		}
-	}
-
-	// Parent filtering: filter children by parent issue
-	if filter.ParentID != nil {
-		whereClauses = append(whereClauses, "id IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child' AND depends_on_id = ?)")
-		args = append(args, *filter.ParentID)
-	}
-
-	// Molecule type filtering
-	if filter.MolType != nil {
-		whereClauses = append(whereClauses, "mol_type = ?")
-		args = append(args, string(*filter.MolType))
-	}
-
-	// Wisp type filtering (TTL-based compaction classification)
-	if filter.WispType != nil {
-		whereClauses = append(whereClauses, "wisp_type = ?")
-		args = append(args, string(*filter.WispType))
-	}
-
-	// Time-based scheduling filters (GH#820)
-	if filter.Deferred {
-		whereClauses = append(whereClauses, "defer_until IS NOT NULL")
-	}
-	if filter.DeferAfter != nil {
-		whereClauses = append(whereClauses, "defer_until > ?")
-		args = append(args, filter.DeferAfter.Format(time.RFC3339))
-	}
-	if filter.DeferBefore != nil {
-		whereClauses = append(whereClauses, "defer_until < ?")
-		args = append(args, filter.DeferBefore.Format(time.RFC3339))
-	}
-	if filter.DueAfter != nil {
-		whereClauses = append(whereClauses, "due_at > ?")
-		args = append(args, filter.DueAfter.Format(time.RFC3339))
-	}
-	if filter.DueBefore != nil {
-		whereClauses = append(whereClauses, "due_at < ?")
-		args = append(args, filter.DueBefore.Format(time.RFC3339))
-	}
-	if filter.Overdue {
-		whereClauses = append(whereClauses, "due_at IS NOT NULL AND due_at < ? AND status != ?")
-		args = append(args, time.Now().Format(time.RFC3339), types.StatusClosed)
-	}
-
-	whereSQL := ""
-	if len(whereClauses) > 0 {
-		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
-	}
-
-	limitSQL := ""
-	if filter.Limit > 0 {
-		limitSQL = " LIMIT ?"
-		args = append(args, filter.Limit)
-	}
-
-	// #nosec G201 - safe SQL with controlled formatting
-	querySQL := fmt.Sprintf(`
-		SELECT id, content_hash, title, description, design, acceptance_criteria, notes,
-		       status, priority, issue_type, assignee, estimated_minutes,
-		       created_at, created_by, owner, updated_at, closed_at, external_ref, spec_id, source_repo, close_reason,
-		       deleted_at, deleted_by, delete_reason, original_type,
-		       sender, ephemeral, pinned, is_template, crystallizes,
-		       await_type, await_id, timeout_ns, waiters,
-		       hook_bead, role_bead, agent_state, last_activity, role_type, rig, mol_type,
-		       due_at, defer_until, metadata
-		FROM issues
-		%s
-		ORDER BY priority ASC, created_at DESC
-		%s
-	`, whereSQL, limitSQL)
-
-	rows, err := s.db.QueryContext(ctx, querySQL, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search issues: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	return s.scanIssues(ctx, rows)
 }

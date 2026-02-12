@@ -16,7 +16,7 @@ import (
 	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/storage/sqlite"
 	"github.com/steveyegge/beads/internal/types"
-	"github.com/steveyegge/beads/internal/util"
+	"github.com/steveyegge/beads/internal/utils"
 	"github.com/steveyegge/beads/internal/validation"
 )
 
@@ -143,7 +143,7 @@ Examples:
 		// Additional filter flags
 		assignee, _ := cmd.Flags().GetString("assignee")
 		issueType, _ := cmd.Flags().GetString("type")
-		issueType = util.NormalizeIssueType(issueType) // Expand aliases (mr→merge-request, etc.)
+		issueType = utils.NormalizeIssueType(issueType) // Expand aliases (mr→merge-request, etc.)
 		labels, _ := cmd.Flags().GetStringSlice("label")
 		labelsAny, _ := cmd.Flags().GetStringSlice("label-any")
 		priorityMinStr, _ := cmd.Flags().GetString("priority-min")
@@ -168,12 +168,6 @@ Examples:
 		}
 
 		// Export command requires direct database access for consistent snapshot
-		// If daemon is connected, close it and open direct connection
-		if daemonClient != nil {
-			debug.Logf("Debug: export command forcing direct mode (closes daemon connection)\n")
-			_ = daemonClient.Close()
-			daemonClient = nil
-		}
 
 		// Note: We used to check database file timestamps here, but WAL files
 		// get created when opening the DB, making timestamp checks unreliable.
@@ -196,6 +190,8 @@ Examples:
 			}
 			defer func() { _ = store.Close() }()
 		}
+
+		requireFreshDB(rootCtx)
 
 		// Handle --events and --events-reset flags
 		if eventsFlag || eventsReset {
@@ -222,8 +218,8 @@ Examples:
 		}
 
 		// Normalize labels: trim, dedupe, remove empty
-		labels = util.NormalizeLabels(labels)
-		labelsAny = util.NormalizeLabels(labelsAny)
+		labels = utils.NormalizeLabels(labels)
+		labelsAny = utils.NormalizeLabels(labelsAny)
 
 		// Build filter
 		// Tombstone export logic:
@@ -254,7 +250,7 @@ Examples:
 			filter.LabelsAny = labelsAny
 		}
 		if idFilter != "" {
-			ids := util.NormalizeLabels(strings.Split(idFilter, ","))
+			ids := utils.NormalizeLabels(strings.Split(idFilter, ","))
 			if len(ids) > 0 {
 				filter.IDs = ids
 			}
@@ -547,13 +543,13 @@ Examples:
 		}
 
 		// Report skipped issues if any (helps debugging bd-159)
-		if skippedCount > 0 && (output == "" || output == findJSONLPath()) {
+		if skippedCount > 0 && output == findJSONLPath() {
 			fmt.Fprintf(os.Stderr, "Skipped %d issue(s) with timestamp-only changes\n", skippedCount)
 		}
 
 		// Only clear dirty issues and auto-flush state if exporting to the default JSONL path
-		// This prevents clearing dirty flags when exporting to custom paths (e.g., bd export -o backup.jsonl)
-		if output == "" || output == findJSONLPath() {
+		// This prevents clearing dirty flags when exporting to stdout or custom paths (e.g., bd export -o backup.jsonl)
+		if output == findJSONLPath() {
 			// Clear only the issues that were actually exported (fixes bd-52 race condition)
 			if err := store.ClearDirtyIssuesByID(ctx, exportedIDs); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to clear dirty issues: %v\n", err)
@@ -617,9 +613,9 @@ Examples:
 			}
 
 			// Update database mtime to be >= JSONL mtime (fixes #278, #301, #321)
-			// Only do this when exporting to default JSONL path (not arbitrary outputs)
+			// Only do this when exporting to default JSONL path (not stdout or arbitrary outputs)
 			// This prevents validatePreExport from incorrectly blocking on next export
-			if output == "" || output == findJSONLPath() {
+			if output == findJSONLPath() {
 				// Dolt backend does not have a SQLite DB file, so only touch mtime for SQLite.
 				// Use store.Path() to get the actual database location, not the JSONL directory,
 				// since sync-branch exports write JSONL to a worktree but the DB stays in the main repo.
@@ -662,7 +658,7 @@ func init() {
 	// Filter flags
 	registerPriorityFlag(exportCmd, "")
 	exportCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
-	exportCmd.Flags().StringP("type", "t", "", "Filter by type (bug, feature, task, epic, chore, merge-request, molecule, gate). Aliases: mr→merge-request, feat→feature, mol→molecule")
+	exportCmd.Flags().StringP("type", "t", "", "Filter by type (bug, feature, task, epic, chore, decision, merge-request, molecule, gate). Aliases: mr→merge-request, feat→feature, mol→molecule, dec/adr→decision")
 	exportCmd.Flags().StringSliceP("label", "l", []string{}, "Filter by labels (AND: must have ALL)")
 	exportCmd.Flags().StringSlice("label-any", []string{}, "Filter by labels (OR: must have AT LEAST ONE)")
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/steveyegge/beads/internal/configfile"
@@ -108,19 +109,10 @@ func OrphanedDependencies(path string, verbose bool) error {
 
 	beadsDir := resolveBeadsDir(filepath.Join(path, ".beads"))
 
-	// Dolt backend: this fix uses raw SQL queries against SQLite, skip for now
-	cfg, _ := configfile.Load(beadsDir)
-	if cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
-		fmt.Println("  Orphaned dependencies fix skipped (dolt backend — uses raw SQL)")
-		return nil
-	}
-
-	dbPath := filepath.Join(beadsDir, "beads.db")
-
-	// Open database
-	db, err := openDB(dbPath)
+	db, isDolt, err := openAnyDB(beadsDir)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		fmt.Printf("  Orphaned dependencies fix skipped (%v)\n", err)
+		return nil
 	}
 	defer db.Close()
 
@@ -165,13 +157,20 @@ func OrphanedDependencies(path string, verbose bool) error {
 		if err != nil {
 			fmt.Printf("  Warning: failed to remove %s→%s: %v\n", o.issueID, o.dependsOnID, err)
 		} else {
-			// Mark issue as dirty for export
-			_, _ = db.Exec("INSERT OR IGNORE INTO dirty_issues (issue_id) VALUES (?)", o.issueID)
+			if !isDolt {
+				// Mark issue as dirty for export (SQLite only; dolt commits automatically)
+				_, _ = db.Exec("INSERT OR IGNORE INTO dirty_issues (issue_id) VALUES (?)", o.issueID)
+			}
 			removed++
 			if showIndividual {
 				fmt.Printf("  Removed orphaned dependency: %s→%s\n", o.issueID, o.dependsOnID)
 			}
 		}
+	}
+
+	if isDolt {
+		// Commit changes in dolt
+		_, _ = db.Exec("CALL DOLT_COMMIT('-Am', 'doctor: remove orphaned dependencies')")
 	}
 
 	fmt.Printf("  Fixed %d orphaned dependency reference(s)\n", removed)
@@ -189,29 +188,21 @@ func ChildParentDependencies(path string, verbose bool) error {
 
 	beadsDir := resolveBeadsDir(filepath.Join(path, ".beads"))
 
-	// Dolt backend: this fix uses raw SQL queries against SQLite, skip for now
-	cfg, _ := configfile.Load(beadsDir)
-	if cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
-		fmt.Println("  Child-parent dependencies fix skipped (dolt backend — uses raw SQL)")
-		return nil
-	}
-
-	dbPath := filepath.Join(beadsDir, "beads.db")
-
-	// Open database
-	db, err := openDB(dbPath)
+	db, isDolt, err := openAnyDB(beadsDir)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		fmt.Printf("  Child-parent dependencies fix skipped (%v)\n", err)
+		return nil
 	}
 	defer db.Close()
 
 	// Find child→parent BLOCKING dependencies where issue_id starts with depends_on_id + "."
 	// Only matches blocking types (blocks, conditional-blocks, waits-for) that cause deadlock.
 	// Excludes 'parent-child' type which is a legitimate structural hierarchy relationship.
+	// Use || for string concatenation (works on both SQLite and Dolt/MySQL with PIPES_AS_CONCAT)
 	query := `
 		SELECT d.issue_id, d.depends_on_id, d.type
 		FROM dependencies d
-		WHERE d.issue_id LIKE d.depends_on_id || '.%'
+		WHERE d.issue_id LIKE CONCAT(d.depends_on_id, '.%')
 		  AND d.type IN ('blocks', 'conditional-blocks', 'waits-for')
 	`
 	rows, err := db.Query(query)
@@ -249,8 +240,10 @@ func ChildParentDependencies(path string, verbose bool) error {
 		if err != nil {
 			fmt.Printf("  Warning: failed to remove %s→%s: %v\n", d.issueID, d.dependsOnID, err)
 		} else {
-			// Mark issue as dirty for export
-			_, _ = db.Exec("INSERT OR IGNORE INTO dirty_issues (issue_id) VALUES (?)", d.issueID)
+			if !isDolt {
+				// Mark issue as dirty for export (SQLite only; dolt commits automatically)
+				_, _ = db.Exec("INSERT OR IGNORE INTO dirty_issues (issue_id) VALUES (?)", d.issueID)
+			}
 			removed++
 			if showIndividual {
 				fmt.Printf("  Removed child→parent dependency: %s→%s\n", d.issueID, d.dependsOnID)
@@ -258,8 +251,51 @@ func ChildParentDependencies(path string, verbose bool) error {
 		}
 	}
 
+	if isDolt {
+		_, _ = db.Exec("CALL DOLT_COMMIT('-Am', 'doctor: remove child-parent dependency anti-patterns')")
+	}
+
 	fmt.Printf("  Fixed %d child→parent dependency anti-pattern(s)\n", removed)
 	return nil
+}
+
+// openAnyDB opens a database connection, trying SQLite first, then dolt server.
+// Returns the db connection, whether it's a dolt connection, and any error.
+func openAnyDB(beadsDir string) (*sql.DB, bool, error) {
+	// Try SQLite first
+	dbPath := filepath.Join(beadsDir, "beads.db")
+	if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
+		db, err := openDB(dbPath)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to open SQLite database: %w", err)
+		}
+		return db, false, nil
+	}
+
+	// Try dolt server via MySQL protocol
+	cfg, err := configfile.Load(beadsDir)
+	if err != nil || cfg == nil {
+		return nil, false, fmt.Errorf("no database found (no SQLite and no dolt config)")
+	}
+
+	host := cfg.GetDoltServerHost()
+	port := cfg.GetDoltServerPort()
+	user := cfg.GetDoltServerUser()
+	database := cfg.GetDoltDatabase()
+
+	dsn := fmt.Sprintf("%s@tcp(%s:%d)/%s", user, host, port, database)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, false, fmt.Errorf("no SQLite database and dolt server connection failed: %w", err)
+	}
+
+	// Verify the connection actually works
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, false, fmt.Errorf("no SQLite database and dolt server not reachable at %s:%d: %w", host, port, err)
+	}
+
+	return db, true, nil
 }
 
 // openDB opens a SQLite database for read-write access

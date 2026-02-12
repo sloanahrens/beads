@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/rpc"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/validation"
 )
@@ -50,107 +49,51 @@ Examples:
 
 		var issues []*types.Issue
 
-		// Use daemon if available, otherwise direct mode
-		if daemonClient != nil {
-			if len(args) > 0 {
-				// Get specific issues via show
-				for _, id := range args {
-					showArgs := &rpc.ShowArgs{ID: id}
-					resp, err := daemonClient.Show(showArgs)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error getting %s: %v\n", id, err)
-						continue
-					}
-					var details types.IssueDetails
-					if err := json.Unmarshal(resp.Data, &details); err != nil {
-						fmt.Fprintf(os.Stderr, "Error parsing %s: %v\n", id, err)
-						continue
-					}
-					issues = append(issues, &details.Issue)
-				}
-			} else {
-				// List issues via daemon
-				listArgs := &rpc.ListArgs{
-					Limit: 1000, // reasonable limit
-				}
+		// Direct mode
+		requireFreshDB(ctx)
 
-				// Default to open issues unless --status specified
-				if statusFilter == "" || statusFilter == "open" {
-					listArgs.Status = "open"
-				} else if statusFilter != "all" {
-					listArgs.Status = statusFilter
-				}
+		if store == nil {
+			FatalErrorWithHint("database not initialized",
+				"run 'bd init' to create a database, or use 'bd --no-db' for JSONL-only mode")
+		}
 
-				if typeFilter != "" {
-					listArgs.IssueType = typeFilter
-				}
-
-				resp, err := daemonClient.List(listArgs)
+		if len(args) > 0 {
+			// Lint specific issues
+			for _, id := range args {
+				issue, err := store.GetIssue(ctx, id)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-					os.Exit(1)
+					fmt.Fprintf(os.Stderr, "Error getting %s: %v\n", id, err)
+					continue
 				}
-
-				var issuesWithCounts []*types.IssueWithCounts
-				if err := json.Unmarshal(resp.Data, &issuesWithCounts); err != nil {
-					fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
-					os.Exit(1)
+				if issue == nil {
+					fmt.Fprintf(os.Stderr, "Issue not found: %s\n", id)
+					continue
 				}
-
-				for _, iwc := range issuesWithCounts {
-					issues = append(issues, iwc.Issue)
-				}
+				issues = append(issues, issue)
 			}
 		} else {
-			// Direct mode
-			if err := ensureDatabaseFresh(ctx); err != nil {
+			// Lint all matching issues
+			filter := types.IssueFilter{}
+
+			// Default to open issues unless --status specified
+			if statusFilter == "" || statusFilter == "open" {
+				s := types.StatusOpen
+				filter.Status = &s
+			} else if statusFilter != "all" {
+				s := types.Status(statusFilter)
+				filter.Status = &s
+			}
+
+			if typeFilter != "" {
+				t := types.IssueType(typeFilter)
+				filter.IssueType = &t
+			}
+
+			var err error
+			issues, err = store.SearchIssues(ctx, "", filter)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
-			}
-
-			if store == nil {
-				fmt.Fprintln(os.Stderr, "Error: database not initialized")
-				os.Exit(1)
-			}
-
-			if len(args) > 0 {
-				// Lint specific issues
-				for _, id := range args {
-					issue, err := store.GetIssue(ctx, id)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error getting %s: %v\n", id, err)
-						continue
-					}
-					if issue == nil {
-						fmt.Fprintf(os.Stderr, "Issue not found: %s\n", id)
-						continue
-					}
-					issues = append(issues, issue)
-				}
-			} else {
-				// Lint all matching issues
-				filter := types.IssueFilter{}
-
-				// Default to open issues unless --status specified
-				if statusFilter == "" || statusFilter == "open" {
-					s := types.StatusOpen
-					filter.Status = &s
-				} else if statusFilter != "all" {
-					s := types.Status(statusFilter)
-					filter.Status = &s
-				}
-
-				if typeFilter != "" {
-					t := types.IssueType(typeFilter)
-					filter.IssueType = &t
-				}
-
-				var err error
-				issues, err = store.SearchIssues(ctx, "", filter)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-					os.Exit(1)
-				}
 			}
 		}
 

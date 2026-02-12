@@ -16,6 +16,9 @@ import (
 //
 // This is intentionally conservative: it will not delete JSONL, and it preserves the
 // original DB as a backup for forensic recovery.
+//
+// For Dolt backends, delegates to doltCorruptionRecovery which removes the corrupted
+// dolt directory and reinitializes from JSONL via bd init --backend dolt.
 func DatabaseIntegrity(path string) error {
 	if err := validateBeadsWorkspace(path); err != nil {
 		return err
@@ -28,8 +31,10 @@ func DatabaseIntegrity(path string) error {
 
 	beadsDir := filepath.Join(absPath, ".beads")
 
-	// Best-effort: stop any running daemon to reduce the chance of DB file locks.
-	_ = Daemon(absPath)
+	// Dolt backend: use Dolt-specific recovery
+	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
+		return doltCorruptionRecovery(absPath, beadsDir)
+	}
 
 	// Resolve database path (respects metadata.json database override).
 	var dbPath string
@@ -66,12 +71,7 @@ func DatabaseIntegrity(path string) error {
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	backupDB := dbPath + "." + ts + ".corrupt.backup.db"
 	if err := moveFile(dbPath, backupDB); err != nil {
-		// Retry once after attempting to kill daemons again (helps on platforms with strict file locks).
-		_ = Daemon(absPath)
-		if err2 := moveFile(dbPath, backupDB); err2 != nil {
-			// Prefer the original error (more likely root cause).
-			return fmt.Errorf("failed to back up database: %w", err)
-		}
+		return fmt.Errorf("failed to back up database: %w", err)
 	}
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		sidecar := dbPath + suffix

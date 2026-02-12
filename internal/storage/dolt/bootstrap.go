@@ -41,6 +41,7 @@ type BootstrapConfig struct {
 	BeadsDir    string        // Path to .beads directory
 	DoltPath    string        // Path to dolt subdirectory
 	LockTimeout time.Duration // Timeout waiting for bootstrap lock
+	Database    string        // Database name (e.g. "beads_hq"); defaults to "beads"
 }
 
 // Bootstrap checks if Dolt DB needs bootstrapping from JSONL and performs it if needed.
@@ -57,7 +58,7 @@ func Bootstrap(ctx context.Context, cfg BootstrapConfig) (bool, *BootstrapResult
 	}
 
 	// Check if Dolt database already exists and is ready
-	if doltExists(cfg.DoltPath) && schemaReady(ctx, cfg.DoltPath) {
+	if doltExists(cfg.DoltPath) && schemaReady(ctx, cfg.DoltPath, cfg.Database) {
 		return false, nil, nil
 	}
 
@@ -77,7 +78,7 @@ func Bootstrap(ctx context.Context, cfg BootstrapConfig) (bool, *BootstrapResult
 	defer releaseBootstrapLock(lockFile, lockPath)
 
 	// Double-check after acquiring lock - another process may have bootstrapped
-	if doltExists(cfg.DoltPath) && schemaReady(ctx, cfg.DoltPath) {
+	if doltExists(cfg.DoltPath) && schemaReady(ctx, cfg.DoltPath, cfg.Database) {
 		return false, nil, nil
 	}
 
@@ -120,11 +121,14 @@ func doltExists(doltPath string) bool {
 // schemaReady checks if the Dolt database has the required schema
 // This is a simple check based on the existence of expected files.
 // We avoid opening a connection here since the caller will do that.
-func schemaReady(_ context.Context, doltPath string) bool {
+func schemaReady(_ context.Context, doltPath string, dbName string) bool {
+	if dbName == "" {
+		dbName = "beads"
+	}
 	// The embedded Dolt driver stores databases in subdirectories.
 	// Check for the expected database name's config.json which indicates
 	// the database was initialized.
-	configPath := filepath.Join(doltPath, "beads", ".dolt", "config.json")
+	configPath := filepath.Join(doltPath, dbName, ".dolt", "config.json")
 	_, err := os.Stat(configPath)
 	return err == nil
 }
@@ -320,7 +324,7 @@ func parseJSONLWithErrors(jsonlPath string) ([]*types.Issue, []ParseError) {
 			parseErrors = append(parseErrors, ParseError{
 				Line:    lineNo,
 				Message: "Git merge conflict marker",
-				Snippet: truncateSnippet(line, 50),
+				Snippet: truncateSnippet(line),
 			})
 			continue
 		}
@@ -330,7 +334,7 @@ func parseJSONLWithErrors(jsonlPath string) ([]*types.Issue, []ParseError) {
 			parseErrors = append(parseErrors, ParseError{
 				Line:    lineNo,
 				Message: err.Error(),
-				Snippet: truncateSnippet(line, 50),
+				Snippet: truncateSnippet(line),
 			})
 			continue
 		}
@@ -338,10 +342,44 @@ func parseJSONLWithErrors(jsonlPath string) ([]*types.Issue, []ParseError) {
 		// Apply defaults for omitted fields
 		issue.SetDefaults()
 
+		// Validate ID is present (corruption check)
+		if issue.ID == "" {
+			parseErrors = append(parseErrors, ParseError{
+				Line:    lineNo,
+				Message: "issue has empty ID",
+				Snippet: truncateSnippet(line),
+			})
+			continue
+		}
+
+		// Validate status enum (catches corruption like 'opne' for 'open')
+		if !issue.Status.IsValid() {
+			parseErrors = append(parseErrors, ParseError{
+				Line:    lineNo,
+				Message: fmt.Sprintf("invalid status %q for issue %s", issue.Status, issue.ID),
+				Snippet: truncateSnippet(line),
+			})
+			continue
+		}
+
 		// Fix closed_at invariant
 		if issue.Status == types.StatusClosed && issue.ClosedAt == nil {
 			now := time.Now()
 			issue.ClosedAt = &now
+		}
+
+		// Fix non-closed issue with closed_at set (corruption recovery)
+		if issue.Status != types.StatusClosed && issue.Status != types.StatusTombstone && issue.ClosedAt != nil {
+			issue.ClosedAt = nil
+		}
+
+		// Fix tombstone invariants (corruption recovery)
+		if issue.Status == types.StatusTombstone && issue.DeletedAt == nil {
+			now := time.Now()
+			issue.DeletedAt = &now
+		}
+		if issue.Status != types.StatusTombstone && issue.DeletedAt != nil {
+			issue.DeletedAt = nil
 		}
 
 		issues = append(issues, &issue)
@@ -357,10 +395,10 @@ func parseJSONLWithErrors(jsonlPath string) ([]*types.Issue, []ParseError) {
 	return issues, parseErrors
 }
 
-// truncateSnippet truncates a string for display
-func truncateSnippet(s string, maxLen int) string {
-	if len(s) > maxLen {
-		return s[:maxLen] + "..."
+// truncateSnippet truncates a string for display (max 50 chars)
+func truncateSnippet(s string) string {
+	if len(s) > 50 {
+		return s[:50] + "..."
 	}
 	return s
 }
@@ -395,8 +433,8 @@ func detectPrefixFromIssues(issues []*types.Issue) string {
 // importIssuesBootstrap imports issues during bootstrap
 // Returns (imported, skipped, error)
 func importIssuesBootstrap(ctx context.Context, store *DoltStore, issues []*types.Issue) (int, int, error) {
-	// Skip validation during bootstrap since we're importing existing data
-	// The data was already validated when originally created
+	// Issues are validated during parsing (parseJSONLWithErrors).
+	// This function handles cross-issue uniqueness checks.
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -404,9 +442,20 @@ func importIssuesBootstrap(ctx context.Context, store *DoltStore, issues []*type
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Pre-scan: identify IDs with tombstone versions (resurrection protection).
+	// If a JSONL has both a live and tombstone version of the same ID,
+	// the tombstone wins to prevent resurrecting deleted issues.
+	tombstoneIDs := make(map[string]bool)
+	for _, issue := range issues {
+		if issue.Status == types.StatusTombstone {
+			tombstoneIDs[issue.ID] = true
+		}
+	}
+
 	imported := 0
 	skipped := 0
 	seenIDs := make(map[string]bool)
+	seenExternalRefs := make(map[string]bool)
 
 	for _, issue := range issues {
 		// Skip duplicates within batch
@@ -414,7 +463,26 @@ func importIssuesBootstrap(ctx context.Context, store *DoltStore, issues []*type
 			skipped++
 			continue
 		}
+
+		// Tombstone resurrection protection: if this ID has a tombstone
+		// version anywhere in the file, skip the live version
+		if tombstoneIDs[issue.ID] && issue.Status != types.StatusTombstone {
+			skipped++
+			continue
+		}
+
 		seenIDs[issue.ID] = true
+
+		// Skip duplicate external_ref values (corruption protection)
+		if issue.ExternalRef != nil && *issue.ExternalRef != "" {
+			if seenExternalRefs[*issue.ExternalRef] {
+				fmt.Fprintf(os.Stderr, "Bootstrap: warning: skipping issue %s with duplicate external_ref %s\n",
+					issue.ID, *issue.ExternalRef)
+				skipped++
+				continue
+			}
+			seenExternalRefs[*issue.ExternalRef] = true
+		}
 
 		// Set timestamps if missing
 		now := time.Now().UTC()

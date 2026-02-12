@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,14 +12,11 @@ import (
 var infoCmd = &cobra.Command{
 	Use:     "info",
 	GroupID: "setup",
-	Short:   "Show database and daemon information",
-	Long: `Display information about the current database path and daemon status.
+	Short:   "Show database information",
+	Long: `Display information about the current database.
 
-This command helps debug issues where bd is using an unexpected database
-or daemon connection. It shows:
+This command helps debug issues where bd is using an unexpected database. It shows:
   - The absolute path to the database file
-  - Daemon connection status (daemon or direct mode)
-  - If using daemon: socket path, health status, version
   - Database statistics (issue count)
   - Schema information (with --schema flag)
   - What's new in recent versions (with --whats-new flag)
@@ -59,72 +54,23 @@ Examples:
 		// Build info structure
 		info := map[string]interface{}{
 			"database_path": absDBPath,
-			"mode":          daemonStatus.Mode,
+			"mode":          "direct",
 		}
 
-		// Add daemon details if connected
-		if daemonClient != nil {
-			info["daemon_connected"] = true
-			info["socket_path"] = daemonStatus.SocketPath
+		// Get issue count from direct store
+		if store != nil {
+			ctx := rootCtx
 
-			// Get daemon health
-			health, err := daemonClient.Health()
+			requireFreshDB(ctx)
+
+			filter := types.IssueFilter{}
+			issues, err := store.SearchIssues(ctx, "", filter)
 			if err == nil {
-				info["daemon_version"] = health.Version
-				info["daemon_status"] = health.Status
-				info["daemon_compatible"] = health.Compatible
-				info["daemon_uptime"] = health.Uptime
-			}
-
-			// Get issue count from daemon
-			resp, err := daemonClient.Stats()
-			if err == nil {
-				var stats types.Statistics
-				if jsonErr := json.Unmarshal(resp.Data, &stats); jsonErr == nil {
-					info["issue_count"] = stats.TotalIssues
-				}
-			}
-		} else {
-			// Direct mode
-			info["daemon_connected"] = false
-			if daemonStatus.FallbackReason != "" && daemonStatus.FallbackReason != FallbackNone {
-				info["daemon_fallback_reason"] = daemonStatus.FallbackReason
-			}
-			if daemonStatus.Detail != "" {
-				info["daemon_detail"] = daemonStatus.Detail
-			}
-
-			// Get issue count from direct store
-			if store != nil {
-				ctx := rootCtx
-
-				// Check database freshness before reading
-				// Skip check when using daemon (daemon auto-imports on staleness)
-				if daemonClient == nil {
-					if err := ensureDatabaseFresh(ctx); err != nil {
-						fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-						os.Exit(1)
-					}
-				}
-
-				filter := types.IssueFilter{}
-				issues, err := store.SearchIssues(ctx, "", filter)
-				if err == nil {
-					info["issue_count"] = len(issues)
-				}
+				info["issue_count"] = len(issues)
 			}
 		}
 
-		// Add config to info output (requires direct mode to access config table)
-		// Save current daemon state
-		wasDaemon := daemonClient != nil
-		var tempErr error
-
-		if wasDaemon {
-			// Temporarily switch to direct mode to read config
-			tempErr = ensureDirectMode("info: reading config")
-		}
-
+		// Add config to info output
 		if store != nil {
 			ctx := rootCtx
 			configMap, err := store.GetAllConfig(ctx)
@@ -132,10 +78,6 @@ Examples:
 				info["config"] = configMap
 			}
 		}
-
-		// Note: We don't restore daemon mode since info is a read-only command
-		// and the process will exit immediately after this
-		_ = tempErr // silence unused warning
 
 		// Add schema information if requested
 		if schemaFlag && store != nil {
@@ -196,34 +138,7 @@ Examples:
 		fmt.Println("\nBeads Database Information")
 		fmt.Println("===========================")
 		fmt.Printf("Database: %s\n", absDBPath)
-		fmt.Printf("Mode: %s\n", daemonStatus.Mode)
-
-		if daemonClient != nil {
-			fmt.Println("\nDaemon Status:")
-			fmt.Printf("  Connected: yes\n")
-			fmt.Printf("  Socket: %s\n", daemonStatus.SocketPath)
-
-			health, err := daemonClient.Health()
-			if err == nil {
-				fmt.Printf("  Version: %s\n", health.Version)
-				fmt.Printf("  Health: %s\n", health.Status)
-				if health.Compatible {
-					fmt.Printf("  Compatible: ✓ yes\n")
-				} else {
-					fmt.Printf("  Compatible: ✗ no (restart recommended)\n")
-				}
-				fmt.Printf("  Uptime: %.1fs\n", health.Uptime)
-			}
-		} else {
-			fmt.Println("\nDaemon Status:")
-			fmt.Printf("  Connected: no\n")
-			if daemonStatus.FallbackReason != "" && daemonStatus.FallbackReason != FallbackNone {
-				fmt.Printf("  Reason: %s\n", daemonStatus.FallbackReason)
-			}
-			if daemonStatus.Detail != "" {
-				fmt.Printf("  Detail: %s\n", daemonStatus.Detail)
-			}
-		}
+		fmt.Printf("Mode: direct\n")
 
 		// Show issue count
 		if count, ok := info["issue_count"].(int); ok {
@@ -296,6 +211,60 @@ type VersionChange struct {
 
 // versionChanges contains agent-actionable changes for recent versions
 var versionChanges = []VersionChange{
+	{
+		Version: "0.49.6",
+		Date:    "2026-02-09",
+		Changes: []string{
+			"REVERT: Embedded Dolt mode restored (removal was only intended for Gas Town, not Beads)",
+			"REMOVED: Daemon subsystem fully removed from bd CLI (Dolt replaces daemon-based sync)",
+			"REMOVED: JSONL flush/sync machinery deleted (-7,634 lines); JSONL functions are now no-ops",
+			"CLEANUP: Removed 171 dead daemonClient branches and 46 markDirtyAndScheduleFlush no-op calls",
+		},
+	},
+	{
+		Version: "0.49.5",
+		Date:    "2026-02-08",
+		Changes: []string{
+			"NEW: bd search --has/--no flags for content and null-check filtering",
+			"NEW: bd promote command for wisp-to-bead promotion",
+			"NEW: bd todo command for lightweight task management",
+			"NEW: bd find-duplicates for AI-powered duplicate detection",
+			"NEW: bd validate integrated into bd doctor --check=validate",
+			"NEW: Dolt fail-fast TCP check before MySQL protocol init",
+			"SECURITY: SQL identifier validation prevents injection in dynamic table/db names",
+			"SECURITY: Path traversal fix in export handler; command injection fix in import",
+			"FIX: RPC mutation events now include issueID (was zero-value for label/dep ops)",
+			"FIX: Daemon YAML config recognizes both hyphen and underscore variants",
+			"FIX: Doctor role check falls back to database config",
+			"FIX: SQLite Close() idempotent (WAL retry deadlock fix)",
+			"FIX: SQLITE_BUSY retry for all BEGIN IMMEDIATE calls",
+			"FIX: Dolt cross-rig contamination prevented with prefix-based db names",
+			"FIX: bd list separates parent-child from blocks display",
+			"FIX: Cross-prefix ID resolution in multi-repo scenarios",
+			"CHANGE: Embedded Dolt mode fully removed (server-only connections)",
+			"CHANGE: bd init defaults to chaining hooks (no prompt)",
+			"CHANGE: brew upgrade command corrected to 'brew upgrade beads'",
+		},
+	},
+	{
+		Version: "0.49.4",
+		Date:    "2026-02-05",
+		Changes: []string{
+			"NEW: --label-pattern and --label-regex flags for bd list and bd ready - glob and regex filtering on labels",
+			"NEW: Simple query language for complex bd list filtering",
+			"NEW: spec_id field for linking issues to specification documents",
+			"NEW: Wisp type field for TTL-based compaction of ephemeral molecules",
+			"NEW: Dolt schema migration runner and doctor validation checks",
+			"NEW: --metadata flag for bd update (JSON metadata from CLI)",
+			"NEW: config.local.yaml for local configuration overrides",
+			"FIX: JSONL file locking prevents race conditions in concurrent writes",
+			"FIX: Merge driver preserves all issue fields (spec_id, metadata, deps)",
+			"FIX: Atomic bd claim with compare-and-swap semantics",
+			"FIX: Dolt lock contention - advisory flock prevents zombie processes",
+			"FIX: Windows Dolt build via pure-Go regex backend",
+			"CHANGE: bd ready excludes in_progress issues (shows only claimable work)",
+		},
+	},
 	{
 		Version: "0.49.3",
 		Date:    "2026-01-31",

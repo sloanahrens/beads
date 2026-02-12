@@ -1,3 +1,5 @@
+//go:build cgo
+
 package main
 
 import (
@@ -12,6 +14,7 @@ import (
 const testUserAlice = "alice"
 
 func TestCommentsSuite(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, ".beads", "beads.db")
 	s := newTestStore(t, testDB)
@@ -152,6 +155,7 @@ func TestCommentsSuite(t *testing.T) {
 }
 
 func TestIsUnknownOperationError(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		err      error

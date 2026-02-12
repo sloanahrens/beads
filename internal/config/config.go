@@ -191,6 +191,9 @@ func Initialize() error {
 	// Maps directory patterns to labels for automatic filtering in monorepos
 	v.SetDefault("directory.labels", map[string]string{})
 
+	// AI configuration defaults
+	v.SetDefault("ai.model", "claude-haiku-4-5-20251001")
+
 	// External projects for cross-project dependency resolution (bd-h807)
 	// Maps project names to paths for resolving external: blocked_by references
 	v.SetDefault("external_projects", map[string]string{})
@@ -428,6 +431,12 @@ func Set(key string, value interface{}) {
 // 	return v.BindPFlag(key, flag)
 // }
 
+// DefaultAIModel returns the configured AI model identifier.
+// Override via: bd config set ai.model "model-name" or BD_AI_MODEL=model-name
+func DefaultAIModel() string {
+	return GetString("ai.model")
+}
+
 // AllSettings returns all configuration settings as a map
 func AllSettings() map[string]interface{} {
 	if v == nil {
@@ -617,8 +626,8 @@ func GetSyncConfig() SyncConfig {
 
 // ConflictConfig holds the conflict resolution configuration.
 type ConflictConfig struct {
-	Strategy ConflictStrategy          // newest, ours, theirs, manual (default for all fields)
-	Fields   map[string]FieldStrategy  // Per-field strategy overrides
+	Strategy ConflictStrategy         // newest, ours, theirs, manual (default for all fields)
+	Fields   map[string]FieldStrategy // Per-field strategy overrides
 }
 
 // GetConflictConfig returns the current conflict resolution configuration.
@@ -733,6 +742,15 @@ func NeedsJSONL() bool {
 	return mode == SyncModeGitPortable || mode == SyncModeRealtime || mode == SyncModeBeltAndSuspenders
 }
 
+// NeedsJSONLImport returns true if the sync mode should import from JSONL.
+// In dolt-native mode, imports are disabled to prevent stale JSONL from
+// overwriting dolt data. This is for use by internal/rpc which can't
+// import cmd/bd.
+func NeedsJSONLImport() bool {
+	mode := GetSyncMode()
+	return mode != SyncModeDoltNative
+}
+
 // GetCustomTypesFromYAML retrieves custom issue types from config.yaml.
 // This is used as a fallback when the database doesn't have types.custom set yet
 // (e.g., during bd init auto-import before the database is fully configured).
@@ -777,6 +795,7 @@ func GetNamedRoles() []string {
 // getConfigList is a helper that retrieves a comma-separated list from config.yaml.
 func getConfigList(key string) []string {
 	if v == nil {
+		debug.Logf("config: viper not initialized, returning nil for key %q", key)
 		return nil
 	}
 

@@ -1,3 +1,5 @@
+//go:build cgo
+
 package main
 
 import (
@@ -10,6 +12,7 @@ import (
 )
 
 func TestCreateSuite(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, ".beads", "beads.db")
 	s := newTestStore(t, testDB)
@@ -489,7 +492,7 @@ func TestCreateSuite(t *testing.T) {
 	// GH#820: Tests for DueAt and DeferUntil fields
 	t.Run("WithDueAt", func(t *testing.T) {
 		// Create issue with due date
-		dueTime := time.Now().Add(24 * time.Hour) // Due in 24 hours
+		dueTime := time.Now().UTC().Truncate(time.Second).Add(24 * time.Hour) // Due in 24 hours
 		issue := &types.Issue{
 			Title:     "Issue with due date",
 			Priority:  1,
@@ -521,7 +524,7 @@ func TestCreateSuite(t *testing.T) {
 
 	t.Run("WithDeferUntil", func(t *testing.T) {
 		// Create issue with defer_until
-		deferTime := time.Now().Add(2 * time.Hour) // Defer for 2 hours
+		deferTime := time.Now().UTC().Truncate(time.Second).Add(2 * time.Hour) // Defer for 2 hours
 		issue := &types.Issue{
 			Title:      "Issue with defer",
 			Priority:   1,
@@ -553,7 +556,7 @@ func TestCreateSuite(t *testing.T) {
 
 	t.Run("WithBothDueAndDefer", func(t *testing.T) {
 		// Create issue with both due and defer
-		dueTime := time.Now().Add(48 * time.Hour)  // Due in 48 hours
+		dueTime := time.Now().Add(48 * time.Hour)   // Due in 48 hours
 		deferTime := time.Now().Add(24 * time.Hour) // Defer for 24 hours
 		issue := &types.Issue{
 			Title:      "Issue with both due and defer",

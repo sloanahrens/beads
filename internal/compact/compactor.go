@@ -24,21 +24,20 @@ type Config struct {
 
 // Compactor handles issue compaction using AI summarization.
 type Compactor struct {
-	store      CompactableStore
+	store      compactableStore
 	summarizer summarizer
 	config     *Config
 }
 
-// CompactableStore defines the storage interface required for compaction.
+// compactableStore defines the storage interface required for compaction.
 // This interface can be implemented by any storage backend (SQLite, Dolt, etc.)
 // that wants to support the compaction feature.
-type CompactableStore interface {
+type compactableStore interface {
 	CheckEligibility(ctx context.Context, issueID string, tier int) (bool, string, error)
 	GetIssue(ctx context.Context, issueID string) (*types.Issue, error)
 	UpdateIssue(ctx context.Context, issueID string, updates map[string]interface{}, actor string) error
 	ApplyCompaction(ctx context.Context, issueID string, tier int, originalSize int, compactedSize int, commitHash string) error
 	AddComment(ctx context.Context, issueID, actor, comment string) error
-	MarkIssueDirty(ctx context.Context, issueID string) error
 }
 
 type summarizer interface {
@@ -46,8 +45,8 @@ type summarizer interface {
 }
 
 // New creates a new Compactor instance with the given configuration.
-// The store parameter must implement CompactableStore interface.
-func New(store CompactableStore, apiKey string, config *Config) (*Compactor, error) {
+// The store parameter must implement compactableStore interface.
+func New(store compactableStore, apiKey string, config *Config) (*Compactor, error) {
 	if config == nil {
 		config = &Config{
 			Concurrency: defaultConcurrency,
@@ -60,26 +59,26 @@ func New(store CompactableStore, apiKey string, config *Config) (*Compactor, err
 		config.APIKey = apiKey
 	}
 
-	var haikuClient summarizer
+	var haiClient summarizer
 	var err error
 	if !config.DryRun {
-		haikuClient, err = NewHaikuClient(config.APIKey)
+		haiClient, err = newHaikuClient(config.APIKey)
 		if err != nil {
-			if errors.Is(err, ErrAPIKeyRequired) {
+			if errors.Is(err, errAPIKeyRequired) {
 				config.DryRun = true
 			} else {
 				return nil, fmt.Errorf("failed to create Haiku client: %w", err)
 			}
 		}
 	}
-	if hc, ok := haikuClient.(*HaikuClient); ok {
+	if hc, ok := haiClient.(*haikuClient); ok && hc != nil {
 		hc.auditEnabled = config.AuditEnabled
 		hc.auditActor = config.Actor
 	}
 
 	return &Compactor{
 		store:      store,
-		summarizer: haikuClient,
+		summarizer: haiClient,
 		config:     config,
 	}, nil
 }
@@ -132,9 +131,9 @@ func (c *Compactor) CompactTier1(ctx context.Context, issueID string) error {
 
 	// Update issue with summarized content
 	updates := map[string]interface{}{
-		"description":        summary,
-		"design":             "",
-		"notes":              "",
+		"description":         summary,
+		"design":              "",
+		"notes":               "",
 		"acceptance_criteria": "",
 	}
 	if err := c.store.UpdateIssue(ctx, issueID, updates, "compactor"); err != nil {
@@ -152,11 +151,6 @@ func (c *Compactor) CompactTier1(ctx context.Context, issueID string) error {
 	comment := fmt.Sprintf("Tier 1 compaction: %d → %d bytes (saved %d)", originalSize, compactedSize, savingBytes)
 	if err := c.store.AddComment(ctx, issueID, "compactor", comment); err != nil {
 		return fmt.Errorf("failed to add compaction comment: %w", err)
-	}
-
-	// Mark dirty for export
-	if err := c.store.MarkIssueDirty(ctx, issueID); err != nil {
-		return fmt.Errorf("failed to mark dirty: %w", err)
 	}
 
 	return nil
@@ -259,11 +253,6 @@ func (c *Compactor) CompactTier2(ctx context.Context, issueID string) error {
 	// For now, just apply the metadata update without actual summarization
 	if err := c.store.ApplyCompaction(ctx, issueID, 2, originalSize, originalSize, ""); err != nil {
 		return fmt.Errorf("failed to apply compaction metadata: %w", err)
-	}
-
-	// Mark dirty for export
-	if err := c.store.MarkIssueDirty(ctx, issueID); err != nil {
-		return fmt.Errorf("failed to mark dirty: %w", err)
 	}
 
 	return nil

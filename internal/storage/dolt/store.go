@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 // DoltStore implements the Storage interface using Dolt
@@ -61,18 +63,18 @@ type DoltStore struct {
 
 // Config holds Dolt database configuration
 type Config struct {
-	Path           string // Path to Dolt database directory
-	CommitterName  string // Git-style committer name
-	CommitterEmail string // Git-style committer email
-	Remote         string // Default remote name (e.g., "origin")
-	Database       string // Database name within Dolt (default: "beads")
+	Path           string        // Path to Dolt database directory
+	CommitterName  string        // Git-style committer name
+	CommitterEmail string        // Git-style committer email
+	Remote         string        // Default remote name (e.g., "origin")
+	Database       string        // Database name within Dolt (default: "beads")
 	ReadOnly       bool          // Open in read-only mode (skip schema init)
 	OpenTimeout    time.Duration // Advisory lock timeout (0 = no advisory lock)
 
 	// Server mode options (federation)
 	ServerMode     bool   // Connect to dolt sql-server instead of embedded
 	ServerHost     string // Server host (default: 127.0.0.1)
-	ServerPort     int    // Server port (default: 3306)
+	ServerPort     int    // Server port (default: 3307)
 	ServerUser     string // MySQL user (default: root)
 	ServerPassword string // MySQL password (default: empty, can be set via BEADS_DOLT_PASSWORD)
 }
@@ -119,7 +121,30 @@ func isRetryableError(err error) bool {
 	if strings.Contains(errStr, "connection reset") {
 		return true
 	}
-	// Don't retry "connection refused" - that means server is down
+	// Server restart: "connection refused" is transient — the server may
+	// come back within the backoff window (30s). Retrying here prevents
+	// a brief server outage from cascading into permanent failures.
+	if strings.Contains(errStr, "connection refused") {
+		return true
+	}
+	// Dolt read-only mode: under load, Dolt may enter read-only mode with
+	// "cannot update manifest: database is read only". This clears after
+	// a server restart, so it's worth retrying.
+	if strings.Contains(errStr, "database is read only") {
+		return true
+	}
+	// MySQL error 2013: mid-query disconnect
+	if strings.Contains(errStr, "lost connection") {
+		return true
+	}
+	// MySQL error 2006: idle connection timeout
+	if strings.Contains(errStr, "gone away") {
+		return true
+	}
+	// Go net package timeout on read/write
+	if strings.Contains(errStr, "i/o timeout") {
+		return true
+	}
 	return false
 }
 
@@ -141,6 +166,37 @@ func (s *DoltStore) withRetry(ctx context.Context, op func() error) error {
 		}
 		return nil
 	}, backoff.WithContext(bo, ctx))
+}
+
+// execContext wraps s.db.ExecContext with server-mode retry for transient errors.
+func (s *DoltStore) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	var result sql.Result
+	err := s.withRetry(ctx, func() error {
+		var execErr error
+		result, execErr = s.db.ExecContext(ctx, query, args...)
+		return execErr
+	})
+	return result, err
+}
+
+// queryContext wraps s.db.QueryContext with server-mode retry for transient errors.
+func (s *DoltStore) queryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	var rows *sql.Rows
+	err := s.withRetry(ctx, func() error {
+		var queryErr error
+		rows, queryErr = s.db.QueryContext(ctx, query, args...)
+		return queryErr
+	})
+	return rows, err
+}
+
+// queryRowContext wraps s.db.QueryRowContext with server-mode retry for transient errors.
+// The scan function receives the *sql.Row and should call .Scan() on it.
+func (s *DoltStore) queryRowContext(ctx context.Context, scan func(*sql.Row) error, query string, args ...any) error {
+	return s.withRetry(ctx, func() error {
+		row := s.db.QueryRowContext(ctx, query, args...)
+		return scan(row)
+	})
 }
 
 // New creates a new Dolt storage backend
@@ -203,8 +259,10 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 
 	// Acquire advisory flock before opening dolt (embedded mode only).
 	// This prevents multiple bd processes from competing for dolt's internal LOCK file.
+	// Set BD_SKIP_ACCESS_LOCK=1 to bypass flock for testing whether Dolt's internal
+	// locking is sufficient. See bd-39gso for testing plan.
 	var accessLock *AccessLock
-	if !cfg.ServerMode && cfg.OpenTimeout > 0 {
+	if !cfg.ServerMode && cfg.OpenTimeout > 0 && os.Getenv("BD_SKIP_ACCESS_LOCK") == "" {
 		exclusive := !cfg.ReadOnly
 		var lockErr error
 		accessLock, lockErr = AcquireAccessLock(absPath, exclusive, cfg.OpenTimeout)
@@ -218,6 +276,20 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	var embeddedConnector *embedded.Connector
 
 	if cfg.ServerMode {
+		// Fail-fast TCP check before MySQL protocol initialization.
+		// This gives an immediate, clear error if the Dolt server isn't running,
+		// rather than waiting for MySQL driver timeouts.
+		addr := net.JoinHostPort(cfg.ServerHost, fmt.Sprintf("%d", cfg.ServerPort))
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err != nil {
+			if accessLock != nil {
+				accessLock.Release()
+			}
+			return nil, fmt.Errorf("Dolt server unreachable at %s: %w\n\nThe Dolt server may not be running. Try:\n  gt dolt start    # If using Gas Town\n  dolt sql-server  # Manual start in database directory",
+				addr, err)
+		}
+		_ = conn.Close()
+
 		// Server mode: connect via MySQL protocol to dolt sql-server
 		db, connStr, err = openServerConnection(ctx, cfg)
 	} else {
@@ -238,12 +310,14 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 			c.BackOff = newEmbeddedOpenBackoff()
 		}
 
-		// UOW 1: ensure database exists.
-		if err := withEmbeddedDolt(ctx, initDSN, configureRetries, func(ctx context.Context, db *sql.DB) error {
-			_, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", cfg.Database))
-			return err
-		}); err != nil {
-			return nil, fmt.Errorf("failed to create dolt database: %w", err)
+		// UOW 1: ensure database exists. Skip in read-only mode.
+		if !cfg.ReadOnly {
+			if err := withEmbeddedDolt(ctx, initDSN, configureRetries, func(ctx context.Context, db *sql.DB) error {
+				_, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", cfg.Database))
+				return err
+			}); err != nil {
+				return nil, fmt.Errorf("failed to create dolt database: %w", err)
+			}
 		}
 
 		// UOW 2: initialize schema (idempotent). Skip in read-only mode.
@@ -314,6 +388,31 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 		}
 	}
 
+	// Branch-per-polecat: if BD_BRANCH is set, checkout polecat-specific branch.
+	// Each polecat writes to its own Dolt branch to eliminate optimistic lock
+	// contention between concurrent writers. Merges happen at gt done time.
+	// Only applies in server mode (embedded mode doesn't support concurrent writers).
+	if bdBranch := os.Getenv("BD_BRANCH"); bdBranch != "" && cfg.ServerMode {
+		// Force single connection to ensure branch checkout applies to all operations.
+		// This is safe because each polecat is a separate bd process.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		if _, err := db.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", bdBranch); err != nil {
+			// Branch doesn't exist — auto-create from current branch, then checkout.
+			// This makes polecats self-healing: they create their own branches
+			// if Gas Town hasn't pre-created them (race condition, cleanup, etc.).
+			if _, createErr := db.ExecContext(ctx, "CALL DOLT_BRANCH(?)", bdBranch); createErr != nil {
+				_ = store.Close()
+				return nil, fmt.Errorf("failed to create Dolt branch %s: %w (checkout error: %v)", bdBranch, createErr, err)
+			}
+			if _, coErr := db.ExecContext(ctx, "CALL DOLT_CHECKOUT(?)", bdBranch); coErr != nil {
+				_ = store.Close()
+				return nil, fmt.Errorf("failed to checkout Dolt branch %s after creation: %w", bdBranch, coErr)
+			}
+		}
+		store.branch = bdBranch
+	}
+
 	return store, nil
 }
 
@@ -382,7 +481,12 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, er
 	}
 	defer func() { _ = initDB.Close() }()
 
-	_, err = initDB.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", cfg.Database))
+	// Validate database name to prevent SQL injection via backtick escaping
+	if err := validateDatabaseName(cfg.Database); err != nil {
+		_ = db.Close()
+		return nil, "", fmt.Errorf("invalid database name %q: %w", cfg.Database, err)
+	}
+	_, err = initDB.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", cfg.Database)) //nolint:gosec // G201: cfg.Database validated by validateDatabaseName above
 	if err != nil {
 		// Dolt may return error 1007 even with IF NOT EXISTS - ignore if database already exists
 		errLower := strings.ToLower(err.Error())
@@ -548,27 +652,6 @@ func isOnlyComments(stmt string) bool {
 	return true
 }
 
-// closeTimeout is the maximum time to wait for db/connector close operations.
-// Embedded Dolt can hang indefinitely on close; this prevents bd from hanging.
-const closeTimeout = 5 * time.Second
-
-// closeWithTimeout runs a close function with a timeout to prevent indefinite hangs.
-// Returns the close error, or a timeout error if the close doesn't complete in time.
-func closeWithTimeout(name string, closeFn func() error) error {
-	done := make(chan error, 1)
-	go func() {
-		done <- closeFn()
-	}()
-
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(closeTimeout):
-		// Close is hanging - log and continue rather than blocking forever
-		return fmt.Errorf("%s close timed out after %v", name, closeTimeout)
-	}
-}
-
 // Close closes the database connection
 func (s *DoltStore) Close() error {
 	s.closed.Store(true)
@@ -576,7 +659,7 @@ func (s *DoltStore) Close() error {
 	defer s.mu.Unlock()
 	var err error
 	if s.db != nil {
-		if cerr := closeWithTimeout("db", s.db.Close); cerr != nil {
+		if cerr := doltutil.CloseWithTimeout("db", s.db.Close); cerr != nil {
 			// Timeout is non-fatal for cleanup - just log it
 			if !errors.Is(cerr, context.Canceled) {
 				err = errors.Join(err, cerr)
@@ -585,7 +668,7 @@ func (s *DoltStore) Close() error {
 	}
 	// For embedded mode, ensure the underlying engine is closed to release filesystem locks.
 	if s.embeddedConnector != nil {
-		cerr := closeWithTimeout("embeddedConnector", s.embeddedConnector.Close)
+		cerr := doltutil.CloseWithTimeout("embeddedConnector", s.embeddedConnector.Close)
 		// Ignore context cancellation noise from Dolt shutdown plumbing.
 		if cerr != nil && !errors.Is(cerr, context.Canceled) {
 			err = errors.Join(err, cerr)

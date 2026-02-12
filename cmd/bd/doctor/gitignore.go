@@ -49,11 +49,9 @@ beads.right.meta.json
 # Sync state (local-only, per-machine)
 # These files are machine-specific and should not be shared across clones
 .sync.lock
+.jsonl.lock
 sync_base.jsonl
 export-state/
-
-# Process semaphore slot files (runtime concurrency limiting)
-sem/
 
 # NOTE: Do NOT add negation patterns (e.g., !issues.jsonl) here.
 # They would override fork protection in .git/info/exclude, allowing
@@ -74,6 +72,7 @@ var requiredPatterns = []string{
 	"redirect",
 	"last-touched",
 	".sync.lock",
+	".jsonl.lock",
 	"sync_base.jsonl",
 	"export-state/",
 }
@@ -81,9 +80,21 @@ var requiredPatterns = []string{
 // CheckGitignore checks if .beads/.gitignore is up to date
 func CheckGitignore() DoctorCheck {
 	gitignorePath := filepath.Join(".beads", ".gitignore")
-	
+
+	// If a redirect exists, check the gitignore at the redirect target instead
+	redirectPath := filepath.Join(".beads", "redirect")
+	// #nosec G304 -- redirect path is fixed to .beads/redirect
+	if data, err := os.ReadFile(redirectPath); err == nil {
+		target := strings.TrimSpace(string(data))
+		if target != "" {
+			cwd, _ := os.Getwd()
+			resolvedTarget := filepath.Clean(filepath.Join(cwd, target))
+			gitignorePath = filepath.Join(resolvedTarget, ".gitignore")
+		}
+	}
+
 	// Check if file exists
-	content, err := os.ReadFile(gitignorePath) // #nosec G304 -- path is hardcoded
+	content, err := os.ReadFile(gitignorePath) // #nosec G304 -- path is constructed from known parts
 	if err != nil {
 		return DoctorCheck{
 			Name:    "Gitignore",
@@ -156,8 +167,8 @@ func CheckIssuesTracking() DoctorCheck {
 	if _, err := os.Stat(issuesPath); os.IsNotExist(err) {
 		// File doesn't exist yet - not an error, bd init may not have been run
 		return DoctorCheck{
-			Name:   "Issues Tracking",
-			Status: "ok",
+			Name:    "Issues Tracking",
+			Status:  "ok",
 			Message: "No issues.jsonl yet (will be created on first issue)",
 		}
 	}
@@ -351,6 +362,18 @@ func CheckRedirectTargetValid() DoctorCheck {
 	}
 
 	// Check for valid beads database in target
+	// First check for Dolt backend via metadata.json — Dolt server mode has no local .db file
+	metadataPath := filepath.Join(resolvedTarget, "metadata.json")
+	metadataData, metaErr := os.ReadFile(metadataPath) // #nosec G304 -- constructed from known path
+	if metaErr == nil && strings.Contains(string(metadataData), `"backend"`) &&
+		strings.Contains(string(metadataData), `"dolt"`) {
+		return DoctorCheck{
+			Name:    "Redirect Target Valid",
+			Status:  StatusOK,
+			Message: fmt.Sprintf("Redirect target valid (dolt backend): %s", resolvedTarget),
+		}
+	}
+
 	dbPath := filepath.Join(resolvedTarget, "beads.db")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		// Also check for any .db file

@@ -1,3 +1,5 @@
+//go:build cgo
+
 package main
 
 import (
@@ -11,7 +13,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/git"
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/syncbranch"
 	"github.com/steveyegge/beads/internal/types"
 )
@@ -32,7 +34,7 @@ func TestSyncBranchModeWithPullFirst(t *testing.T) {
 
 	// Create store and configure sync.branch
 	testDBPath := filepath.Join(beadsDir, "beads.db")
-	testStore, err := sqlite.New(ctx, testDBPath)
+	testStore, err := dolt.New(ctx, &dolt.Config{Path: testDBPath})
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -193,14 +195,14 @@ func TestMergeIssuesWithBaseState(t *testing.T) {
 	remoteTime := time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name           string
-		base           []*beads.Issue
-		local          []*beads.Issue
-		remote         []*beads.Issue
-		wantCount      int
-		wantConflicts  int
-		wantStrategy   map[string]string
-		wantTitles     map[string]string // id -> expected title
+		name          string
+		base          []*beads.Issue
+		local         []*beads.Issue
+		remote        []*beads.Issue
+		wantCount     int
+		wantConflicts int
+		wantStrategy  map[string]string
+		wantTitles    map[string]string // id -> expected title
 	}{
 		{
 			name: "only remote changed",
@@ -251,8 +253,8 @@ func TestMergeIssuesWithBaseState(t *testing.T) {
 			wantTitles:    map[string]string{"bd-1": "Remote Edit"}, // Remote wins (later timestamp)
 		},
 		{
-			name: "new issue from remote",
-			base: []*beads.Issue{},
+			name:  "new issue from remote",
+			base:  []*beads.Issue{},
 			local: []*beads.Issue{},
 			remote: []*beads.Issue{
 				{ID: "bd-1", Title: "New Remote Issue", UpdatedAt: remoteTime},
@@ -691,7 +693,7 @@ func TestExportOnlySync(t *testing.T) {
 
 	// Create a database with a test issue
 	dbPath := filepath.Join(beadsDir, "beads.db")
-	testStore, err := sqlite.New(ctx, dbPath)
+	testStore, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
@@ -719,7 +721,7 @@ func TestExportOnlySync(t *testing.T) {
 
 	// Initialize the global store for doExportOnlySync
 	// This simulates what `bd sync --no-pull` does
-	store, err = sqlite.New(ctx, dbPath)
+	store, err = dolt.New(ctx, &dolt.Config{Path: dbPath})
 	if err != nil {
 		t.Fatalf("failed to open store: %v", err)
 	}
@@ -813,7 +815,7 @@ func TestSync_FailsWhenOnSyncBranch(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(beadsDir, "beads.db")
-	testStore, err := sqlite.New(ctx, dbPath)
+	testStore, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}

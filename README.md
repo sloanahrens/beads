@@ -30,11 +30,12 @@ echo "Use 'bd' for task tracking" >> AGENTS.md
 
 ## 🛠 Features
 
-* **Git as Database:** Issues stored as JSONL in `.beads/`. Versioned, branched, and merged like code.
+* **Dolt-Powered:** Version-controlled SQL database with cell-level merge and native branching. JSONL maintained for git portability.
 * **Agent-Optimized:** JSON output, dependency tracking, and auto-ready task detection.
 * **Zero Conflict:** Hash-based IDs (`bd-a1b2`) prevent merge collisions in multi-agent/multi-branch workflows.
-* **Invisible Infrastructure:** SQLite local cache for speed; background daemon for auto-sync.
 * **Compaction:** Semantic "memory decay" summarizes old closed tasks to save context window.
+* **Messaging:** Message issue type with threading (`--thread`), ephemeral lifecycle, and mail delegation.
+* **Graph Links:** `relates_to`, `duplicates`, `supersedes`, and `replies_to` for knowledge graphs.
 
 ## 📖 Essential Commands
 
@@ -42,6 +43,7 @@ echo "Use 'bd' for task tracking" >> AGENTS.md
 | --- | --- |
 | `bd ready` | List tasks with no open blockers. |
 | `bd create "Title" -p 0` | Create a P0 task. |
+| `bd update <id> --claim` | Atomically claim a task (sets assignee + in_progress). |
 | `bd dep add <child> <parent>` | Link tasks (blocks, related, parent-child). |
 | `bd show <id>` | View task details and audit trail. |
 

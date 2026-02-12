@@ -1,3 +1,5 @@
+//go:build cgo
+
 package main
 
 import (
@@ -8,20 +10,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
-	"github.com/steveyegge/beads/internal/util"
+	"github.com/steveyegge/beads/internal/utils"
 )
 
 // listTestHelper provides test setup and assertion methods
 type listTestHelper struct {
 	t      *testing.T
 	ctx    context.Context
-	store  *sqlite.SQLiteStorage
+	store  storage.Storage
 	issues []*types.Issue
 }
 
-func newListTestHelper(t *testing.T, store *sqlite.SQLiteStorage) *listTestHelper {
+func newListTestHelper(t *testing.T, store storage.Storage) *listTestHelper {
 	return &listTestHelper{t: t, ctx: context.Background(), store: store}
 }
 
@@ -92,6 +94,7 @@ func (h *listTestHelper) assertAtMost(count, maxCount int, desc string) {
 }
 
 func TestListCommandSuite(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, ".beads", "beads.db")
 	s := newTestStore(t, testDB)
@@ -137,11 +140,17 @@ func TestListCommandSuite(t *testing.T) {
 		t.Run("filter by label", func(t *testing.T) {
 			results := h.search(types.IssueFilter{Labels: []string{"critical"}})
 			h.assertCount(len(results), 1, "issues with critical label")
+			if len(results) > 0 {
+				h.assertEqual("Bug Issue", results[0].Title, "label-filtered issue title")
+			}
 		})
 
 		t.Run("filter by title search", func(t *testing.T) {
 			results := h.search(types.IssueFilter{TitleSearch: "Bug"})
 			h.assertCount(len(results), 1, "issues matching 'Bug'")
+			if len(results) > 0 {
+				h.assertEqual("Bug Issue", results[0].Title, "title-search result")
+			}
 		})
 
 		t.Run("limit results", func(t *testing.T) {
@@ -151,7 +160,7 @@ func TestListCommandSuite(t *testing.T) {
 
 		t.Run("normalize labels", func(t *testing.T) {
 			labels := []string{" bug ", "critical", "", "bug", "  feature  "}
-			normalized := util.NormalizeLabels(labels)
+			normalized := utils.NormalizeLabels(labels)
 			expected := []string{"bug", "critical", "feature"}
 			h.assertCount(len(normalized), len(expected), "normalized labels")
 
@@ -220,6 +229,7 @@ func TestListCommandSuite(t *testing.T) {
 }
 
 func TestListQueryCapabilitiesSuite(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, ".beads", "beads.db")
 	s := newTestStore(t, testDB)
@@ -461,6 +471,7 @@ func TestListQueryCapabilitiesSuite(t *testing.T) {
 // This test specifically addresses the bug where --tree output was non-deterministic due to
 // unstable ordering of root issues and children within the same priority level
 func TestStableTreeOrdering(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, ".beads", "beads.db")
 	store := newTestStore(t, testDB)
@@ -625,6 +636,7 @@ func slicesEqual(a, b []string) bool {
 }
 
 func TestFormatIssueLong(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		issue  *types.Issue
@@ -695,6 +707,7 @@ func TestFormatIssueLong(t *testing.T) {
 }
 
 func TestFormatIssueCompact(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		issue  *types.Issue
@@ -765,6 +778,7 @@ func TestFormatIssueCompact(t *testing.T) {
 }
 
 func TestBuildBlockingMaps(t *testing.T) {
+	t.Parallel()
 	// Create test dependency records
 	allDeps := map[string][]*types.Dependency{
 		"issue-A": {
@@ -776,7 +790,7 @@ func TestBuildBlockingMaps(t *testing.T) {
 		},
 	}
 
-	blockedByMap, blocksMap := buildBlockingMaps(allDeps)
+	blockedByMap, blocksMap, _ := buildBlockingMaps(allDeps, nil)
 
 	// issue-A is blocked by issue-B
 	if len(blockedByMap["issue-A"]) != 1 || blockedByMap["issue-A"][0] != "issue-B" {
@@ -799,7 +813,91 @@ func TestBuildBlockingMaps(t *testing.T) {
 	}
 }
 
+func TestBuildBlockingMaps_ParentChildSeparation(t *testing.T) {
+	t.Parallel()
+	allDeps := map[string][]*types.Dependency{
+		"child-1": {
+			{IssueID: "child-1", DependsOnID: "parent-1", Type: types.DepParentChild},
+		},
+		"child-2": {
+			{IssueID: "child-2", DependsOnID: "parent-1", Type: types.DepParentChild},
+		},
+		"issue-X": {
+			{IssueID: "issue-X", DependsOnID: "parent-1", Type: types.DepBlocks},
+		},
+	}
+
+	_, blocksMap, childrenMap := buildBlockingMaps(allDeps, nil)
+
+	// parent-1 should have children, not blocks, for parent-child deps
+	if len(childrenMap["parent-1"]) != 2 {
+		t.Errorf("parent-1 children = %v, want 2 children", childrenMap["parent-1"])
+	}
+	// parent-1 should only block issue-X (not child-1 or child-2)
+	if len(blocksMap["parent-1"]) != 1 || blocksMap["parent-1"][0] != "issue-X" {
+		t.Errorf("parent-1 blocks = %v, want [issue-X]", blocksMap["parent-1"])
+	}
+}
+
+func TestBuildBlockingMaps_ClosedBlockersFiltered(t *testing.T) {
+	t.Parallel()
+	// issue-A is blocked by issue-B (open) and issue-C (closed)
+	// issue-D is blocked by issue-C (closed) only
+	allDeps := map[string][]*types.Dependency{
+		"issue-A": {
+			{IssueID: "issue-A", DependsOnID: "issue-B", Type: types.DepBlocks},
+			{IssueID: "issue-A", DependsOnID: "issue-C", Type: types.DepBlocks},
+		},
+		"issue-D": {
+			{IssueID: "issue-D", DependsOnID: "issue-C", Type: types.DepBlocks},
+		},
+	}
+
+	closedIDs := map[string]bool{"issue-C": true}
+	blockedByMap, blocksMap, _ := buildBlockingMaps(allDeps, closedIDs)
+
+	// issue-A should only show issue-B as blocker (issue-C is closed)
+	if len(blockedByMap["issue-A"]) != 1 || blockedByMap["issue-A"][0] != "issue-B" {
+		t.Errorf("issue-A blockedBy = %v, want [issue-B]", blockedByMap["issue-A"])
+	}
+
+	// issue-D should have no blockers (issue-C is closed)
+	if len(blockedByMap["issue-D"]) != 0 {
+		t.Errorf("issue-D blockedBy = %v, want []", blockedByMap["issue-D"])
+	}
+
+	// issue-B should still show as blocking issue-A
+	if len(blocksMap["issue-B"]) != 1 || blocksMap["issue-B"][0] != "issue-A" {
+		t.Errorf("issue-B blocks = %v, want [issue-A]", blocksMap["issue-B"])
+	}
+
+	// issue-C should NOT show as blocking anything (it's closed)
+	if len(blocksMap["issue-C"]) != 0 {
+		t.Errorf("issue-C blocks = %v, want [] (closed blocker)", blocksMap["issue-C"])
+	}
+}
+
+func TestBuildBlockingMaps_NilClosedIDs(t *testing.T) {
+	t.Parallel()
+	// When closedIDs is nil, all blockers should be included (backward compat)
+	allDeps := map[string][]*types.Dependency{
+		"issue-A": {
+			{IssueID: "issue-A", DependsOnID: "issue-B", Type: types.DepBlocks},
+		},
+	}
+
+	blockedByMap, blocksMap, _ := buildBlockingMaps(allDeps, nil)
+
+	if len(blockedByMap["issue-A"]) != 1 || blockedByMap["issue-A"][0] != "issue-B" {
+		t.Errorf("issue-A blockedBy = %v, want [issue-B]", blockedByMap["issue-A"])
+	}
+	if len(blocksMap["issue-B"]) != 1 || blocksMap["issue-B"][0] != "issue-A" {
+		t.Errorf("issue-B blocks = %v, want [issue-A]", blocksMap["issue-B"])
+	}
+}
+
 func TestFormatIssueCompactWithDependencies(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		issue     *types.Issue
@@ -874,6 +972,7 @@ func TestFormatIssueCompactWithDependencies(t *testing.T) {
 }
 
 func TestParseTimeFlag(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		input   string
@@ -907,6 +1006,7 @@ func TestParseTimeFlag(t *testing.T) {
 
 // TestListTimeBasedFilters tests the time-based scheduling filters (GH#820)
 func TestListTimeBasedFilters(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, ".beads", "beads.db")
 	s := newTestStore(t, testDB)
@@ -1081,6 +1181,7 @@ func TestListTimeBasedFilters(t *testing.T) {
 
 // TestHierarchicalChildren tests the --tree --parent functionality for showing all descendants
 func TestHierarchicalChildren(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, ".beads", "beads.db")
 	store := newTestStore(t, testDB)

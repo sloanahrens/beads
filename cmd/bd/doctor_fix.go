@@ -11,6 +11,7 @@ import (
 	"github.com/steveyegge/beads/cmd/bd/doctor/fix"
 	"github.com/steveyegge/beads/internal/syncbranch"
 	"github.com/steveyegge/beads/internal/ui"
+	"golang.org/x/term"
 )
 
 // previewFixes shows what would be fixed without applying changes
@@ -77,8 +78,17 @@ func applyFixes(result doctorResult) {
 		return
 	}
 
-	// Ask for confirmation (skip if --yes flag is set)
+	// Ask for confirmation (skip if --yes flag is set or stdin is non-interactive)
 	if !doctorYes {
+		// Detect non-interactive stdin (e.g., piped input in CI/automation)
+		isInteractive := term.IsTerminal(int(os.Stdin.Fd()))
+		if !isInteractive {
+			// In non-interactive mode without --yes, skip with helpful message
+			fmt.Fprintf(os.Stderr, "\n%s Running in non-interactive mode\n", ui.RenderWarn("⚠"))
+			fmt.Fprintf(os.Stderr, "  To auto-fix issues without prompting, use: %s\n\n", ui.RenderAccent("bd doctor --fix --yes"))
+			return
+		}
+
 		fmt.Printf("\nThis will attempt to fix %d issue(s). Continue? (Y/n): ", len(fixableIssues))
 		reader := bufio.NewReader(os.Stdin)
 		response, err := reader.ReadString('\n')
@@ -101,6 +111,14 @@ func applyFixes(result doctorResult) {
 
 // applyFixesInteractive prompts for each fix individually
 func applyFixesInteractive(path string, issues []doctorCheck) {
+	// Detect non-interactive stdin before attempting to prompt
+	isInteractive := term.IsTerminal(int(os.Stdin.Fd()))
+	if !isInteractive {
+		fmt.Fprintf(os.Stderr, "\n%s Interactive mode requires a terminal\n", ui.RenderWarn("⚠"))
+		fmt.Fprintf(os.Stderr, "  Use 'bd doctor --fix --yes' for non-interactive mode\n\n")
+		return
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 	applyAll := false
 	var approvedFixes []doctorCheck
@@ -138,6 +156,10 @@ func applyFixesInteractive(path string, issues []doctorCheck) {
 		response, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+			if len(approvedFixes) > 0 {
+				fmt.Printf("\nApplying %d previously approved fix(es) before exit...\n", len(approvedFixes))
+				applyFixList(path, approvedFixes)
+			}
 			return
 		}
 
@@ -233,8 +255,6 @@ func applyFixList(path string, fixes []doctorCheck) {
 			err = doctor.FixLastTouchedTracking()
 		case "Git Hooks":
 			err = fix.GitHooks(path)
-		case "Daemon Health":
-			err = fix.Daemon(path)
 		case "DB-JSONL Sync":
 			err = fix.DBJSONLSync(path)
 		case "Sync Divergence":
@@ -320,6 +340,8 @@ func applyFixList(path string, fixes []doctorCheck) {
 			err = fix.PatrolPollution(path)
 		case "Lock Files":
 			err = fix.StaleLockFiles(path)
+		case "Classic Artifacts":
+			err = fix.ClassicArtifacts(path)
 		default:
 			fmt.Printf("  ⚠ No automatic fix available for %s\n", check.Name)
 			fmt.Printf("  Manual fix: %s\n", check.Fix)

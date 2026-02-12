@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/steveyegge/beads/internal/routing"
@@ -10,6 +12,14 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/utils"
 )
+
+// beadsDirOverride returns true if BEADS_DIR is explicitly set in the environment.
+// When set, BEADS_DIR specifies the exact database to use and prefix-based routing
+// must be skipped. This matches bd list's behavior (which never routes) and the
+// contract expected by all gastown callers that set BEADS_DIR (GH#663).
+func beadsDirOverride() bool {
+	return os.Getenv("BEADS_DIR") != ""
+}
 
 // RoutedResult contains the result of a routed issue lookup
 type RoutedResult struct {
@@ -38,6 +48,11 @@ func resolveAndGetIssueWithRouting(ctx context.Context, localStore storage.Stora
 	// Step 1: Check if routing is needed based on ID prefix
 	if dbPath == "" {
 		// No routing without a database path - use local store
+		return resolveAndGetFromStore(ctx, localStore, id, false)
+	}
+
+	// BEADS_DIR explicitly set — use local store, skip prefix routing (GH#663)
+	if beadsDirOverride() {
 		return resolveAndGetFromStore(ctx, localStore, id, false)
 	}
 
@@ -91,6 +106,28 @@ func resolveAndGetFromStore(ctx context.Context, s storage.Storage, id string, r
 	}, nil
 }
 
+// openStoreForRig opens a read-only storage connection to a different rig's database.
+// The rigOrPrefix parameter accepts any format: "beads", "bd-", "bd", etc.
+// Returns the opened storage (caller must close) or an error.
+func openStoreForRig(ctx context.Context, rigOrPrefix string) (storage.Storage, error) {
+	townBeadsDir, err := findTownBeadsDir()
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve rig: %v", err)
+	}
+
+	targetBeadsDir, _, err := routing.ResolveBeadsDirForRig(rigOrPrefix, townBeadsDir)
+	if err != nil {
+		return nil, err
+	}
+
+	targetStore, err := factory.NewFromConfigWithOptions(ctx, targetBeadsDir, factory.Options{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to open rig %q database: %v", rigOrPrefix, err)
+	}
+
+	return targetStore, nil
+}
+
 // getIssueWithRouting tries to get an issue from the local store first,
 // then falls back to checking routes.jsonl for prefix-based routing.
 // This enables cross-repo issue lookups (e.g., `bd show gt-xyz` from ~/gt).
@@ -110,8 +147,8 @@ func getIssueWithRouting(ctx context.Context, localStore storage.Storage, id str
 	}
 
 	// Step 2: Check routes.jsonl for prefix-based routing
-	if dbPath == "" {
-		// No routing without a database path - return original result
+	if dbPath == "" || beadsDirOverride() {
+		// No routing without a database path, or BEADS_DIR explicitly set (GH#663)
 		return &RoutedResult{
 			Issue:      issue,
 			Store:      localStore,
@@ -160,7 +197,7 @@ func getIssueWithRouting(ctx context.Context, localStore storage.Storage, id str
 // Returns nil if no routing is needed (issue should be in local store).
 // The caller is responsible for closing the returned storage.
 func getRoutedStoreForID(ctx context.Context, id string) (*routing.RoutedStorage, error) {
-	if dbPath == "" {
+	if dbPath == "" || beadsDirOverride() {
 		return nil, nil
 	}
 
@@ -172,7 +209,7 @@ func getRoutedStoreForID(ctx context.Context, id string) (*routing.RoutedStorage
 // needsRouting checks if an ID would be routed to a different beads directory.
 // This is used to decide whether to bypass the daemon for cross-repo lookups.
 func needsRouting(id string) bool {
-	if dbPath == "" {
+	if dbPath == "" || beadsDirOverride() {
 		return false
 	}
 

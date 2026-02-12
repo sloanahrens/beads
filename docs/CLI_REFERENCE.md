@@ -34,12 +34,15 @@ bd info --json
 ### Find Work
 
 ```bash
-# Find ready work (no blockers)
+# Find ready work (no blockers, not already claimed)
 bd ready --json
+
+# Atomically claim an issue from the ready queue
+bd update <id> --claim --json               # Fails if already claimed
 
 # Find stale issues (not updated recently)
 bd stale --days 30 --json                    # Default: 30 days
-bd stale --days 90 --status in_progress --json  # Filter by status
+bd stale --days 90 --status in_progress --json  # Find abandoned claims
 bd stale --limit 20 --json                   # Limit results
 ```
 
@@ -83,6 +86,11 @@ bd create "Tests" -p 1 --parent bd-a3f8e9 --json                # Auto-assigned:
 
 # Create and link discovered work (one command)
 bd create "Found bug" -t bug -p 1 --deps discovered-from:<parent-id> --json
+
+# Create with external reference (v0.9.2+)
+bd create "Fix login" -t bug -p 1 --external-ref "gh-123" --json  # Short form
+bd create "Fix login" -t bug -p 1 --external-ref "https://github.com/org/repo/issues/123" --json  # Full URL
+bd create "Jira task" -t task -p 1 --external-ref "jira-PROJ-456" --json  # Custom prefix
 ```
 
 ### Update Issues
@@ -92,6 +100,15 @@ bd create "Found bug" -t bug -p 1 --deps discovered-from:<parent-id> --json
 bd update <id> [<id>...] --status in_progress --json
 bd update <id> [<id>...] --priority 1 --json
 bd update <id> [<id>...] --spec-id "docs/specs/auth.md" --json
+
+# Update external reference (v0.9.2+)
+bd update <id> --external-ref "gh-456" --json           # Short form
+bd update <id> --external-ref "jira-PROJ-789" --json    # Custom prefix
+
+# Atomically claim an issue for work (prevents race conditions)
+# Sets assignee to you and status to in_progress in one atomic operation
+# Fails if already claimed (assignee is not empty)
+bd update <id> --claim --json
 
 # Edit issue fields in $EDITOR (HUMANS ONLY - not for agents)
 # NOTE: This command is intentionally NOT exposed via the MCP server
@@ -210,6 +227,9 @@ bd list --title "auth" --json
 bd list --title-contains "auth" --json                  # Search in title
 bd list --desc-contains "implement" --json              # Search in description
 bd list --notes-contains "TODO" --json                  # Search in notes
+
+# Find beads issue by external reference
+bd list --json | jq -r '.[] | select(.external_ref == "gh-123") | .id'
 ```
 
 ### Date Range Filters
@@ -596,6 +616,51 @@ bd info --schema --json                                # Get schema, tables, con
 
 These invariants prevent data loss and would have caught issues like GH #201 (missing issue_prefix after migration).
 
+### Migrate to Sync Branch
+
+Set up a dedicated sync branch for beads data, keeping your working branches clean.
+
+```bash
+# Basic setup (creates orphan branch by default)
+bd migrate sync beads-sync                             # Create orphan sync branch
+bd migrate sync beads-sync --dry-run                   # Preview without changes
+
+# Force reconfigure if already set up
+bd migrate sync beads-sync --force                     # Reconfigure sync branch
+
+# Migrate existing non-orphan branch to orphan
+bd migrate sync beads-sync --orphan                    # Delete and recreate as orphan
+```
+
+**Behavior:**
+
+| Scenario | Result |
+|----------|--------|
+| Branch doesn't exist | Creates orphan branch (no shared history) |
+| Branch exists locally | Uses existing branch as-is |
+| Branch exists + `--orphan` | Migrates: deletes and recreates as orphan |
+| Remote only | Fetches from remote |
+| Remote only + `--orphan` | Creates local orphan (ignores remote) |
+
+**Why orphan branches?**
+
+- Clean "data sync channel" mental model
+- No accidental merge risk (git warns loudly)
+- Smaller repository footprint (no stale source code)
+- Sync branch contains only `.beads/` directory
+
+**After setup:**
+
+- `bd sync` commits beads changes to the sync branch via worktree
+- Your working branch stays clean of beads commits
+- Essential for multi-clone setups where clones work independently
+
+**Safety features for `--orphan` migration:**
+
+- **Unpushed commit check**: If the branch has unpushed commits, migration fails with a helpful error. Use `--force` to override.
+- **Existing worktree**: If a worktree exists for the branch, it's automatically removed before migration.
+- **Non-destructive to remote**: The remote branch is not modified; use `git push --force` to update it after migration.
+
 ### Daemon Management
 
 See [docs/DAEMON.md](DAEMON.md) for complete daemon management reference.
@@ -709,6 +774,14 @@ bd kv list --json                      # Machine-readable output
 Only `blocks` dependencies affect the ready work queue.
 
 **Note:** When creating an issue with a `discovered-from` dependency, the new issue automatically inherits the parent's `source_repo` field.
+
+## External References
+
+The `--external-ref` flag (v0.9.2+) links beads issues to external trackers:
+
+- Supports short form (`gh-123`) or full URL (`https://github.com/...`)
+- Portable via JSONL - survives sync across machines
+- Custom prefixes work for any tracker (`jira-PROJ-456`, `linear-789`)
 
 ## Output Formats
 

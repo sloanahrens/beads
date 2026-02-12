@@ -1,3 +1,5 @@
+//go:build cgo
+
 package main
 
 import (
@@ -713,7 +715,7 @@ func TestCheckGitHooks(t *testing.T) {
 					}
 				}
 
-				check := doctor.CheckGitHooks()
+				check := doctor.CheckGitHooks(Version)
 
 				if check.Status != tc.expectedStatus {
 					t.Errorf("Expected status %s, got %s", tc.expectedStatus, check.Status)

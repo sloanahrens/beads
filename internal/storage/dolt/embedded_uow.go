@@ -8,6 +8,8 @@ import (
 	"errors"
 
 	embedded "github.com/dolthub/driver"
+
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 func ignoreContextCanceled(err error) error {
@@ -25,14 +27,14 @@ func ignoreContextCanceled(err error) error {
 // withEmbeddedDolt executes exactly one unit of work using a single embedded Dolt connector.
 //
 // Lifecycle:
-//  1) ParseDSN
-//  2) configure (e.g. enable retries by setting cfg.BackOff)
-//  3) NewConnector
-//  4) sql.OpenDB(connector)
-//  5) PingContext(ctx) to force open (and retries)
-//  6) fn(ctx, db)
-//  7) db.Close()
-//  8) connector.Close() to release filesystem locks
+//  1. ParseDSN
+//  2. configure (e.g. enable retries by setting cfg.BackOff)
+//  3. NewConnector
+//  4. sql.OpenDB(connector)
+//  5. PingContext(ctx) to force open (and retries)
+//  6. fn(ctx, db)
+//  7. db.Close()
+//  8. connector.Close() to release filesystem locks
 //
 // IMPORTANT: This helper does not wrap or modify ctx (no timeouts). The embedded driver derives
 // a session context from the Connect(ctx) context and reuses it across statements.
@@ -65,9 +67,10 @@ func withEmbeddedDolt(
 
 	defer func() {
 		// Close DB first (stops pool activity), then close the connector to release engine locks.
+		// Use CloseWithTimeout to prevent indefinite hangs (same issue as DoltStore.Close).
 		cerr := errors.Join(
-			ignoreContextCanceled(db.Close()),
-			ignoreContextCanceled(connector.Close()),
+			ignoreContextCanceled(doltutil.CloseWithTimeout("db", db.Close)),
+			ignoreContextCanceled(doltutil.CloseWithTimeout("connector", connector.Close)),
 		)
 		if err == nil {
 			err = cerr
@@ -83,4 +86,3 @@ func withEmbeddedDolt(
 
 	return fn(ctx, db)
 }
-

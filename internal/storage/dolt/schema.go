@@ -156,14 +156,6 @@ CREATE TABLE IF NOT EXISTS metadata (
     value TEXT NOT NULL
 );
 
--- Dirty issues table (for incremental export)
-CREATE TABLE IF NOT EXISTS dirty_issues (
-    issue_id VARCHAR(255) PRIMARY KEY,
-    marked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_dirty_issues_marked_at (marked_at),
-    CONSTRAINT fk_dirty_issue FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-);
-
 -- Export hashes table
 CREATE TABLE IF NOT EXISTS export_hashes (
     issue_id VARCHAR(255) PRIMARY KEY,
@@ -269,7 +261,7 @@ INSERT IGNORE INTO config (` + "`key`" + `, value) VALUES
     ('compact_tier2_days', '90'),
     ('compact_tier2_dep_levels', '5'),
     ('compact_tier2_commits', '100'),
-    ('compact_model', 'claude-3-5-haiku-20241022'),
+    ('compact_model', 'claude-haiku-4-5-20251001'),
     ('compact_batch_size', '50'),
     ('compact_parallel_workers', '5'),
     ('auto_compact_enabled', 'false');

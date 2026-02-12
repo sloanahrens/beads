@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 // Excludes pinned issues which are persistent anchors, not actionable work.
 func (s *SQLiteStorage) GetReadyWork(ctx context.Context, filter types.WorkFilter) ([]*types.Issue, error) {
 	whereClauses := []string{
-		"i.pinned = 0",                             // Exclude pinned issues
+		"i.pinned = 0", // Exclude pinned issues
 		"(i.ephemeral = 0 OR i.ephemeral IS NULL)", // Exclude wisps by ephemeral flag
 	}
 	args := []interface{}{}
@@ -99,6 +100,20 @@ func (s *SQLiteStorage) GetReadyWork(ctx context.Context, filter types.WorkFilte
 			args = append(args, label)
 		}
 	}
+
+	// Label pattern filtering (glob): issue must have at least one label matching the pattern
+	if filter.LabelPattern != "" {
+		whereClauses = append(whereClauses, `
+			EXISTS (
+				SELECT 1 FROM labels
+				WHERE issue_id = i.id AND label GLOB ?
+			)
+		`)
+		args = append(args, filter.LabelPattern)
+	}
+
+	// Label regex filtering: done at application level after query
+	// SQLite doesn't have built-in regex support without extensions
 
 	// Parent filtering: filter to all descendants of a root issue (epic/molecule)
 	// Uses recursive CTE to find all descendants via parent-child dependencies
@@ -205,7 +220,39 @@ func (s *SQLiteStorage) GetReadyWork(ctx context.Context, filter types.WorkFilte
 		}
 	}
 
+	// Apply label regex filtering at application level
+	// SQLite doesn't have built-in regex support without extensions
+	if filter.LabelRegex != "" {
+		issues, err = s.filterReadyByLabelRegex(issues, filter.LabelRegex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to filter by label regex: %w", err)
+		}
+	}
+
 	return issues, nil
+}
+
+// filterReadyByLabelRegex filters issues to only include those with at least one label
+// matching the given regex pattern. Used by GetReadyWork.
+func (s *SQLiteStorage) filterReadyByLabelRegex(issues []*types.Issue, pattern string) ([]*types.Issue, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex pattern %q: %w", pattern, err)
+	}
+
+	// Filter issues that have at least one label matching the regex
+	// Labels are already populated by scanReadyIssues
+	var filtered []*types.Issue
+	for _, issue := range issues {
+		for _, label := range issue.Labels {
+			if re.MatchString(label) {
+				filtered = append(filtered, issue)
+				break // Only need one match
+			}
+		}
+	}
+
+	return filtered, nil
 }
 
 // filterByExternalDeps removes issues that have unsatisfied external dependencies.
@@ -250,7 +297,7 @@ func (s *SQLiteStorage) filterByExternalDeps(ctx context.Context, issues []*type
 	for ref := range uniqueRefs {
 		refList = append(refList, ref)
 	}
-	statuses := CheckExternalDeps(ctx, refList)
+	statuses := checkExternalDeps(ctx, refList)
 
 	// Build set of blocked issue IDs using batch results
 	blockedIssues := make(map[string]bool)
@@ -680,7 +727,7 @@ func filterBlockedByExternalDeps(ctx context.Context, blocked []*types.BlockedIs
 	for ref := range externalRefs {
 		refList = append(refList, ref)
 	}
-	statuses := CheckExternalDeps(ctx, refList)
+	statuses := checkExternalDeps(ctx, refList)
 
 	// Build set of satisfied refs
 	satisfiedRefs := make(map[string]bool)
@@ -840,20 +887,20 @@ func buildOrderByClause(policy types.SortPolicy) string {
 	}
 }
 
-// ExcludeIDPatternsConfigKey is the config key for ID exclusion patterns in GetReadyWork
-const ExcludeIDPatternsConfigKey = "ready.exclude_id_patterns"
+// excludeIDPatternsConfigKey is the config key for ID exclusion patterns in GetReadyWork
+const excludeIDPatternsConfigKey = "ready.exclude_id_patterns"
 
-// DefaultExcludeIDPatterns are the default patterns to exclude from GetReadyWork
+// defaultExcludeIDPatterns are the default patterns to exclude from GetReadyWork
 // These exclude molecule steps (-mol-) and wisps (-wisp-) which are internal workflow items
-var DefaultExcludeIDPatterns = []string{"-mol-", "-wisp-"}
+var defaultExcludeIDPatterns = []string{"-mol-", "-wisp-"}
 
 // getExcludeIDPatterns returns the ID patterns to exclude from GetReadyWork.
-// Reads from ready.exclude_id_patterns config, defaults to DefaultExcludeIDPatterns.
+// Reads from ready.exclude_id_patterns config, defaults to defaultExcludeIDPatterns.
 // Config format: comma-separated patterns, e.g., "-mol-,-wisp-"
 func (s *SQLiteStorage) getExcludeIDPatterns(ctx context.Context) []string {
-	value, err := s.GetConfig(ctx, ExcludeIDPatternsConfigKey)
+	value, err := s.GetConfig(ctx, excludeIDPatternsConfigKey)
 	if err != nil || value == "" {
-		return DefaultExcludeIDPatterns
+		return defaultExcludeIDPatterns
 	}
 
 	// Parse comma-separated patterns
@@ -867,7 +914,7 @@ func (s *SQLiteStorage) getExcludeIDPatterns(ctx context.Context) []string {
 	}
 
 	if len(patterns) == 0 {
-		return DefaultExcludeIDPatterns
+		return defaultExcludeIDPatterns
 	}
 	return patterns
 }

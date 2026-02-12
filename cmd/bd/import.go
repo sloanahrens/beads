@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/debug"
-	"github.com/steveyegge/beads/internal/storage/factory"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/utils"
 	"golang.org/x/term"
@@ -82,35 +81,6 @@ NOTE: Import requires direct database access and does not work with daemon mode.
 		if err := os.MkdirAll(dbDir, 0750); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: failed to create database directory: %v\n", err)
 			os.Exit(1)
-		}
-
-		// Import requires direct database access due to complex transaction handling
-		// and collision detection. Force direct mode regardless of daemon state.
-		//
-		// NOTE: We only close the daemon client connection here, not stop the daemon
-		// process. This is because import may be called as a subprocess from sync,
-		// and stopping the daemon would break the parent sync's connection.
-		// The daemon-stale-DB issue is addressed separately by
-		// having sync use --no-daemon mode for consistency.
-		if daemonClient != nil {
-			debug.Logf("Debug: import command forcing direct mode (closes daemon connection)\n")
-			_ = daemonClient.Close()
-			daemonClient = nil
-
-			var err error
-			beadsDir := filepath.Dir(dbPath)
-			store, err = factory.NewFromConfigWithOptions(rootCtx, beadsDir, factory.Options{
-				LockTimeout: lockTimeout,
-			})
-			if err != nil {
-				// Check for fresh clone scenario
-				if handleFreshCloneError(err, beadsDir) {
-					os.Exit(1)
-				}
-				fmt.Fprintf(os.Stderr, "Error: failed to open database: %v\n", err)
-				os.Exit(1)
-			}
-			defer func() { _ = store.Close() }()
 		}
 
 		// We'll check if database needs initialization after reading the JSONL
@@ -219,10 +189,10 @@ NOTE: Import requires direct database access and does not work with daemon mode.
 					}()
 					in = f
 					scanner = bufio.NewScanner(in)
-					allIssues = nil        // Reset issues list
-					deletionMarkers = nil  // Reset deletion markers list
-					lineNum = 0            // Reset line counter
-					continue               // Restart parsing from beginning
+					allIssues = nil       // Reset issues list
+					deletionMarkers = nil // Reset deletion markers list
+					lineNum = 0           // Reset line counter
+					continue              // Restart parsing from beginning
 				} else {
 					// Can't retry stdin - should not happen since git conflicts only in files
 					fmt.Fprintf(os.Stderr, "Error: Cannot retry merge from stdin\n")
@@ -458,13 +428,6 @@ NOTE: Import requires direct database access and does not work with daemon mode.
 			commandDidWrite.Store(true)
 		}
 
-		// Flush immediately after import (no debounce) to ensure daemon sees changes
-		// Without this, daemon FileWatcher won't detect the import for up to 30s
-		// Only flush if there were actual changes to avoid unnecessary I/O
-		if result.Created > 0 || result.Updated > 0 || result.Deleted > 0 || len(result.IDMapping) > 0 {
-			flushToJSONLWithState(flushState{forceDirty: true})
-		}
-
 		// Update jsonl_content_hash metadata to enable content-based staleness detection
 		// This prevents git operations from resurrecting deleted issues by comparing content instead of mtime
 		// ALWAYS update metadata after successful import, even if no changes were made (fixes staleness check)
@@ -477,13 +440,6 @@ NOTE: Import requires direct database access and does not work with daemon mode.
 					// successful imports. System degrades gracefully to mtime-based staleness detection if metadata
 					// is unavailable. This ensures import operations always succeed even if metadata storage fails.
 					debug.Logf("Warning: failed to update jsonl_content_hash: %v", err)
-				}
-				// Also update jsonl_file_hash to prevent integrity check warnings
-				// validateJSONLIntegrity() compares this hash against actual JSONL content.
-				// Without this, sync that imports but skips re-export leaves jsonl_file_hash stale,
-				// causing spurious "hash mismatch" warnings on subsequent operations.
-				if err := store.SetJSONLFileHash(ctx, currentHash); err != nil {
-					debug.Logf("Warning: failed to update jsonl_file_hash: %v", err)
 				}
 				// Use RFC3339Nano for nanosecond precision to avoid race with file mtime (fixes #399)
 				importTime := time.Now().Format(time.RFC3339Nano)
@@ -635,11 +591,12 @@ func checkUncommittedChanges(filePath string, result *ImportResult) {
 	workDir := filepath.Dir(filePath)
 
 	// Use git diff to check if working tree differs from HEAD
-	cmd := fmt.Sprintf("git diff --quiet HEAD %s", filePath)
-	exitCode, _ := runGitCommand(cmd, workDir)
+	gitCmd := exec.Command("git", "diff", "--quiet", "HEAD", "--", filePath)
+	gitCmd.Dir = workDir
+	err := gitCmd.Run()
 
 	// Exit code 0 = no changes, 1 = changes exist, >1 = error
-	if exitCode == 1 {
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 		// Get line counts for context
 		workingTreeLines := countLines(filePath)
 		headLines := countLinesInGitHEAD(filePath, workDir)
@@ -653,24 +610,6 @@ func checkUncommittedChanges(filePath string, result *ImportResult) {
 		fmt.Fprintf(os.Stderr, "   Run: git diff %s\n", filePath)
 		fmt.Fprintf(os.Stderr, "   To review uncommitted changes\n")
 	}
-}
-
-// runGitCommand executes a git command and returns exit code and output
-// workDir is the directory to run the command in (empty = current dir)
-func runGitCommand(cmd string, workDir string) (int, string) {
-	// #nosec G204 - command is constructed internally
-	gitCmd := exec.Command("sh", "-c", cmd)
-	if workDir != "" {
-		gitCmd.Dir = workDir
-	}
-	output, err := gitCmd.CombinedOutput()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode(), string(output)
-		}
-		return -1, string(output)
-	}
-	return 0, string(output)
 }
 
 // countLines counts the number of lines in a file
@@ -693,12 +632,13 @@ func countLines(filePath string) int {
 // countLinesInGitHEAD counts lines in the file as it exists in git HEAD
 func countLinesInGitHEAD(filePath string, workDir string) int {
 	// First, find the git root
-	findRootCmd := "git rev-parse --show-toplevel 2>/dev/null"
-	exitCode, gitRootOutput := runGitCommand(findRootCmd, workDir)
-	if exitCode != 0 {
+	gitRootCmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	gitRootCmd.Dir = workDir
+	gitRootOutput, err := gitRootCmd.Output()
+	if err != nil {
 		return 0
 	}
-	gitRoot := strings.TrimSpace(gitRootOutput)
+	gitRoot := strings.TrimSpace(string(gitRootOutput))
 
 	// Make filePath relative to git root
 	absPath, err := filepath.Abs(filePath)
@@ -711,16 +651,19 @@ func countLinesInGitHEAD(filePath string, workDir string) int {
 		return 0
 	}
 
-	cmd := fmt.Sprintf("git show HEAD:%s 2>/dev/null | wc -l", relPath)
-	exitCode, output := runGitCommand(cmd, workDir)
-	if exitCode != 0 {
+	// Get file content from git HEAD and count lines in Go (no shell pipe)
+	gitShowCmd := exec.Command("git", "show", "HEAD:"+relPath) //nolint:gosec // relPath is from filepath.Rel, not user input
+	gitShowCmd.Dir = workDir
+	output, err := gitShowCmd.Output()
+	if err != nil {
 		return 0
 	}
 
-	var lines int
-	_, err = fmt.Sscanf(strings.TrimSpace(output), "%d", &lines)
-	if err != nil {
-		return 0
+	// Count lines in the output
+	lines := 0
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		lines++
 	}
 	return lines
 }

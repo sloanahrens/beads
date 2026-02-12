@@ -501,11 +501,12 @@ type IssueType string
 // Core work type constants - these are the built-in types that beads validates.
 // All other types require configuration via types.custom in config.yaml.
 const (
-	TypeBug     IssueType = "bug"
-	TypeFeature IssueType = "feature"
-	TypeTask    IssueType = "task"
-	TypeEpic    IssueType = "epic"
-	TypeChore   IssueType = "chore"
+	TypeBug      IssueType = "bug"
+	TypeFeature  IssueType = "feature"
+	TypeTask     IssueType = "task"
+	TypeEpic     IssueType = "epic"
+	TypeChore    IssueType = "chore"
+	TypeDecision IssueType = "decision"
 )
 
 // TypeEvent is a system-internal type used by set-state for audit trail beads.
@@ -520,11 +521,11 @@ const TypeEvent IssueType = "event"
 // (event was also a Gas Town type but was promoted to a built-in internal type above.)
 
 // IsValid checks if the issue type is a core work type.
-// Only core work types (bug, feature, task, epic, chore) are built-in.
+// Only core work types (bug, feature, task, epic, chore, decision) are built-in.
 // Other types (molecule, gate, convoy, etc.) require types.custom configuration.
 func (t IssueType) IsValid() bool {
 	switch t {
-	case TypeBug, TypeFeature, TypeTask, TypeEpic, TypeChore:
+	case TypeBug, TypeFeature, TypeTask, TypeEpic, TypeChore, TypeDecision:
 		return true
 	}
 	return false
@@ -560,6 +561,8 @@ func (t IssueType) Normalize() IssueType {
 	switch strings.ToLower(string(t)) {
 	case "enhancement", "feat":
 		return TypeFeature
+	case "dec", "adr":
+		return TypeDecision
 	default:
 		return t
 	}
@@ -588,6 +591,12 @@ func (t IssueType) RequiredSections() []RequiredSection {
 	case TypeEpic:
 		return []RequiredSection{
 			{Heading: "## Success Criteria", Hint: "Define high-level success criteria"},
+		}
+	case TypeDecision:
+		return []RequiredSection{
+			{Heading: "## Decision", Hint: "Summarize what was decided"},
+			{Heading: "## Rationale", Hint: "Explain why this option was chosen"},
+			{Heading: "## Alternatives Considered", Hint: "List alternatives and why they were rejected"},
 		}
 	default:
 		// Chore and custom types have no required sections
@@ -957,6 +966,8 @@ type IssueFilter struct {
 	Assignee     *string
 	Labels       []string // AND semantics: issue must have ALL these labels
 	LabelsAny    []string // OR semantics: issue must have AT LEAST ONE of these labels
+	LabelPattern string   // Glob pattern for label matching (e.g., "tech-*")
+	LabelRegex   string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
 	TitleSearch  string
 	IDs          []string // Filter by specific issue IDs
 	IDPrefix     string   // Filter by ID prefix (e.g., "bd-" to match "bd-abc123")
@@ -987,6 +998,9 @@ type IssueFilter struct {
 
 	// Tombstone filtering
 	IncludeTombstones bool // If false (default), exclude tombstones from results
+
+	// Source repo filtering (for multi-repo support)
+	SourceRepo *string // Filter by source_repo field (nil = any)
 
 	// Ephemeral filtering
 	Ephemeral *bool // Filter by ephemeral flag (nil = any, true = only ephemeral, false = only persistent)
@@ -1051,15 +1065,17 @@ func (s SortPolicy) IsValid() bool {
 
 // WorkFilter is used to filter ready work queries
 type WorkFilter struct {
-	Status     Status
-	Type       string // Filter by issue type (task, bug, feature, epic, merge-request, etc.)
-	Priority   *int
-	Assignee   *string
-	Unassigned bool     // Filter for issues with no assignee
-	Labels     []string // AND semantics: issue must have ALL these labels
-	LabelsAny  []string // OR semantics: issue must have AT LEAST ONE of these labels
-	Limit      int
-	SortPolicy SortPolicy
+	Status       Status
+	Type         string // Filter by issue type (task, bug, feature, epic, merge-request, etc.)
+	Priority     *int
+	Assignee     *string
+	Unassigned   bool     // Filter for issues with no assignee
+	Labels       []string // AND semantics: issue must have ALL these labels
+	LabelsAny    []string // OR semantics: issue must have AT LEAST ONE of these labels
+	LabelPattern string   // Glob pattern for label matching (e.g., "tech-*")
+	LabelRegex   string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
+	Limit        int
+	SortPolicy   SortPolicy
 
 	// Parent filtering: filter to descendants of a bead/epic (recursive)
 	ParentID *string // Show all descendants of this issue

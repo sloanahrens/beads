@@ -106,17 +106,6 @@ func TestMergeDriver_Validation(t *testing.T) {
 	})
 }
 
-// TestDaemon_Validation tests Daemon validation
-func TestDaemon_Validation(t *testing.T) {
-	t.Run("no socket - nothing to do", func(t *testing.T) {
-		dir := setupTestWorkspace(t)
-		err := Daemon(dir)
-		if err != nil {
-			t.Errorf("expected no error when no socket exists, got: %v", err)
-		}
-	})
-}
-
 // TestDBJSONLSync_Validation tests DBJSONLSync validation
 func TestDBJSONLSync_Validation(t *testing.T) {
 	t.Run("no database - nothing to do", func(t *testing.T) {
@@ -141,11 +130,11 @@ func TestDBJSONLSync_Validation(t *testing.T) {
 	})
 }
 
-// TestSyncBranchConfig_Validation tests SyncBranchConfig validation
+// TestSyncBranchConfig_Validation tests syncBranchConfig validation
 func TestSyncBranchConfig_Validation(t *testing.T) {
 	t.Run("not a git repository", func(t *testing.T) {
 		dir := setupTestWorkspace(t)
-		err := SyncBranchConfig(dir)
+		err := syncBranchConfig(dir)
 		if err == nil {
 			t.Error("expected error for non-git repository")
 		}
@@ -549,7 +538,6 @@ func TestIsWithinWorkspace(t *testing.T) {
 	}
 }
 
-
 // TestDBJSONLSync_MissingDatabase tests DBJSONLSync when database doesn't exist
 func TestDBJSONLSync_MissingDatabase(t *testing.T) {
 	dir := setupTestWorkspace(t)
@@ -574,7 +562,6 @@ func TestDBJSONLSync_MissingDatabase(t *testing.T) {
 	}
 }
 
-
 // TestSyncBranchConfig_BranchDoesNotExist tests fixing config when branch doesn't exist
 func TestSyncBranchConfig_BranchDoesNotExist(t *testing.T) {
 	// Skip if running as test binary (can't execute bd subcommands)
@@ -583,7 +570,7 @@ func TestSyncBranchConfig_BranchDoesNotExist(t *testing.T) {
 	dir := setupTestGitRepo(t)
 
 	// Try to run fix without any commits (no branch exists yet)
-	err := SyncBranchConfig(dir)
+	err := syncBranchConfig(dir)
 	if err == nil {
 		t.Error("expected error when no branch exists")
 	}
@@ -611,7 +598,7 @@ func TestSyncBranchConfig_InvalidRemoteURL(t *testing.T) {
 	runGit(t, dir, "remote", "add", "origin", "invalid://bad-url")
 
 	// Fix should still succeed - it only sets config, doesn't interact with remote
-	err := SyncBranchConfig(dir)
+	err := syncBranchConfig(dir)
 	if err != nil {
 		t.Fatalf("unexpected error with invalid remote: %v", err)
 	}
@@ -707,4 +694,3 @@ invalid json line
 		}
 	})
 }
-

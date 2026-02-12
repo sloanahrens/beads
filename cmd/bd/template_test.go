@@ -1,3 +1,5 @@
+//go:build cgo
+
 package main
 
 import (
@@ -8,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/formula"
-	"github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -18,6 +20,7 @@ import (
 
 // TestExtractVariables tests the {{variable}} pattern extraction
 func TestExtractVariables(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -98,6 +101,7 @@ func TestExtractVariables(t *testing.T) {
 
 // TestSubstituteVariables tests the variable substitution
 func TestSubstituteVariables(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -148,7 +152,7 @@ func TestSubstituteVariables(t *testing.T) {
 
 // templateTestHelper provides helpers for Beads template tests
 type templateTestHelper struct {
-	s   *sqlite.SQLiteStorage
+	s   storage.Storage
 	ctx context.Context
 	t   *testing.T
 }
@@ -186,6 +190,7 @@ func (h *templateTestHelper) addLabel(issueID, label string) {
 
 // TestLoadTemplateSubgraph tests loading a template epic with children
 func TestLoadTemplateSubgraph(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "bd-test-template-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -262,6 +267,7 @@ func TestLoadTemplateSubgraph(t *testing.T) {
 
 // TestCloneSubgraph tests cloning a template with variable substitution
 func TestCloneSubgraph(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "bd-test-clone-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -451,6 +457,7 @@ func TestCloneSubgraph(t *testing.T) {
 
 // TestExtractAllVariables tests extracting variables from entire subgraph
 func TestExtractAllVariables(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "bd-test-extractall-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -510,6 +517,7 @@ func (h *templateTestHelper) createIssueWithID(id, title, description string, is
 
 // TestResolveProtoIDOrTitle tests proto lookup by ID or title (bd-drcx)
 func TestResolveProtoIDOrTitle(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "bd-test-proto-lookup-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -610,6 +618,7 @@ func TestResolveProtoIDOrTitle(t *testing.T) {
 // TestLoadTemplateSubgraphWithManyChildren tests loading with 4+ children (bd-c8d5)
 // This reproduces the bug where only 2 of 4 children were loaded.
 func TestLoadTemplateSubgraphWithManyChildren(t *testing.T) {
+	t.Parallel()
 	tmpDir, err := os.MkdirTemp("", "bd-test-many-children-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -848,6 +857,7 @@ func TestLoadTemplateSubgraphWithManyChildren(t *testing.T) {
 // TestExtractRequiredVariables_IgnoresUndeclaredVars tests that handlebars in
 // description text that are NOT defined in VarDefs are ignored (gt-ky9loa).
 func TestExtractRequiredVariables_IgnoresUndeclaredVars(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		issues       []*types.Issue

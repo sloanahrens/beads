@@ -45,6 +45,18 @@ brew install beads
 - ✅ No need to install Go
 - ✅ Handles PATH setup automatically
 
+### [Mise-en-place](https://mise.jdx.dev)  (macOS/Linux/Windows)
+
+```bash
+mise install -g steveyegge/github:beads
+```
+
+**Why Mise?**
+- ✅ Same as Homebrew: simple, updates via `mise up`, works without Go, handles PATH
+- ✅ Supports all platforms
+- ✅ Always latest release
+- ✅ May optionally use different version for specific projects
+
 ### Quick Install Script (All Platforms)
 
 ```bash
@@ -61,7 +73,7 @@ The installer will:
 
 | Method | Best For | Updates | Prerequisites | Notes |
 |--------|----------|---------|---------------|-------|
-| **Homebrew** | macOS/Linux users | `brew upgrade bd` | Homebrew | Recommended. Handles everything automatically |
+| **Homebrew** | macOS/Linux users | `brew upgrade beads` | Homebrew | Recommended. Handles everything automatically |
 | **npm** | JS/Node.js projects | `npm update -g @beads/bd` | Node.js | Convenient if npm is your ecosystem |
 | **bun** | JS/Bun.js projects | `bun install -g --trust @beads/bd` | Bun.js | Convenient if bun is your ecosystem |
 | **Install script** | Quick setup, CI/CD | Re-run script | curl, bash | Good for automation and one-liners |
@@ -70,6 +82,31 @@ The installer will:
 | **AUR (Arch)** | Arch Linux users | `yay -Syu` | yay/paru | Community-maintained |
 
 **TL;DR:** Use Homebrew if available. Use npm if you're in a Node.js environment. Use the script for quick one-off installs or CI.
+
+## Build Dependencies (go install / from source)
+
+If you install via `go install` or build from source, you need system dependencies for CGO:
+
+macOS (Homebrew):
+```bash
+brew install icu4c zstd
+```
+
+Linux (Debian/Ubuntu):
+```bash
+sudo apt-get install -y libicu-dev libzstd-dev
+```
+
+Linux (Fedora/RHEL):
+```bash
+sudo dnf install -y libicu-devel libzstd-devel
+```
+
+If you see `unicode/uregex.h` missing on macOS, `icu4c` is keg-only. Use:
+```bash
+ICU_PREFIX="$(brew --prefix icu4c)"
+CGO_CFLAGS="-I${ICU_PREFIX}/include" CGO_CPPFLAGS="-I${ICU_PREFIX}/include" CGO_LDFLAGS="-L${ICU_PREFIX}/lib" go install github.com/steveyegge/beads/cmd/bd@latest
+```
 
 ## Platform-Specific Installation
 
@@ -148,18 +185,30 @@ Beads now ships with native Windows support—no MSYS or MinGW required.
 irm https://raw.githubusercontent.com/steveyegge/beads/main/install.ps1 | iex
 ```
 
+The script installs a prebuilt Windows release if available. Go is only required for `go install` or building from source.
+
+**Dolt backend on Windows:** Supported via pure-Go regex backend. Windows builds automatically use Go's stdlib `regexp` instead of ICU regex to avoid CGO/header dependencies. If you need full ICU regex semantics, use Linux/macOS (or WSL) with ICU installed.
+
 **Via go install**:
 ```pwsh
 go install github.com/steveyegge/beads/cmd/bd@latest
 ```
 
+ICU is **not required** on Windows. The regex backend uses pure Go automatically.
+
 **From source**:
 ```pwsh
 git clone https://github.com/steveyegge/beads
 cd beads
-go build -o bd.exe ./cmd/bd
+make build
+# Or without Make:
+go build -tags gms_pure_go -o bd.exe ./cmd/bd
 Move-Item bd.exe $env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\
 ```
+
+The `-tags gms_pure_go` flag tells go-mysql-server to use Go's stdlib regexp instead of ICU.
+Additionally, the vendored go-icu-regex library has a Windows-specific pure-Go implementation
+(`regex_windows.go`) that avoids ICU entirely. No C compiler or ICU libraries are needed.
 
 **Verify installation**:
 ```pwsh
@@ -403,10 +452,36 @@ After installation:
 
 ## Updating bd
 
+Use the update command that matches how you installed `bd`.
+
+### Quick Install Script (macOS/Linux/FreeBSD)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+```
+
+### PowerShell Installer (Windows)
+
+```pwsh
+irm https://raw.githubusercontent.com/steveyegge/beads/main/install.ps1 | iex
+```
+
 ### Homebrew
 
 ```bash
-brew upgrade bd
+brew upgrade beads
+```
+
+### npm
+
+```bash
+npm update -g @beads/bd
+```
+
+### bun
+
+```bash
+bun install -g --trust @beads/bd
 ```
 
 ### go install
@@ -422,6 +497,15 @@ cd beads
 git pull
 go build -o bd ./cmd/bd
 sudo mv bd /usr/local/bin/
+```
+
+## After Upgrading (Recommended)
+
+```bash
+bd info --whats-new
+bd hooks install
+bd daemons killall
+bd version
 ```
 
 ## Uninstalling
