@@ -27,7 +27,8 @@ var linearCmd = &cobra.Command{
 Configuration:
   bd config set linear.api_key "YOUR_API_KEY"
   bd config set linear.team_id "TEAM_ID"
-  bd config set linear.project_id "PROJECT_ID"  # Optional: sync only this project
+  bd config set linear.project_id "PROJECT_ID"        # Optional: sync only this project
+  bd config set linear.initiative_id "INITIATIVE_ID"  # Optional: sync projects under this initiative
 
 Environment variables (alternative to config):
   LINEAR_API_KEY - Linear API key
@@ -604,6 +605,10 @@ func getLinearClient(ctx context.Context) (*linear.Client, error) {
 		// Filter to specific project if configured
 		if projectID, _ := store.GetConfig(ctx, "linear.project_id"); projectID != "" {
 			client = client.WithProjectID(projectID)
+		}
+		// Filter to initiative if configured (broader than project, narrower than team)
+		if initiativeID, _ := store.GetConfig(ctx, "linear.initiative_id"); initiativeID != "" {
+			client = client.WithInitiativeID(initiativeID)
 		}
 	}
 

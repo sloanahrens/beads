@@ -114,11 +114,28 @@ func (c *Client) WithHTTPClient(httpClient *http.Client) *Client {
 // When set, FetchIssues and FetchIssuesSince will only return issues belonging to this project.
 func (c *Client) WithProjectID(projectID string) *Client {
 	return &Client{
-		APIKey:     c.APIKey,
-		TeamID:     c.TeamID,
-		ProjectID:  projectID,
-		Endpoint:   c.Endpoint,
-		HTTPClient: c.HTTPClient,
+		APIKey:       c.APIKey,
+		TeamID:       c.TeamID,
+		ProjectID:    projectID,
+		InitiativeID: c.InitiativeID,
+		Endpoint:     c.Endpoint,
+		HTTPClient:   c.HTTPClient,
+	}
+}
+
+// WithInitiativeID returns a new client configured to filter issues by initiative.
+// When set, FetchIssues and FetchIssuesSince will only return issues belonging to
+// projects under this initiative. This is broader than ProjectID (which filters to
+// a single project) but narrower than team-wide (which returns everything).
+// If both ProjectID and InitiativeID are set, ProjectID takes precedence.
+func (c *Client) WithInitiativeID(initiativeID string) *Client {
+	return &Client{
+		APIKey:       c.APIKey,
+		TeamID:       c.TeamID,
+		ProjectID:    c.ProjectID,
+		InitiativeID: initiativeID,
+		Endpoint:     c.Endpoint,
+		HTTPClient:   c.HTTPClient,
 	}
 }
 
@@ -205,11 +222,20 @@ func (c *Client) FetchIssues(ctx context.Context, state string) ([]Issue, error)
 		},
 	}
 
-	// Add project filter if configured
+	// Add project/initiative filter if configured.
+	// ProjectID takes precedence over InitiativeID (more specific).
 	if c.ProjectID != "" {
 		filter["project"] = map[string]interface{}{
 			"id": map[string]interface{}{
 				"eq": c.ProjectID,
+			},
+		}
+	} else if c.InitiativeID != "" {
+		filter["project"] = map[string]interface{}{
+			"initiatives": map[string]interface{}{
+				"id": map[string]interface{}{
+					"eq": c.InitiativeID,
+				},
 			},
 		}
 	}
@@ -268,6 +294,7 @@ func (c *Client) FetchIssues(ctx context.Context, state string) ([]Issue, error)
 // This enables incremental sync by only fetching issues modified after the last sync.
 // The state parameter can be: "open", "closed", or "all".
 // If ProjectID is set on the client, only issues from that project are returned.
+// If InitiativeID is set, only issues from projects under that initiative are returned.
 func (c *Client) FetchIssuesSince(ctx context.Context, state string, since time.Time) ([]Issue, error) {
 	var allIssues []Issue
 	var cursor string
@@ -286,11 +313,20 @@ func (c *Client) FetchIssuesSince(ctx context.Context, state string, since time.
 		},
 	}
 
-	// Add project filter if configured
+	// Add project/initiative filter if configured.
+	// ProjectID takes precedence over InitiativeID (more specific).
 	if c.ProjectID != "" {
 		filter["project"] = map[string]interface{}{
 			"id": map[string]interface{}{
 				"eq": c.ProjectID,
+			},
+		}
+	} else if c.InitiativeID != "" {
+		filter["project"] = map[string]interface{}{
+			"initiatives": map[string]interface{}{
+				"id": map[string]interface{}{
+					"eq": c.InitiativeID,
+				},
 			},
 		}
 	}

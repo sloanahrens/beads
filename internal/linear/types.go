@@ -30,11 +30,12 @@ const (
 
 // Client provides methods to interact with the Linear GraphQL API.
 type Client struct {
-	APIKey     string
-	TeamID     string
-	ProjectID  string // Optional: filter issues to a specific project
-	Endpoint   string // GraphQL endpoint URL (defaults to DefaultAPIEndpoint)
-	HTTPClient *http.Client
+	APIKey       string
+	TeamID       string
+	ProjectID    string // Optional: filter issues to a specific project
+	InitiativeID string // Optional: filter issues to projects under this initiative
+	Endpoint     string // GraphQL endpoint URL (defaults to DefaultAPIEndpoint)
+	HTTPClient   *http.Client
 }
 
 // GraphQLRequest represents a GraphQL request payload.
