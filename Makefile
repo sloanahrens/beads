@@ -43,7 +43,7 @@ export PATH := $(GIT_WINDOWS_ROOT)/usr/bin;$(PATH)
 endif
 endif
 
-.PHONY: all build doctor-build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force help check-up-to-date fmt fmt-check check-testing-short
+.PHONY: all build doctor-build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force safe-install check-forward-only check-on-main help check-up-to-date fmt fmt-check check-testing-short
 .PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
 .PHONY: api-gen api-check
 
@@ -52,6 +52,14 @@ all: build
 
 BUILD_DIR := .
 GIT_BUILD := $(shell git rev-parse --short HEAD)
+# Full commit SHA, injected explicitly via ldflags rather than left to Go's
+# automatic VCS build-info stamping: in this repo's git-worktree layout that
+# automatic stamp can go stale (observed embedding an unrelated, non-existent
+# commit hash) because it isn't reliably cache-busted by the go build cache.
+# An explicit -X main.Commit=$(GIT_COMMIT) always matches the ldflags string,
+# which does bust the cache, so `bd version`'s commit is trustworthy — this
+# is what safe-install's forward-only check relies on.
+GIT_COMMIT := $(shell git rev-parse HEAD)
 ifeq ($(OS),Windows_NT)
 INSTALL_DIR := $(USERPROFILE)/.local/bin
 WINDOWS_MINGW_BIN ?= /c/ProgramData/mingw64/mingw64/bin
@@ -95,21 +103,21 @@ build:
 ifeq ($(OS),Windows_NT)
 	@if [ -n "$$CC" ]; then \
 		echo "Using CC=$$CC"; \
-		go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
+		go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
 	elif command -v gcc >/dev/null 2>&1; then \
-		CC=gcc go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
+		CC=gcc go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
 	elif command -v clang >/dev/null 2>&1 && clang -dumpmachine 2>/dev/null | grep -qi 'windows.*gnu'; then \
-		CC=clang go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
+		CC=clang go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
 	else \
 		for bin in $(WINDOWS_CGO_BINS); do \
 			if [ -x "$$bin/gcc.exe" ]; then \
 				echo "Using Windows CGO gcc from $$bin"; \
-				PATH="$$bin:$$PATH" CC=gcc go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
+				PATH="$$bin:$$PATH" CC=gcc go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
 				exit $$?; \
 			fi; \
 			if [ -x "$$bin/clang.exe" ] && "$$bin/clang.exe" -dumpmachine 2>/dev/null | grep -qi 'windows.*gnu'; then \
 				echo "Using Windows CGO clang from $$bin"; \
-				PATH="$$bin:$$PATH" CC=clang go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
+				PATH="$$bin:$$PATH" CC=clang go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd.exe ./cmd/bd; \
 				exit $$?; \
 			fi; \
 		done; \
@@ -119,7 +127,7 @@ ifeq ($(OS),Windows_NT)
 		exit 1; \
 	fi
 else
-	go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd ./cmd/bd
+	go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd ./cmd/bd
 ifeq ($(shell uname),Darwin)
 	@codesign -s - -f $(BUILD_DIR)/bd 2>/dev/null || true
 	@echo "Signed bd for macOS"
@@ -345,6 +353,66 @@ endif
 
 install: check-up-to-date
 
+# check-on-main: Refuse to run unless the current branch is main. safe-install
+# rebuilds the town-wide bd binary from this clone; installing from a feature
+# branch would silently ship unreviewed code as "main". Use SKIP_MAIN_CHECK=1
+# to override (dangerous).
+check-on-main:
+ifndef SKIP_MAIN_CHECK
+	@BRANCH=$$(git branch --show-current 2>/dev/null); \
+	if [ "$$BRANCH" != "main" ]; then \
+		echo "ERROR: safe-install refuses to run outside main (on $$BRANCH)"; \
+		echo "Use SKIP_MAIN_CHECK=1 to override (dangerous)."; \
+		exit 1; \
+	fi
+endif
+
+# check-forward-only: Ensure HEAD is a descendant of the commit the currently
+# installed $(INSTALL_DIR)/bd was built from. Prevents installing an older or
+# diverged commit, which caused gastown's rebuild-gt crash loop when it
+# happened to the gt binary (every session's startup hook failed, witness
+# respawned it every 1-2 minutes). For bd the blast radius is larger — bd is
+# the data plane for every agent in the town. Use SKIP_FORWARD_CHECK=1 to
+# override (dangerous).
+check-forward-only:
+ifndef SKIP_FORWARD_CHECK
+	@INSTALLED_COMMIT=$$("$(INSTALL_DIR)/bd" version --json 2>/dev/null | grep -o '"commit"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$$/\1/'); \
+	if [ -z "$$INSTALLED_COMMIT" ]; then \
+		echo "Warning: cannot determine installed bd's commit (no prior fork build, or a build without VCS info), skipping forward check"; \
+		exit 0; \
+	fi; \
+	HEAD_COMMIT=$$(git rev-parse HEAD 2>/dev/null); \
+	if [ "$$INSTALLED_COMMIT" = "$$HEAD_COMMIT" ]; then \
+		echo "Installed bd is already at HEAD ($$(git rev-parse --short HEAD)), nothing to do"; \
+		exit 1; \
+	fi; \
+	if ! git merge-base --is-ancestor "$$INSTALLED_COMMIT" HEAD 2>/dev/null; then \
+		echo "ERROR: HEAD ($$(git rev-parse --short HEAD)) is NOT a descendant of installed bd's commit ($$INSTALLED_COMMIT)"; \
+		echo "This would be a DOWNGRADE. Refusing to install."; \
+		echo "Use SKIP_FORWARD_CHECK=1 to override (dangerous)."; \
+		exit 1; \
+	fi; \
+	echo "Forward-only check passed: $$(git rev-parse --short $$INSTALLED_COMMIT) -> $$(git rev-parse --short HEAD)"
+endif
+
+# safe-install: Like install, but additionally refuses to run off main and
+# refuses to move the installed binary backwards or sideways in history.
+# Intended for unattended/automated rebuilds; a human running 'make install'
+# already controls which commit gets installed.
+safe-install: check-up-to-date check-on-main check-forward-only build
+	@mkdir -p "$(INSTALL_DIR)"
+ifeq ($(OS),Windows_NT)
+	@rm -f "$(INSTALL_DIR)/bd" "$(INSTALL_DIR)/bd.exe"
+	@cp "$(BUILD_DIR)/bd.exe" "$(INSTALL_DIR)/bd.exe"
+	@echo "Installed bd.exe to $(INSTALL_DIR)/bd.exe"
+else
+	@cp "$(BUILD_DIR)/bd" "$(INSTALL_DIR)/.bd.install.tmp.$$$$" && mv -f "$(INSTALL_DIR)/.bd.install.tmp.$$$$" "$(INSTALL_DIR)/bd"
+	@echo "Installed bd to $(INSTALL_DIR)/bd"
+	@ln -sfn bd "$(INSTALL_DIR)/.beads.install.tmp.$$$$" && mv -f "$(INSTALL_DIR)/.beads.install.tmp.$$$$" "$(INSTALL_DIR)/beads"
+	@echo "Created 'beads' alias -> bd"
+endif
+	@git config core.hooksPath .githooks 2>/dev/null && echo "Configured git hooks (.githooks/)" || true
+
 # Format all Go files
 fmt:
 	@echo "Formatting Go files..."
@@ -358,7 +426,7 @@ fmt-check:
 # Validate documentation references against actual CLI flags
 check-docs:
 	@echo "Building bd for docs checks..."
-	@CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD)" -o $(BUILD_DIR)/bd ./cmd/bd
+	@CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd ./cmd/bd
 	@./scripts/check-doc-flags.sh ./bd
 	@./scripts/check-doc-freshness.sh
 	@go test -tags=gms_pure_go ./test/docsync
@@ -434,6 +502,7 @@ help:
 	@echo "  make bench-quick  - Run quick benchmarks (shorter benchtime)"
 	@echo "  make install      - Install bd to ~/.local/bin (with codesign on macOS, includes 'beads' alias)"
 	@echo "  make install-force - Install bd, skipping the origin/main update check"
+	@echo "  make safe-install - Forward-only install for unattended rebuilds: refuses off-main or backwards installs"
 	@echo "  make fmt          - Format all Go files with gofmt"
 	@echo "  make fmt-check    - Check Go formatting (for CI)"
 	@echo "  make check-docs   - Validate docs against CLI flags"
