@@ -836,3 +836,13 @@ func (s *DoltStore) FindWispDependentsRecursive(ctx context.Context, ids []strin
 	})
 	return result, err
 }
+
+func (s *DoltStore) FindActiveHookBeads(ctx context.Context) (map[string]bool, error) {
+	var result map[string]bool
+	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.FindActiveHookBeadsInTx(ctx, tx)
+		return err
+	})
+	return result, err
+}

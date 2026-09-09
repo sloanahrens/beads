@@ -117,6 +117,93 @@ func TestFindWispDependentsRecursive_Empty(t *testing.T) {
 	}
 }
 
+// TestFindActiveHookBeads verifies that FindActiveHookBeads returns exactly
+// the IDs referenced as hook_bead by a non-closed issue, and excludes a
+// hook_bead left over on a now-closed issue. Regression test for be-yqp:
+// hook_bead marks what a live agent currently has hooked, independent of the
+// target's own status, so age-based wisp GC must treat this set as
+// protected regardless of --age.
+func TestFindActiveHookBeads(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx, cancel := testContext(t)
+	defer cancel()
+
+	hookedTarget := &types.Issue{
+		Title:     "patrol wisp",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+		Ephemeral: true,
+	}
+	if err := store.CreateIssue(ctx, hookedTarget, "test"); err != nil {
+		t.Fatalf("create hooked target: %v", err)
+	}
+
+	staleTarget := &types.Issue{
+		Title:     "target of a stale hook",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+		Ephemeral: true,
+	}
+	if err := store.CreateIssue(ctx, staleTarget, "test"); err != nil {
+		t.Fatalf("create stale target: %v", err)
+	}
+
+	// Agent identity beads are durable (issues table), not ephemeral wisps:
+	// migration 0053 promotes issue_type "rig" rows out of the wisps table
+	// into issues, which is exactly where FindActiveHookBeads's raw
+	// hook_bead query looks.
+	liveAgent := &types.Issue{
+		Title:     "live agent identity",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+	}
+	if err := store.CreateIssue(ctx, liveAgent, "test"); err != nil {
+		t.Fatalf("create live agent: %v", err)
+	}
+
+	closedAgent := &types.Issue{
+		Title:     "retired agent identity",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+	}
+	if err := store.CreateIssue(ctx, closedAgent, "test"); err != nil {
+		t.Fatalf("create closed agent: %v", err)
+	}
+
+	// liveAgent currently has hookedTarget hooked. closedAgent's hook_bead is
+	// stale -- left pointing at staleTarget from before the agent retired.
+	if _, err := store.db.ExecContext(ctx, "UPDATE issues SET hook_bead = ? WHERE id = ?", hookedTarget.ID, liveAgent.ID); err != nil {
+		t.Fatalf("set hook_bead on live agent: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, "UPDATE issues SET hook_bead = ? WHERE id = ?", staleTarget.ID, closedAgent.ID); err != nil {
+		t.Fatalf("set hook_bead on closed agent: %v", err)
+	}
+	if err := store.CloseIssue(ctx, closedAgent.ID, "retired", "test", ""); err != nil {
+		t.Fatalf("close agent: %v", err)
+	}
+
+	hooked, err := store.FindActiveHookBeads(ctx)
+	if err != nil {
+		t.Fatalf("FindActiveHookBeads: %v", err)
+	}
+
+	if !hooked[hookedTarget.ID] {
+		t.Errorf("expected %s (hooked by a live agent) in active hook set, got %v", hookedTarget.ID, hooked)
+	}
+	if hooked[staleTarget.ID] {
+		t.Errorf("did not expect %s (hooked only by a closed agent) in active hook set, got %v", staleTarget.ID, hooked)
+	}
+	if hooked[liveAgent.ID] || hooked[closedAgent.ID] {
+		t.Errorf("agent IDs themselves must never appear in the active hook set, got %v", hooked)
+	}
+}
+
 // TestDeleteWispBatch_CleansUpDependencies verifies that deleteWispBatch
 // removes wisp_dependencies rows where the deleted wisps appear as either
 // issue_id or depends_on_id. This is the regression test for ff-tqm:

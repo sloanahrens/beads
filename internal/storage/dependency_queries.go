@@ -49,6 +49,11 @@ type DependencyQueryStore interface {
 	GetNewlyUnblockedByClose(ctx context.Context, closedIssueID string) ([]*types.Issue, error)
 	DetectCycles(ctx context.Context) ([][]*types.Issue, error)
 	FindWispDependentsRecursive(ctx context.Context, ids []string) (map[string]bool, error)
+	// FindActiveHookBeads returns the set of issue/wisp IDs currently
+	// referenced as hook_bead by a non-closed issue (an agent's identity
+	// bead). Used by wisp GC to protect a hooked wisp regardless of --age,
+	// even when the wisp's own status/updated_at looks abandoned.
+	FindActiveHookBeads(ctx context.Context) (map[string]bool, error)
 
 	// IterAllDependencyRecords streams every dependency edge in the rig as
 	// a flat sequence of *types.Dependency rows. Callers that today walk

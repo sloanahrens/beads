@@ -185,6 +185,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`bd mol wisp gc` no longer deletes a wisp that a live agent currently has
+  hooked** (be-yqp). Hooking a wisp — recorded as `hook_bead` on the hooking
+  agent's own identity bead — does not change the hooked wisp's own status or
+  `updated_at`, so a wisp an agent has been actively using for longer than
+  `--age` looked exactly like an abandoned one and was reclaimed out from
+  under it. GC now reads the set of IDs referenced as `hook_bead` by any
+  non-closed issue and protects every wisp in that set, regardless of age,
+  the same way it already protects blocked and pinned wisps (GH#4394).
+
 - **`bd prime` says when it could NOT read the memory plane**
   ([#5877](https://github.com/gastownhall/beads/issues/5877)). A broken or
   unreachable store made prime omit the memory section entirely, so a session

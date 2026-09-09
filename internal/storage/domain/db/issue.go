@@ -1061,6 +1061,10 @@ func (r *issueSQLRepositoryImpl) FindWispDependentsRecursive(ctx context.Context
 	return issueops.FindWispDependentsRecursiveInTx(ctx, r.runner, ids)
 }
 
+func (r *issueSQLRepositoryImpl) FindActiveHookBeads(ctx context.Context) (map[string]bool, error) {
+	return issueops.FindActiveHookBeadsInTx(ctx, r.runner)
+}
+
 func (r *issueSQLRepositoryImpl) AffectedByDeletion(ctx context.Context, issueIDs, wispIDs []string) ([]string, []string, error) {
 	return issueops.AffectedByDeletionInTx(ctx, r.runner, issueIDs, wispIDs)
 }

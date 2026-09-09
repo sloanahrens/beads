@@ -613,12 +613,14 @@ var wispGCCmd = &cobra.Command{
 A wisp is considered abandoned if:
   - It hasn't been updated in --age duration and is not closed
   - AND it is not live work: blocked steps (waiting on a dependency), pinned
-    beads, and any step whose status category is wip (in_progress, blocked,
-    hooked) or frozen (deferred, pinned) are never reclaimed by age, no matter
-    how long they have been waiting (GH#4394). Custom statuses count by their
+    beads, wisps currently hooked by a live agent (referenced as hook_bead on
+    a non-closed issue, regardless of the wisp's own status), and any step
+    whose status category is wip (in_progress, blocked, hooked) or frozen
+    (deferred, pinned) are never reclaimed by age, no matter how long they
+    have been waiting (GH#4394, be-yqp). Custom statuses count by their
     configured category, so only plain open (active) and closed (done) steps
-    are age-reclaimable. If the blocked set or the custom-status list cannot be
-    read, the GC aborts rather than risk reclaiming live steps.
+    are age-reclaimable. If the blocked set, hooked set, or the custom-status
+    list cannot be read, the GC aborts rather than risk reclaiming live steps.
 
 Abandoned wisps are deleted without creating a digest. Use 'bd mol squash'
 if you want to preserve a summary before garbage collection.
@@ -698,20 +700,27 @@ func protectedWispStatuses(ctx context.Context, r molReader) (map[types.Status]b
 
 // isProtectedWisp reports whether a wisp is live work that age-based GC must
 // never reclaim. A wisp is protected if it is explicitly pinned, if it is
-// blocked on an open dependency (blockedSet, derived from is_blocked), or if
-// its status falls in a protected category. Reclaiming any of these
-// mid-execution destroys active molecules (GH#4394).
+// blocked on an open dependency (blockedSet, derived from is_blocked), if its
+// status falls in a protected category, or if it is currently referenced as
+// hook_bead by a live agent (hookedSet) regardless of its own status —
+// hooking a wisp does not change the wisp's own status, so a wisp an agent
+// is actively using can otherwise look idle by updated_at (be-yqp).
+// Reclaiming any of these mid-execution destroys active molecules or agent
+// state (GH#4394, be-yqp).
 //
 // Named isProtectedWisp rather than isActiveWisp to avoid confusion with
 // (*DoltStore).isActiveWisp in internal/storage/dolt, which is in this same
 // delete path but means only "a row for this ID exists in the wisps table".
-func isProtectedWisp(issue *types.Issue, blockedSet map[string]bool, protectedStatuses map[types.Status]bool) bool {
+func isProtectedWisp(issue *types.Issue, blockedSet, hookedSet map[string]bool, protectedStatuses map[types.Status]bool) bool {
 	// The pinned flag is independent of the pinned status; the closed-purge
 	// branch of this same command already honors it (see runWispPurgeClosed).
 	if issue.Pinned {
 		return true
 	}
 	if blockedSet[issue.ID] {
+		return true
+	}
+	if hookedSet[issue.ID] {
 		return true
 	}
 	return protectedStatuses[issue.Status]
@@ -842,6 +851,15 @@ func findAbandonedWisps(ctx context.Context, r molReader, cleanAll bool, ageThre
 		blockedSet[b.ID] = true
 	}
 
+	// hookedSet protects a wisp any live agent currently has hooked,
+	// regardless of --age: hooking a wisp does not update its own
+	// status/updated_at, so an active hook can otherwise look abandoned
+	// (be-yqp).
+	hookedSet, err := r.FindActiveHookBeads(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("determining hooked wisps for age GC: %w", err)
+	}
+
 	protectedStatuses, err := protectedWispStatuses(ctx, r)
 	if err != nil {
 		return nil, err
@@ -856,7 +874,7 @@ func findAbandonedWisps(ctx context.Context, r molReader, cleanAll bool, ageThre
 		if issue.Status == types.StatusClosed && !cleanAll {
 			continue
 		}
-		if isProtectedWisp(issue, blockedSet, protectedStatuses) {
+		if isProtectedWisp(issue, blockedSet, hookedSet, protectedStatuses) {
 			continue
 		}
 		if now.Sub(issue.UpdatedAt) > ageThreshold {
@@ -891,7 +909,7 @@ func findAbandonedWisps(ctx context.Context, r molReader, cleanAll bool, ageThre
 				if r.IsInfraTypeCtx(ctx, child.IssueType) {
 					continue
 				}
-				if isProtectedWisp(child, blockedSet, protectedStatuses) {
+				if isProtectedWisp(child, blockedSet, hookedSet, protectedStatuses) {
 					continue
 				}
 				abandoned = append(abandoned, child)

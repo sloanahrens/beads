@@ -410,6 +410,34 @@ func FindWispDependentsRecursiveInTx(ctx context.Context, tx DBTX, ids []string)
 	return discovered, nil
 }
 
+// FindActiveHookBeadsInTx returns the set of issue/wisp IDs currently
+// referenced by hook_bead on a non-closed issue row. hook_bead marks what an
+// agent's identity bead (issue_type "rig") currently has hooked, independent
+// of the target's own status: a hooked wisp can look idle by updated_at
+// while still being actively worked (be-yqp), so age-based wisp GC must
+// treat this set as protected regardless of --age.
+func FindActiveHookBeadsInTx(ctx context.Context, tx DBTX) (map[string]bool, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT DISTINCT hook_bead FROM issues WHERE hook_bead <> '' AND status <> 'closed'`)
+	if err != nil {
+		return nil, fmt.Errorf("query active hook beads: %w", err)
+	}
+	defer rows.Close()
+
+	hooked := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan hook_bead: %w", err)
+		}
+		hooked[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active hook beads: %w", err)
+	}
+	return hooked, nil
+}
+
 // GetRepoMtimeInTx returns the cached mtime (nanoseconds) for a repo path.
 // Returns 0 if no cache entry exists.
 func GetRepoMtimeInTx(ctx context.Context, tx *sql.Tx, repoPath string) (int64, error) {

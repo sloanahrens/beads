@@ -1064,6 +1064,16 @@ func (s *EmbeddedDoltStore) FindWispDependentsRecursive(ctx context.Context, ids
 	return result, err
 }
 
+func (s *EmbeddedDoltStore) FindActiveHookBeads(ctx context.Context) (map[string]bool, error) {
+	var result map[string]bool
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.FindActiveHookBeadsInTx(ctx, tx)
+		return err
+	})
+	return result, err
+}
+
 // ---------------------------------------------------------------------------
 // storage.AnnotationQueryStore
 // ---------------------------------------------------------------------------

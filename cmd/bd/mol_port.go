@@ -34,6 +34,10 @@ type molReader interface {
 	GetMoleculeProgress(ctx context.Context, moleculeID string) (*types.MoleculeProgressStats, error)
 	GetMoleculeLastActivity(ctx context.Context, moleculeID string) (*types.MoleculeLastActivity, error)
 	FindWispDependentsRecursive(ctx context.Context, ids []string) (map[string]bool, error)
+	// FindActiveHookBeads returns the set of issue/wisp IDs currently
+	// referenced as hook_bead by a non-closed issue (an agent's identity
+	// bead), so wisp GC can protect a hooked wisp regardless of --age (be-yqp).
+	FindActiveHookBeads(ctx context.Context) (map[string]bool, error)
 }
 
 var _ molReader = storage.DoltStorage(nil)
@@ -354,6 +358,10 @@ func (r uowMolReader) GetMoleculeLastActivity(ctx context.Context, moleculeID st
 
 func (r uowMolReader) FindWispDependentsRecursive(ctx context.Context, ids []string) (map[string]bool, error) {
 	return r.uw.IssueUseCase().FindWispDependentsRecursive(ctx, ids)
+}
+
+func (r uowMolReader) FindActiveHookBeads(ctx context.Context) (map[string]bool, error) {
+	return r.uw.IssueUseCase().FindActiveHookBeads(ctx)
 }
 
 type uowMolWriter struct {

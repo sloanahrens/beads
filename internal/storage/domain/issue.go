@@ -80,6 +80,10 @@ type IssueSQLRepository interface {
 	PartitionWispIDs(ctx context.Context, ids []string) (wispIDs, regularIDs []string, err error)
 	FindAllDependents(ctx context.Context, ids []string) ([]string, error)
 	FindWispDependentsRecursive(ctx context.Context, ids []string) (map[string]bool, error)
+	// FindActiveHookBeads returns the set of issue/wisp IDs currently
+	// referenced as hook_bead by a non-closed issue (an agent's identity
+	// bead), so wisp GC can protect a hooked wisp regardless of --age.
+	FindActiveHookBeads(ctx context.Context) (map[string]bool, error)
 	AffectedByDeletion(ctx context.Context, issueIDs, wispIDs []string) (affectedIssues, affectedWisps []string, err error)
 	RecomputeIsBlocked(ctx context.Context, issueIDs, wispIDs []string) error
 	Close(ctx context.Context, id string, params CloseRowParams, actor string, opts IssueTableOpts) (CloseRowResult, error)
@@ -301,6 +305,7 @@ type IssueUseCase interface {
 	GetIssue(ctx context.Context, id string) (*types.Issue, error)
 	GetIssuesByIDs(ctx context.Context, ids []string) ([]*types.Issue, error)
 	FindWispDependentsRecursive(ctx context.Context, ids []string) (map[string]bool, error)
+	FindActiveHookBeads(ctx context.Context) (map[string]bool, error)
 	SearchIssues(ctx context.Context, query string, filter types.IssueFilter) (SearchPage, error)
 	SearchIssuesWithCounts(ctx context.Context, query string, filter types.IssueFilter) (SearchCountsPage, error)
 	SearchIssueIDs(ctx context.Context, query string, filter types.IssueFilter) ([]string, error)
@@ -459,6 +464,10 @@ func (u *issueUseCaseImpl) GetIssuesByIDs(ctx context.Context, ids []string) ([]
 
 func (u *issueUseCaseImpl) FindWispDependentsRecursive(ctx context.Context, ids []string) (map[string]bool, error) {
 	return u.issueRepo.FindWispDependentsRecursive(ctx, ids)
+}
+
+func (u *issueUseCaseImpl) FindActiveHookBeads(ctx context.Context) (map[string]bool, error) {
+	return u.issueRepo.FindActiveHookBeads(ctx)
 }
 
 func (u *issueUseCaseImpl) GetWispsByIDs(ctx context.Context, ids []string) ([]*types.Issue, error) {
