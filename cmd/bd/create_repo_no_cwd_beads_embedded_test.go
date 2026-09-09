@@ -86,4 +86,50 @@ func TestEmbeddedCreateRepoFromNonBeadsCwd(t *testing.T) {
 			t.Errorf("expected no directory to be created at %s, but one exists", guessedTarget)
 		}
 	})
+
+	// be-dxx: an --repo target whose .beads dir has ONLY a redirect file (no
+	// local metadata.json) is a fully valid, already-initialized workspace —
+	// this is exactly what a Gas Town rig root looks like. Before the fix,
+	// the target-existence check looked for metadata.json at the literal
+	// joined path without following the redirect, saw "nothing there", and
+	// (for an unambiguous absolute --repo path, which be-6mk's relative-path
+	// guard does not cover) auto-vivified a brand-new phantom embedded Dolt
+	// DB right next to the redirect — bricking the real rig's writes with a
+	// PROJECT IDENTITY MISMATCH on the next ordinary command run from it.
+	t.Run("repo_flag_follows_redirect_instead_of_auto_vivifying_sibling", func(t *testing.T) {
+		// The real workspace the redirect ultimately points at.
+		_, realBeadsDir, _ := bdInit(t, bd, "--prefix", "rd")
+
+		// A separate rig root whose .beads/ contains only a redirect to the
+		// real workspace above — no local metadata.json, matching a healthy
+		// redirected Gas Town rig (e.g. gastown/.beads -> mayor/rig/.beads).
+		rigRoot := t.TempDir()
+		rigBeadsDir := filepath.Join(rigRoot, ".beads")
+		if err := os.MkdirAll(rigBeadsDir, 0o750); err != nil {
+			t.Fatalf("mkdir rig .beads: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(rigBeadsDir, "redirect"), []byte(realBeadsDir+"\n"), 0o600); err != nil {
+			t.Fatalf("write redirect: %v", err)
+		}
+
+		noBeadsCwd := t.TempDir()
+
+		issue := bdCreate(t, bd, noBeadsCwd, "Routed through redirect", "--repo", rigRoot)
+		if !strings.HasPrefix(issue.ID, "rd-") {
+			t.Errorf("ID should have real repo's prefix rd-, got %q", issue.ID)
+		}
+
+		// The issue must land in the REAL store, reached via the redirect.
+		assertIssueInStore(t, realBeadsDir, "rd", issue.ID)
+
+		// No phantom metadata.json or embedded DB may appear next to the
+		// redirect — that would mean a sibling database was auto-vivified
+		// instead of the redirect being followed.
+		if _, err := os.Stat(filepath.Join(rigBeadsDir, "metadata.json")); err == nil {
+			t.Errorf("expected no metadata.json to be created at %s (redirect should have been followed)", rigBeadsDir)
+		}
+		if _, err := os.Stat(filepath.Join(rigBeadsDir, "embeddeddolt")); err == nil {
+			t.Errorf("expected no embeddeddolt/ to be created at %s (redirect should have been followed)", rigBeadsDir)
+		}
+	})
 }

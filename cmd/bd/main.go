@@ -1285,7 +1285,18 @@ var rootCmd = &cobra.Command{
 						if remotecache.IsRemoteURL(repoVal) {
 							return nil
 						}
-						targetBeadsDir := filepath.Join(routing.ExpandPath(repoVal), ".beads")
+						// be-dxx: follow an existing redirect before deciding
+						// whether a workspace already exists at the target.
+						// A .beads dir carrying only a redirect file (no
+						// local metadata.json) is a fully valid,
+						// already-initialized workspace — checking for
+						// metadata.json at the literal joined path alone
+						// misses this and would treat a properly redirected
+						// rig as "no workspace found", either refusing a
+						// legitimate absolute target below or (pre-be-6mk)
+						// letting the store-open auto-vivify a phantom
+						// sibling database right next to the redirect.
+						targetBeadsDir := beads.FollowRedirect(filepath.Join(routing.ExpandPath(repoVal), ".beads"))
 
 						// be-6mk: an ambiguous (relative/bare) --repo value with
 						// no existing workspace at the target must not reach the

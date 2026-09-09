@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/debug"
@@ -433,12 +434,11 @@ var createCmd = &cobra.Command{
 				// allowed to auto-vivify as before; only an explicit --repo
 				// flag value can be ambiguous.
 				allowCreate := !isAmbiguousRepoTarget(cmd.Flags().Changed("repo"), repoOverride)
-				if err := ensureBeadsDirForPath(rootCtx, targetBeadsDir, store, allowCreate); err != nil {
+				targetBeadsDirPath, err := ensureBeadsDirForPath(rootCtx, targetBeadsDir, store, allowCreate)
+				if err != nil {
 					return HandleError("failed to initialize target repo: %v", err)
 				}
 
-				targetBeadsDirPath := filepath.Join(targetBeadsDir, ".beads")
-				var err error
 				targetStore, err = newDoltStoreFromConfig(rootCtx, targetBeadsDirPath)
 				if err != nil {
 					return HandleError("failed to open target store: %v", err)
@@ -981,7 +981,7 @@ func openDryRunTargetStore(ctx context.Context, repoPath string) (storage.DoltSt
 	}
 
 	targetPath := routing.ExpandPath(repoPath)
-	beadsDir := filepath.Join(targetPath, ".beads")
+	beadsDir := beads.FollowRedirect(filepath.Join(targetPath, ".beads"))
 	metadataPath := filepath.Join(beadsDir, "metadata.json")
 	if _, err := os.Stat(metadataPath); err != nil {
 		if os.IsNotExist(err) {
@@ -1007,29 +1007,39 @@ func isAmbiguousRepoTarget(repoFlagChanged bool, repoOverride string) bool {
 	return repoFlagChanged && !filepath.IsAbs(repoOverride) && !strings.HasPrefix(repoOverride, "~/")
 }
 
-// ensureBeadsDirForPath ensures a beads directory exists at the target path.
-// If the .beads directory doesn't exist, it creates it and initializes with
-// the same prefix as the source store (T010, T012: prefix inheritance).
+// ensureBeadsDirForPath ensures a beads directory exists at the target path,
+// returning the .beads directory that callers should actually open. If the
+// .beads directory doesn't exist, it creates it and initializes with the
+// same prefix as the source store (T010, T012: prefix inheritance).
 //
 // When allowCreate is false, a target with no existing workspace is refused
 // instead of fabricated — see isAmbiguousRepoTarget.
-func ensureBeadsDirForPath(ctx context.Context, targetPath string, sourceStore storage.DoltStorage, allowCreate bool) error {
+func ensureBeadsDirForPath(ctx context.Context, targetPath string, sourceStore storage.DoltStorage, allowCreate bool) (string, error) {
 	beadsDir := filepath.Join(targetPath, ".beads")
-	metadataPath := filepath.Join(beadsDir, "metadata.json")
+
+	// Follow an existing redirect before deciding whether a workspace
+	// already exists here. A .beads dir carrying only a redirect file (no
+	// local metadata.json) is a fully valid, already-initialized
+	// workspace — checking for metadata.json at the literal path alone
+	// misses this and would otherwise auto-vivify a phantom sibling
+	// database right next to the redirect, bricking the redirected rig's
+	// writes with a PROJECT IDENTITY MISMATCH on the next open (be-dxx).
+	resolvedBeadsDir := beads.FollowRedirect(beadsDir)
+	metadataPath := filepath.Join(resolvedBeadsDir, "metadata.json")
 
 	// Check if beads directory already exists with a Dolt database.
 	// metadata.json is the canonical marker for an initialized beads dir.
 	if _, err := os.Stat(metadataPath); err == nil {
-		return nil
+		return resolvedBeadsDir, nil
 	}
 
 	if !allowCreate {
-		return fmt.Errorf("no beads workspace found at %s and --repo's value is a relative/bare path, so it won't be auto-created here (this is likely not the target you intended). Pass an absolute or \"~/\"-prefixed --repo path to an existing workspace instead", targetPath)
+		return "", fmt.Errorf("no beads workspace found at %s and --repo's value is a relative/bare path, so it won't be auto-created here (this is likely not the target you intended). Pass an absolute or \"~/\"-prefixed --repo path to an existing workspace instead", targetPath)
 	}
 
 	// Create .beads directory
 	if err := os.MkdirAll(beadsDir, 0750); err != nil {
-		return fmt.Errorf("cannot create .beads directory: %w", err)
+		return "", fmt.Errorf("cannot create .beads directory: %w", err)
 	}
 
 	// Initialize database via NewFromConfigWithOptions to respect Dolt config.
@@ -1049,14 +1059,14 @@ func ensureBeadsDirForPath(ctx context.Context, targetPath string, sourceStore s
 				CreateIfMissing: true,
 			})
 			if err != nil {
-				return fmt.Errorf("failed to initialize target database: %w", err)
+				return "", fmt.Errorf("failed to initialize target database: %w", err)
 			}
 			if err := tempStore.SetConfig(ctx, "issue_prefix", sourcePrefix); err != nil {
 				_ = tempStore.Close() // Best effort cleanup on error path
-				return fmt.Errorf("failed to set prefix in target store: %w", err)
+				return "", fmt.Errorf("failed to set prefix in target store: %w", err)
 			}
 			if err := tempStore.Close(); err != nil {
-				return fmt.Errorf("failed to close target store: %w", err)
+				return "", fmt.Errorf("failed to close target store: %w", err)
 			}
 
 			// Write metadata.json so newDoltStoreFromConfig can find the
@@ -1067,10 +1077,10 @@ func ensureBeadsDirForPath(ctx context.Context, targetPath string, sourceStore s
 			cfg.DoltMode = configfile.DoltModeEmbedded
 			cfg.ProjectID = configfile.GenerateProjectID()
 			if err := cfg.Save(beadsDir); err != nil {
-				return fmt.Errorf("failed to write metadata.json: %w", err)
+				return "", fmt.Errorf("failed to write metadata.json: %w", err)
 			}
 		}
 	}
 
-	return nil
+	return beadsDir, nil
 }
