@@ -84,12 +84,19 @@ func TestNewServerMode_AuthoritativePortSource_RetargetedPort_FailsClosed(t *tes
 // authoritative PortSource, not just env, to guard against a future source
 // being added to the authoritative set without updating IsAuthoritative (or
 // vice versa).
+//
+// PortSourceCallerExplicit is included because it is the source `bd init
+// --server-port N` stamps (cmd/bd/init.go): the exact case reported in
+// be-tlm, where an unreachable explicit --server-port must never let
+// auto-start silently retarget the write onto a different (potentially
+// production) server.
 func TestNewServerMode_AllAuthoritativeSources_FailClosed(t *testing.T) {
 	sources := []doltserver.PortSource{
 		doltserver.PortSourceEnv,
 		doltserver.PortSourceDoltConfigYaml,
 		doltserver.PortSourceConfigYaml,
 		doltserver.PortSourceMetadataJSON,
+		doltserver.PortSourceCallerExplicit,
 	}
 	for _, src := range sources {
 		src := src
