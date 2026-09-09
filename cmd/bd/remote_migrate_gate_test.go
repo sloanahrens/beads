@@ -166,3 +166,61 @@ func TestHandleRemoteMigrateGateJSON_FallbackReason(t *testing.T) {
 		}
 	})
 }
+
+// TestHandleRemoteMigrateGateJSON_ServerNoRemote covers be-9yi: a server-mode
+// database with no Dolt remote configured gets its own "decision" (not the
+// generic adopt-or-migrate default text, which wrongly implies a remote to
+// adopt from) and its options list must not offer "adopt" — there is nothing
+// to re-clone from.
+func TestHandleRemoteMigrateGateJSON_ServerNoRemote(t *testing.T) {
+	gate := &schema.RemoteMigrateGateError{
+		CurrentVersion: 53, LatestVersion: 58, Pending: 5,
+		Decision: "server-no-remote",
+	}
+
+	origStderr := os.Stderr
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = origStderr }()
+	handleRemoteMigrateGateJSON(gate)
+	_ = w.Close()
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Close()
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("json.Unmarshal stderr: %v\nstderr was: %s", err, buf.String())
+	}
+	obj, ok := parsed["remote_migrate_gate"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("remote_migrate_gate key missing or wrong type: %T", parsed["remote_migrate_gate"])
+	}
+
+	if got, ok := obj["decision"].(string); !ok || got != "server-no-remote" {
+		t.Errorf("decision = %v, want %q", obj["decision"], "server-no-remote")
+	}
+	if _, ok := obj["fallback_reason"]; ok {
+		t.Errorf("server-no-remote decision must not carry fallback_reason, got %v", obj["fallback_reason"])
+	}
+
+	opts, ok := obj["options"].([]interface{})
+	if !ok {
+		t.Fatalf("options key missing or wrong type: %T", obj["options"])
+	}
+	for _, o := range opts {
+		opt, ok := o.(map[string]interface{})
+		if !ok {
+			t.Fatalf("option entry wrong type: %T", o)
+		}
+		if opt["id"] == "adopt" {
+			t.Errorf("options must not offer adopt with no remote to clone from: %v", opt)
+		}
+	}
+}

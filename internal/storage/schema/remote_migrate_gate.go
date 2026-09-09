@@ -90,6 +90,20 @@ const (
 	// working set — adopting is loss-free, unlike a plain adopt.
 	gateDecisionAdoptFastForward = "adopt-ff"
 	gateDecisionForkSkew         = "fork-skew"
+	// gateDecisionServerNoRemote (be-9yi): a non-embedded (server-mode) store
+	// with pending migrations and NO configured Dolt remote at all. The blunt
+	// #4515 gate historically only fired when a remote was configured, on the
+	// theory that no remote means no cross-clone fork risk. That theory does
+	// not hold for a server-mode database: a dolt sql-server can be shared by
+	// several bd clients (or a whole town of agents, as with Gas Town's `hq`)
+	// with no Dolt remote in sight, and a newer/fork-built binary auto-
+	// migrating it out from under the others is exactly as destructive as
+	// forking a remote-backed clone — it just breaks concurrent readers
+	// instead of `bd dolt pull`. There is nothing to route the smart gate
+	// against (no cached remote-tracking ref to compare) and nothing to adopt
+	// via `bd bootstrap` (no remote to re-clone from), so this decision skips
+	// smart-gate routing entirely and gets its own blunt, accurate message.
+	gateDecisionServerNoRemote = "server-no-remote"
 )
 
 // fallbackReason* enumerates why the smart gate (#4516) fell back to the
@@ -128,6 +142,9 @@ func (e *RemoteMigrateGateError) Error() string {
 	case gateDecisionForkSkew:
 		return fmt.Sprintf("refusing to migrate a remote-backed database (v%d -> v%d): this clone and the remote applied different content for migration(s) %s — the schema has already forked (#4259)",
 			e.CurrentVersion, e.LatestVersion, FormatMigrationVersions(e.SkewVersions))
+	case gateDecisionServerNoRemote:
+		return fmt.Sprintf("refusing to auto-apply %d pending schema %s to a server-mode database (v%d -> v%d): other bd clients may depend on its current schema even though no Dolt remote is configured",
+			e.Pending, unit, e.CurrentVersion, e.LatestVersion)
 	default:
 		return fmt.Sprintf("refusing to auto-apply %d pending schema %s to a remote-backed database (v%d -> v%d): migrating clones independently forks the schema (#4259)",
 			e.Pending, unit, e.CurrentVersion, e.LatestVersion)
@@ -210,6 +227,20 @@ func (e *RemoteMigrateGateError) userBody() string {
 			"      unpushed work on the discarded clones is LOST. Export it first\n" +
 			"      (`bd export --all -o backup.jsonl`) if you need it.\n" +
 			"        bd bootstrap\n"
+	case gateDecisionServerNoRemote:
+		return "\n" +
+			"  This is a server-mode (non-embedded) database with no Dolt remote configured.\n" +
+			"  Other bd clients connected to the same server may depend on its current\n" +
+			"  schema; migrating it out from under them is silent and can break every other\n" +
+			"  client until it upgrades too.\n" +
+			"\n" +
+			"  Choose one:\n" +
+			"    • You are the designated migrator (coordinate with any other clients first):\n" +
+			"        bd migrate --force\n" +
+			"        (or " + AllowRemoteMigrateEnv + "=1 bd migrate in scripted/CI use)\n" +
+			"    • You did not intend to migrate this database: point this bd invocation at a\n" +
+			"      different database, or use a bd binary that matches its current schema\n" +
+			"      version (v" + fmt.Sprintf("%d", e.CurrentVersion) + ").\n"
 	default:
 		return "\n" +
 			"  This database syncs with a remote. Applying schema migrations on more than\n" +
@@ -266,6 +297,10 @@ func (e *RemoteMigrateGateError) AgentDirective() string {
 			FormatMigrationVersions(e.SkewVersions) + " — the schema has forked (#4259) and migrating cannot un-fork it. " +
 			"Resolving requires picking a canonical clone and re-bootstrapping the others, discarding their unpushed " +
 			"work — a data-loss decision. Surface remote_migrate_gate.options to the operator; do NOT auto-run anything."
+	case gateDecisionServerNoRemote:
+		return "Coordination decision required: this is a server-mode database with no Dolt remote configured, but " +
+			"other bd clients connected to the same server may depend on its current schema. Do NOT auto-run a " +
+			"migration — surface remote_migrate_gate.options to the operator and let them choose."
 	default:
 		return "Coordination decision required: only ONE clone may migrate a shared remote; " +
 			"a second clone migrating independently forks the schema unrecoverably (#4259). " +
@@ -318,6 +353,15 @@ func (e *RemoteMigrateGateError) Options() []GateOption {
 			Commands: []string{"bd export --all -o backup.jsonl", "bd bootstrap"},
 			Risk:     "re-bootstrapping the non-canonical clones discards their unpushed work; export it first",
 		}}
+	case gateDecisionServerNoRemote:
+		// No remote configured at all: adopt (re-clone from a remote) is not a
+		// valid path — there is nothing to clone from.
+		return []GateOption{{
+			ID:       "migrate",
+			When:     "you are the designated migrator (coordinate with any other clients of this server first)",
+			Commands: []string{"bd migrate --force"},
+			Risk:     "other bd clients connected to this server may depend on its current schema until they upgrade too",
+		}}
 	default:
 		return []GateOption{
 			{
@@ -346,7 +390,7 @@ func IsRemoteMigrateGateError(err error) bool {
 // store open. Embedded mode uses this form: its dolt_remotes table already
 // reflects remotes persisted in .dolt/config on a fresh open.
 func CheckRemoteMigrateGate(ctx context.Context, db DBConn) error {
-	return checkRemoteMigrateGate(ctx, db, "", nil, nil)
+	return checkRemoteMigrateGate(ctx, db, "", nil, nil, false)
 }
 
 // CheckRemoteMigrateGateWithAdopt is CheckRemoteMigrateGate plus the injected
@@ -357,7 +401,7 @@ func CheckRemoteMigrateGate(ctx context.Context, db DBConn) error {
 // behaves exactly as CheckRemoteMigrateGate. Embedded mode uses this form
 // alongside CheckRemoteMigrateGate's no-remote-name default.
 func CheckRemoteMigrateGateWithAdopt(ctx context.Context, db DBConn, adopt *FastForwardAdopter) error {
-	return checkRemoteMigrateGate(ctx, db, "", nil, adopt)
+	return checkRemoteMigrateGate(ctx, db, "", nil, adopt, false)
 }
 
 // CheckRemoteMigrateGateWithRemoteCheck is CheckRemoteMigrateGate plus an on-disk
@@ -376,7 +420,7 @@ func CheckRemoteMigrateGateWithAdopt(ctx context.Context, db DBConn, adopt *Fast
 // SQL table shows no remote, so the (subprocess-backed) filesystem probe stays off
 // the common open path. A nil extraHasRemote disables the fallback.
 func CheckRemoteMigrateGateWithRemoteCheck(ctx context.Context, db DBConn, extraHasRemote func() bool) error {
-	return checkRemoteMigrateGate(ctx, db, "", extraHasRemote, nil)
+	return checkRemoteMigrateGate(ctx, db, "", extraHasRemote, nil, false)
 }
 
 // CheckRemoteMigrateGateForRemoteWithRemoteCheck is CheckRemoteMigrateGate plus
@@ -384,7 +428,7 @@ func CheckRemoteMigrateGateWithRemoteCheck(ctx context.Context, db DBConn, extra
 // The blunt gate still trips when any Dolt remote exists; the remote name only
 // chooses which remote-tracking ref the opt-in smart router compares against.
 func CheckRemoteMigrateGateForRemoteWithRemoteCheck(ctx context.Context, db DBConn, remoteName string, extraHasRemote func() bool) error {
-	return checkRemoteMigrateGate(ctx, db, remoteName, extraHasRemote, nil)
+	return checkRemoteMigrateGate(ctx, db, remoteName, extraHasRemote, nil, false)
 }
 
 // CheckRemoteMigrateGateForRemoteWithRemoteCheckAndAdopt is
@@ -393,10 +437,34 @@ func CheckRemoteMigrateGateForRemoteWithRemoteCheck(ctx context.Context, db DBCo
 // CheckRemoteMigrateGateWithAdopt. Server mode uses this form: it already has
 // both a configured sync remote and the on-disk remote-check fallback.
 func CheckRemoteMigrateGateForRemoteWithRemoteCheckAndAdopt(ctx context.Context, db DBConn, remoteName string, extraHasRemote func() bool, adopt *FastForwardAdopter) error {
-	return checkRemoteMigrateGate(ctx, db, remoteName, extraHasRemote, adopt)
+	return checkRemoteMigrateGate(ctx, db, remoteName, extraHasRemote, adopt, false)
 }
 
-func checkRemoteMigrateGate(ctx context.Context, db DBConn, remoteName string, extraHasRemote func() bool, adopt *FastForwardAdopter) error {
+// CheckRemoteMigrateGateForServer is CheckRemoteMigrateGateForRemoteWithRemoteCheckAndAdopt
+// but for a non-embedded (server-mode) store: pending migrations are gated
+// even when the database has NO configured Dolt remote at all (be-9yi).
+//
+// A dolt sql-server can be shared by several bd clients — or, in Gas Town's
+// case, a whole town of agents connecting to a single `hq` server — with no
+// Dolt remote in sight. The blunt #4515 gate's "no remote means no fork risk"
+// exemption assumes a database only ever has one reader/writer at a time,
+// which does not hold for a live server: a fork-built or newer binary
+// auto-migrating it out from under every other connected client is exactly as
+// destructive as forking a remote-backed clone, it just breaks concurrent
+// callers instead of `bd dolt pull` (the 2026-09-09 incident that migrated
+// the town's hq database v53->v58 mid-test-run had no remote configured at
+// all). Server mode must call this instead of
+// CheckRemoteMigrateGateForRemoteWithRemoteCheckAndAdopt.
+func CheckRemoteMigrateGateForServer(ctx context.Context, db DBConn, remoteName string, extraHasRemote func() bool, adopt *FastForwardAdopter) error {
+	return checkRemoteMigrateGate(ctx, db, remoteName, extraHasRemote, adopt, true)
+}
+
+// checkRemoteMigrateGate implements every CheckRemoteMigrateGate* variant.
+// nonEmbedded, when true, disables the "no remote configured" exemption: a
+// non-embedded (server-mode) store is gated even without a remote (be-9yi;
+// see CheckRemoteMigrateGateForServer). It is false for every embedded-mode
+// and generic entry point above, which are unaffected by this change.
+func checkRemoteMigrateGate(ctx context.Context, db DBConn, remoteName string, extraHasRemote func() bool, adopt *FastForwardAdopter, nonEmbedded bool) error {
 	// CurrentVersion treats a missing schema_migrations table as version 0, so a
 	// brand-new database falls through the current==0 check below — nothing to fork.
 	current, err := CurrentVersion(ctx, db)
@@ -425,8 +493,8 @@ func checkRemoteMigrateGate(ctx context.Context, db DBConn, remoteName string, e
 	if !hasRemote && extraHasRemote != nil {
 		hasRemote = extraHasRemote()
 	}
-	if !hasRemote {
-		return nil // no remote — no cross-clone fork risk
+	if !hasRemote && !nonEmbedded {
+		return nil // embedded, no remote — no cross-clone fork risk
 	}
 
 	// Programmatic override — set by `bd migrate --force` / `bd migrate schema
@@ -462,6 +530,21 @@ func checkRemoteMigrateGate(ctx context.Context, db DBConn, remoteName string, e
 	}
 
 	latest := LatestVersion()
+
+	// nonEmbedded with no remote at all (be-9yi): there is no remote-tracking
+	// ref for the smart gate to compare against and no remote to `bd
+	// bootstrap` adopt from, so skip smart-gate routing entirely and give the
+	// operator the accurate server-mode message instead of the misleading
+	// "remote-backed database" / adopt-via-re-clone guidance below.
+	if !hasRemote {
+		return &RemoteMigrateGateError{
+			CurrentVersion:  current,
+			LatestVersion:   latest,
+			Pending:         len(pending),
+			UnrecognizedEnv: unrecognizedEnv,
+			Decision:        gateDecisionServerNoRemote,
+		}
+	}
 
 	// Smart gate (#4516): on by default, BD_SMART_GATE=0 opts out. Once the
 	// blunt gate would fire and the designated-migrator escape hatch is not

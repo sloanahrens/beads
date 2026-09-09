@@ -2693,6 +2693,10 @@ func (s *DoltStore) initSchema(ctx context.Context, bootstrapHeal *schema.FreshB
 	defer migDB.Close()
 	// #4259: refuse to silently apply pending migrations to a remote-backed,
 	// already-initialized database — that is how two clones fork the schema.
+	// be-9yi: this store is always non-embedded (server mode), so the gate
+	// also refuses when NO remote is configured at all — a shared dolt
+	// sql-server can have other connected bd clients depending on its current
+	// schema regardless of Dolt remote status (CheckRemoteMigrateGateForServer).
 	// The gate runs inside the retry loop, before each migration attempt: its
 	// reads can hit transient startup/catalog races (retryable) while a gate
 	// refusal is permanent and never retried into a migration.
@@ -2727,7 +2731,7 @@ func (s *DoltStore) initSchema(ctx context.Context, bootstrapHeal *schema.FreshB
 		ReadOnly: s.readOnly,
 	}
 	gate := func(ctx context.Context, db *sql.DB) error {
-		return schema.CheckRemoteMigrateGateForRemoteWithRemoteCheckAndAdopt(ctx, db, s.remote, s.hasPersistedCLIRemote, adopt)
+		return schema.CheckRemoteMigrateGateForServer(ctx, db, s.remote, s.hasPersistedCLIRemote, adopt)
 	}
 	applied, err := initSchemaOnDBWithRetryAndGateBootstrapHeal(ctx, migDB, gate, bootstrapHeal, s.serverEndpoint)
 	return applied, err

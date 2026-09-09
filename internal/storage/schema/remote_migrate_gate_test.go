@@ -276,6 +276,134 @@ func TestCheckRemoteMigrateGateWithRemoteCheck(t *testing.T) {
 	})
 }
 
+// TestCheckRemoteMigrateGateForServer covers be-9yi: a non-embedded
+// (server-mode) store must refuse pending migrations even when NO Dolt
+// remote is configured at all — the incident scenario (Gas Town's `hq`
+// server has no remote, but a fork-built bd auto-migrated it anyway because
+// the blunt gate's "no remote -> no risk" exemption did not distinguish
+// server mode from embedded mode).
+func TestCheckRemoteMigrateGateForServer(t *testing.T) {
+	// Blunt-gate coverage; the server-no-remote path never reaches the smart
+	// router (nothing to compare against with no remote), but pin it off
+	// anyway so a regression that accidentally routes through it fails loud
+	// instead of hitting unmocked queries.
+	t.Setenv(SmartGateEnv, "0")
+	latest := LatestVersion()
+
+	t.Run("no remote at all is blocked, unlike the embedded/generic entry points", func(t *testing.T) {
+		t.Setenv(AllowRemoteMigrateEnv, "0")
+		db, mock, _ := sqlmock.New()
+		defer db.Close()
+		expectGateCurrentVersion(mock, 1) // CurrentVersion
+		expectGateCurrentVersion(mock, 1) // PendingVersions -> pending exists
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM dolt_remotes`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+		err := CheckRemoteMigrateGateForServer(context.Background(), db, "", func() bool { return false }, nil)
+		var gateErr *RemoteMigrateGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected *RemoteMigrateGateError for a server-mode store with no remote, got %v", err)
+		}
+		if gateErr.Decision != gateDecisionServerNoRemote {
+			t.Errorf("Decision = %q, want %q", gateErr.Decision, gateDecisionServerNoRemote)
+		}
+		if gateErr.CurrentVersion != 1 {
+			t.Errorf("CurrentVersion = %d, want 1", gateErr.CurrentVersion)
+		}
+		if gateErr.LatestVersion != latest {
+			t.Errorf("LatestVersion = %d, want %d", gateErr.LatestVersion, latest)
+		}
+		msg := gateErr.UserMessage()
+		if strings.Contains(msg, "bd bootstrap") {
+			t.Errorf("UserMessage must not suggest `bd bootstrap` (re-clone) with no remote to clone from:\n%s", msg)
+		}
+		if !strings.Contains(msg, "BD_ALLOW_REMOTE_MIGRATE") && !strings.Contains(msg, "bd migrate --force") {
+			t.Errorf("UserMessage must point at the migrate escape hatch:\n%s", msg)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("escape hatch env var still allows migration with no remote", func(t *testing.T) {
+		t.Setenv(AllowRemoteMigrateEnv, "1")
+		db, mock, _ := sqlmock.New()
+		defer db.Close()
+		expectGateCurrentVersion(mock, 1)
+		expectGateCurrentVersion(mock, 1)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM dolt_remotes`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+		if err := CheckRemoteMigrateGateForServer(context.Background(), db, "", func() bool { return false }, nil); err != nil {
+			t.Fatalf("%s=1 should unlock a server-mode store with no remote, got %v", AllowRemoteMigrateEnv, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("programmatic override still allows migration with no remote", func(t *testing.T) {
+		t.Setenv(AllowRemoteMigrateEnv, "0")
+		SetForceAllowRemoteMigrate(true)
+		defer SetForceAllowRemoteMigrate(false)
+		db, mock, _ := sqlmock.New()
+		defer db.Close()
+		expectGateCurrentVersion(mock, 1)
+		expectGateCurrentVersion(mock, 1)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM dolt_remotes`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+		if err := CheckRemoteMigrateGateForServer(context.Background(), db, "", func() bool { return false }, nil); err != nil {
+			t.Fatalf("SetForceAllowRemoteMigrate(true) should unlock a server-mode store with no remote, got %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("no remote at all is still allowed for embedded/generic entry points", func(t *testing.T) {
+		// Regression guard: CheckRemoteMigrateGate (embedded/generic; nonEmbedded=false)
+		// must be completely unaffected by CheckRemoteMigrateGateForServer's stricter
+		// no-remote behavior — same DB state, same query sequence, different verdict.
+		t.Setenv(AllowRemoteMigrateEnv, "0")
+		db, mock, _ := sqlmock.New()
+		defer db.Close()
+		expectGateCurrentVersion(mock, 1)
+		expectGateCurrentVersion(mock, 1)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM dolt_remotes`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+		if err := CheckRemoteMigrateGate(context.Background(), db); err != nil {
+			t.Fatalf("embedded/generic entry point should still allow no-remote, got %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("with a remote configured, behaves exactly like the pre-existing family", func(t *testing.T) {
+		t.Setenv(AllowRemoteMigrateEnv, "0")
+		db, mock, _ := sqlmock.New()
+		defer db.Close()
+		expectGateCurrentVersion(mock, 1)
+		expectGateCurrentVersion(mock, 1)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM dolt_remotes`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+		err := CheckRemoteMigrateGateForServer(context.Background(), db, "", nil, nil)
+		var gateErr *RemoteMigrateGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected *RemoteMigrateGateError, got %v", err)
+		}
+		if gateErr.Decision != "" {
+			t.Errorf("Decision = %q, want %q (blunt #4515 stop, unaffected by be-9yi)", gateErr.Decision, "")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+}
+
 // TestRemoteMigrateGateAgentSafety locks the agent-facing safety contract at the
 // source layer: the directive surfaced as the JSON hint is not runnable, and the
 // runnable escape command appears only inside the conditional "migrate" option.

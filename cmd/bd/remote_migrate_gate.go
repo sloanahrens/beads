@@ -53,6 +53,13 @@ func handleRemoteMigrateGateJSON(e *schema.RemoteMigrateGateError) {
 			gate["observed"] = fmt.Sprintf("this clone and the remote applied different content for migration(s) %s — already forked", schema.FormatMigrationVersions(e.SkewVersions))
 			gate["expected"] = "pick one canonical clone and re-bootstrap the others (data-loss decision)"
 			gate["skew_versions"] = e.SkewVersions
+		case "server-no-remote":
+			// be-9yi: non-embedded (server-mode) store, no Dolt remote configured
+			// at all — "adopt" (re-clone) does not apply since there is nothing
+			// to clone from; only the coordinated-migrate path is offered.
+			gate["decision"] = "server-no-remote"
+			gate["observed"] = fmt.Sprintf("%d pending schema migration(s) on a server-mode database with no configured Dolt remote", e.Pending)
+			gate["expected"] = "coordinate with any other clients connected to this server, then migrate as the designated migrator"
 		default:
 			// Blunt #4515 stop — name WHY the smart gate (#4516) could not do
 			// better (gastownhall/beads#4551 follow-up), so an agent/operator can

@@ -67,6 +67,30 @@ beads_test_env_enter() {
     unset BEADS_DOLT_SERVER_SOCKET
     unset BEADS_DOLT_PASSWORD
 
+    # be-9yi: GT_DOLT_PORT is Gas Town's own env var (not read anywhere in
+    # this repo's Go code), pointing agent shells at a live, shared,
+    # production dolt sql-server. It is not BD_-prefixed, so the sweep below
+    # cannot catch it. A 2026-09-09 incident had it set in a test-runner's
+    # environment; because nothing here unset it explicitly, a downstream
+    # tool inferred a real server port from it and auto-migrated the town's
+    # `hq` database mid test-run. Always strip it before tests run, whether
+    # or not this repo ever comes to read it directly.
+    unset GT_DOLT_PORT
+
+    # Sweep every OTHER exported BD_-prefixed env var, not just the
+    # hand-enumerated ones above. internal/config/config.go binds
+    # v.SetEnvPrefix("BD") + v.AutomaticEnv(), so ANY "BD_<KEY>" env var can
+    # silently override ANY config key (dolt.port -> BD_DOLT_PORT,
+    # dolt.auto-commit -> BD_DOLT_AUTO_COMMIT, the remote-migrate escape
+    # hatch BD_ALLOW_REMOTE_MIGRATE, etc.) without a corresponding line ever
+    # being added here. The enumerated unsets above predate this sweep and
+    # stayed missing GT_DOLT_PORT's BD_ siblings until be-9yi; a wildcard
+    # sweep cannot drift out of sync with new config keys the same way.
+    local bd_var
+    for bd_var in "${!BD_@}"; do
+        unset "$bd_var"
+    done
+
     if command -v dolt >/dev/null 2>&1; then
         dolt config --global --add user.name "beads-test" >/dev/null 2>&1 || true
         dolt config --global --add user.email "test@beads.local" >/dev/null 2>&1 || true
