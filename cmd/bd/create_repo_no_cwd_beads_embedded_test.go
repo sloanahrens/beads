@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,26 @@ func TestEmbeddedCreateRepoFromNonBeadsCwd(t *testing.T) {
 		out := bdCreateFail(t, bd, noBeadsCwd, "should fail")
 		if !strings.Contains(out, "no beads database found") {
 			t.Errorf("expected 'no beads database found' error, got:\n%s", out)
+		}
+	})
+
+	// be-6mk: an ambiguous (relative/bare) --repo value naming a target with
+	// no existing workspace must be refused outright, and must never create
+	// anything on disk at the guessed target path. Before the fix, this early
+	// GH#3686 resolution unconditionally routed dbPath at the target and let
+	// the normal store-open auto-vivify a brand-new embedded Dolt DB there —
+	// silently, before create.go's own isAmbiguousRepoTarget guard ever ran.
+	t.Run("ambiguous_missing_repo_target_does_not_auto_vivify", func(t *testing.T) {
+		noBeadsCwd := t.TempDir()
+
+		out := bdCreateFail(t, bd, noBeadsCwd, "should fail", "--repo", "some-unrelated-rig-name")
+		if !strings.Contains(out, "won't be auto-created here") {
+			t.Errorf("expected the ambiguous-repo-target error, got:\n%s", out)
+		}
+
+		guessedTarget := filepath.Join(noBeadsCwd, "some-unrelated-rig-name")
+		if _, err := os.Stat(guessedTarget); err == nil {
+			t.Errorf("expected no directory to be created at %s, but one exists", guessedTarget)
 		}
 	})
 }

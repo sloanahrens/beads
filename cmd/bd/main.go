@@ -1286,6 +1286,26 @@ var rootCmd = &cobra.Command{
 							return nil
 						}
 						targetBeadsDir := filepath.Join(routing.ExpandPath(repoVal), ".beads")
+
+						// be-6mk: an ambiguous (relative/bare) --repo value with
+						// no existing workspace at the target must not reach the
+						// store-open below. That open auto-vivifies a fresh
+						// embedded Dolt DB at whatever path it's given — it has
+						// no concept of "this target was a guess" — so setting
+						// dbPath here would create a phantom database on disk
+						// before create.go's own isAmbiguousRepoTarget guard
+						// ever runs. Refuse with the same message create.go
+						// would have given, before anything is opened. A target
+						// that already has a workspace, or an unambiguous
+						// absolute/"~"-prefixed path, is unaffected — routing
+						// proceeds as before.
+						if _, err := os.Stat(filepath.Join(targetBeadsDir, "metadata.json")); err != nil {
+							if isAmbiguousRepoTarget(true, repoVal) {
+								fmt.Fprintf(os.Stderr, "Error: no beads workspace found at %s and --repo's value is a relative/bare path, so it won't be auto-created here (this is likely not the target you intended). Pass an absolute or \"~/\"-prefixed --repo path to an existing workspace instead\n", routing.ExpandPath(repoVal))
+								return SilentExit()
+							}
+						}
+
 						dbPath = utils.CanonicalizePath(filepath.Join(targetBeadsDir, beads.CanonicalDatabaseName))
 					}
 				}
