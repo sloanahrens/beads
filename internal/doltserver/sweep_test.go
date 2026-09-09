@@ -1,6 +1,8 @@
 package doltserver
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -120,6 +122,144 @@ func TestSelectOrphanTestServerPIDs(t *testing.T) {
 			got := selectOrphanTestServerPIDs(tc.candidates, tc.suiteRoots)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("selectOrphanTestServerPIDs() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSelectDeadOwnerServerPIDs pins down the owner-marker selection path
+// (be-4c2): a candidate is only reaped when IT ITSELF recorded an owner PID
+// and that specific PID is confirmed dead — never merely because it sits
+// under some directory naming convention. This is what lets a server whose
+// owning test process was SIGKILLed get reaped on a later, unrelated run's
+// startup sweep, without the naming-convention regression that
+// TestSelectOrphanTestServerPIDs guards against (gastownhall/beads
+// mybd-q6cz): a live parallel suite's server names its own (live) owner PID,
+// so isProcessAlive keeps it safe regardless of where its data dir lives.
+func TestSelectDeadOwnerServerPIDs(t *testing.T) {
+	alive := map[int]bool{111: true, 222: false}
+	isProcessAlive := func(pid int) bool { return alive[pid] }
+
+	cases := []struct {
+		name       string
+		candidates []serverCandidate
+		want       []int
+	}{
+		{
+			name: "dead owner is reaped",
+			candidates: []serverCandidate{
+				{pid: 1, cmdline: "dolt sql-server -P 1", cwd: "/tmp/whatever", ownerPID: 222},
+			},
+			want: []int{1},
+		},
+		{
+			name: "live owner is left alone",
+			candidates: []serverCandidate{
+				{pid: 2, cmdline: "dolt sql-server -P 2", cwd: "/tmp/whatever", ownerPID: 111},
+			},
+			want: nil,
+		},
+		{
+			name: "no recorded owner (production server) is left alone",
+			candidates: []serverCandidate{
+				{pid: 3, cmdline: "dolt sql-server -P 3", cwd: "/home/dev/project/.beads/dolt"},
+			},
+			want: nil,
+		},
+		{
+			name: "non-dolt process with a dead owner PID is ignored",
+			candidates: []serverCandidate{
+				{pid: 4, cmdline: "some-other-binary", cwd: "/tmp/whatever", ownerPID: 222},
+			},
+			want: nil,
+		},
+		{
+			name: "mixed: dead-owner orphan alongside a live-owner and a no-owner server",
+			candidates: []serverCandidate{
+				{pid: 5, cmdline: "dolt sql-server -P 5", cwd: "/tmp/a", ownerPID: 222},
+				{pid: 6, cmdline: "dolt sql-server -P 6", cwd: "/tmp/b", ownerPID: 111},
+				{pid: 7, cmdline: "dolt sql-server -P 7", cwd: "/home/dev/real/.beads/dolt"},
+			},
+			want: []int{5},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := selectDeadOwnerServerPIDs(tc.candidates, isProcessAlive)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("selectDeadOwnerServerPIDs() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadTestOwnerPID(t *testing.T) {
+	t.Run("valid pid file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, TestOwnerPIDFileName), []byte("1234\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestOwnerPID(dir); got != 1234 {
+			t.Errorf("readTestOwnerPID() = %d, want 1234", got)
+		}
+	})
+
+	t.Run("missing file returns 0", func(t *testing.T) {
+		if got := readTestOwnerPID(t.TempDir()); got != 0 {
+			t.Errorf("readTestOwnerPID() = %d, want 0", got)
+		}
+	})
+
+	t.Run("empty cwd returns 0", func(t *testing.T) {
+		if got := readTestOwnerPID(""); got != 0 {
+			t.Errorf("readTestOwnerPID() = %d, want 0", got)
+		}
+	})
+
+	t.Run("garbage contents returns 0", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, TestOwnerPIDFileName), []byte("not-a-pid"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestOwnerPID(dir); got != 0 {
+			t.Errorf("readTestOwnerPID() = %d, want 0", got)
+		}
+	})
+}
+
+func TestCountOrphanCandidates(t *testing.T) {
+	alive := map[int]bool{111: true}
+	isProcessAlive := func(pid int) bool { return alive[pid] }
+
+	candidates := []serverCandidate{
+		{pid: 1, cmdline: "dolt sql-server -P 1", cwdDeleted: true, cwd: "/tmp/deleted/.beads/dolt"},
+		{pid: 2, cmdline: "dolt sql-server -P 2", cwd: "/tmp/dead-owner/.beads/dolt", ownerPID: 222},
+		{pid: 3, cmdline: "dolt sql-server -P 3", cwd: "/tmp/live-owner/.beads/dolt", ownerPID: 111},
+		{pid: 4, cmdline: "dolt sql-server -P 4", cwd: "/home/dev/real-project/.beads/dolt"},
+	}
+
+	if got := countOrphanCandidates(candidates, isProcessAlive); got != 2 {
+		t.Errorf("countOrphanCandidates() = %d, want 2", got)
+	}
+}
+
+func TestMergePIDs(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []int
+		want []int
+	}{
+		{name: "b empty returns a", a: []int{1, 2}, b: nil, want: []int{1, 2}},
+		{name: "disjoint appends b after a", a: []int{1}, b: []int{2}, want: []int{1, 2}},
+		{name: "overlap is deduped", a: []int{1, 2}, b: []int{2, 3}, want: []int{1, 2, 3}},
+		{name: "both empty", a: nil, b: nil, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mergePIDs(tc.a, tc.b)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("mergePIDs(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
 			}
 		})
 	}

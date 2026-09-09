@@ -1,6 +1,8 @@
 package doltserver
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -18,6 +20,87 @@ type serverCandidate struct {
 	// (e.g. Linux's /proc/<pid>/cwd symlink grew a " (deleted)" suffix
 	// because something rm -rf'd the directory out from under the process).
 	cwdDeleted bool
+	// ownerPID is the PID recorded in cwd's TestOwnerPIDFileName marker, or
+	// 0 when no such marker exists (always the case for a real shared
+	// server — the marker is only ever written by test harnesses). A
+	// nonzero value names the process that must stay alive for this server
+	// to still be in legitimate use.
+	ownerPID int
+}
+
+// readTestOwnerPID reads the test-owner marker (see TestOwnerPIDFileName)
+// from a candidate's working directory, if present. Returns 0 when the
+// marker is absent, unreadable, or does not contain a valid PID — all of
+// which mean "no recorded owner" rather than an error.
+func readTestOwnerPID(cwd string) int {
+	if cwd == "" {
+		return 0
+	}
+	data, err := os.ReadFile(filepath.Join(cwd, TestOwnerPIDFileName)) //nolint:gosec // G304: cwd is a candidate process's own resolved working directory (from ps/lsof or /proc), read-only, never user input
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
+// mergePIDs returns the union of a and b, preserving a's order and
+// appending any of b's PIDs not already present.
+func mergePIDs(a, b []int) []int {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[int]bool, len(a))
+	for _, pid := range a {
+		seen[pid] = true
+	}
+	out := a
+	for _, pid := range b {
+		if seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		out = append(out, pid)
+	}
+	return out
+}
+
+// countOrphanCandidates reports how many candidates look like leaked test
+// debris under the read-only rules used for visibility (bd doctor, gt dolt
+// status): a deleted working directory, or a recorded test-owner PID (see
+// TestOwnerPIDFileName) whose owner is confirmed dead. It never signals
+// anything — see the platform-specific CountOrphanedTestServers wrappers.
+func countOrphanCandidates(candidates []serverCandidate, isProcessAlive func(pid int) bool) int {
+	pids := selectOrphanTestServerPIDs(candidates, nil)
+	pids = mergePIDs(pids, selectDeadOwnerServerPIDs(candidates, isProcessAlive))
+	return len(pids)
+}
+
+// selectDeadOwnerServerPIDs returns the PIDs of candidates that recorded an
+// owner PID (see TestOwnerPIDFileName) whose owner process is confirmed
+// dead. Unlike selectOrphanTestServerPIDs, this needs no suiteRoots and
+// cannot mistake a live parallel suite's server for debris: it only ever
+// acts on a candidate that itself named a specific PID as its owner, and
+// only once isProcessAlive reports that exact PID gone. A production shared
+// server never carries this marker, so it is categorically excluded.
+func selectDeadOwnerServerPIDs(candidates []serverCandidate, isProcessAlive func(pid int) bool) []int {
+	var pids []int
+	for _, c := range candidates {
+		if !isDoltServerCmdline(c.cmdline) {
+			continue
+		}
+		if c.ownerPID <= 0 {
+			continue
+		}
+		if isProcessAlive(c.ownerPID) {
+			continue
+		}
+		pids = append(pids, c.pid)
+	}
+	return pids
 }
 
 // selectOrphanTestServerPIDs returns the PIDs of candidates that are safe to

@@ -86,6 +86,38 @@ const (
 	PortFileName = "dolt-server.port"
 )
 
+// TestOwnerPIDFileName records, inside a server's dolt data directory, the
+// PID of the process that "owns" the server for a test run's lifetime. It is
+// written only when BEADS_TEST_OWNER_PID is set (test harnesses only — see
+// cmd/bd/test_repo_beads_guard_test.go) and is never present for a real
+// shared server: production starts never set that env var. Its presence
+// lets SweepOrphanedTestServers recognize a server whose owning test process
+// died without a chance to call Stop() — e.g. a SIGKILLed `go test` run —
+// and reap it on the next suite's startup sweep, regardless of which suite's
+// temp root it happens to live under (be-4c2).
+const TestOwnerPIDFileName = "dolt-server.test-owner-pid"
+
+// testOwnerPIDPath returns the path of the test-owner marker file inside a
+// server's dolt data directory (doltDir), not its beadsDir — sweep code
+// only ever observes a candidate server's cwd (which is doltDir), so keeping
+// the marker there lets it be read with no reverse path resolution.
+func testOwnerPIDPath(doltDir string) string {
+	return filepath.Join(doltDir, TestOwnerPIDFileName)
+}
+
+// writeTestOwnerPIDFile best-effort records BEADS_TEST_OWNER_PID (if set)
+// into doltDir. No-op in production, where the env var is never set.
+func writeTestOwnerPIDFile(doltDir string) {
+	v := os.Getenv("BEADS_TEST_OWNER_PID")
+	if v == "" {
+		return
+	}
+	if pid, err := strconv.Atoi(v); err != nil || pid <= 0 {
+		return
+	}
+	_ = os.WriteFile(testOwnerPIDPath(doltDir), []byte(v), 0600)
+}
+
 // maxEphemeralPortAttempts is the number of times Start() retries ephemeral
 // port allocation when the TOCTOU race causes a bind failure.
 const maxEphemeralPortAttempts = 10
@@ -1492,6 +1524,11 @@ func Start(beadsDir string) (*State, error) {
 		return nil, fmt.Errorf("writing port file: %w", err)
 	}
 
+	// Record the test-run owner (no-op outside test harnesses) so a future
+	// startup sweep can recognize this server as debris if its owner never
+	// gets to call Stop() (be-4c2).
+	writeTestOwnerPIDFile(doltDir)
+
 	// Wait for server to accept connections
 	if err := waitForReady(cfg.Host, actualPort, readyTimeout()); err != nil {
 		if proc, findErr := os.FindProcess(pid); findErr == nil {
@@ -1709,6 +1746,10 @@ func cleanupStateFiles(beadsDir string) error {
 			errs = append(errs, err)
 		}
 	}
+	// Best-effort only: the test-owner marker is optional metadata (never
+	// written outside test harnesses), so its removal failing is not a
+	// reportable cleanup error.
+	_ = os.Remove(testOwnerPIDPath(ResolveDoltDir(beadsDir)))
 	return errors.Join(errs...)
 }
 

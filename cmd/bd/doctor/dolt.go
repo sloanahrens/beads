@@ -134,6 +134,7 @@ func runDoltHealthChecksInternal(path string) []DoctorCheck {
 			{Name: "Dolt Lock Health", Status: StatusOK, Message: "N/A (non-Dolt backend)", Category: CategoryRuntime},
 			{Name: "Phantom Databases", Status: StatusOK, Message: "N/A (non-Dolt backend)", Category: CategoryData},
 			{Name: "Shared Server", Status: StatusOK, Message: "N/A (non-Dolt backend)", Category: CategoryRuntime},
+			checkOrphanTestServers(),
 		}
 	}
 
@@ -155,6 +156,7 @@ func runDoltHealthChecksInternal(path string) []DoctorCheck {
 				{Name: "Dolt Lock Health", Status: StatusOK, Message: "N/A (removed)", Category: CategoryRuntime},
 				{Name: "Phantom Databases", Status: StatusOK, Message: skipMsg, Category: CategoryData},
 				checkSharedServerHealth(beadsDir),
+				checkOrphanTestServers(),
 			}
 		}
 
@@ -169,6 +171,7 @@ func runDoltHealthChecksInternal(path string) []DoctorCheck {
 			{Name: "Dolt Lock Health", Status: StatusOK, Message: "N/A (removed)", Category: CategoryRuntime},
 			{Name: "Phantom Databases", Status: StatusError, Message: "Skipped (no connection)", Detail: connErr, Category: CategoryData},
 			checkSharedServerHealth(beadsDir),
+			checkOrphanTestServers(),
 		}
 	}
 	defer conn.Close()
@@ -181,6 +184,7 @@ func runDoltHealthChecksInternal(path string) []DoctorCheck {
 		{Name: "Dolt Lock Health", Status: StatusOK, Message: "N/A (removed)", Category: CategoryRuntime},
 		checkPhantomDatabases(conn),
 		checkSharedServerHealth(beadsDir),
+		checkOrphanTestServers(),
 	}
 }
 
@@ -683,6 +687,32 @@ func probeForCorrectDatabase(conn *doltConn) string {
 	}
 
 	return ""
+}
+
+// checkOrphanTestServers reports leaked test-only dolt sql-server processes
+// system-wide (see doltserver.CountOrphanedTestServers): a test suite's
+// shared server that survived its owning process (e.g. a SIGKILLed `go
+// test` run), still holding a port and ~200MB of memory (be-4c2). This is
+// independent of the current project's backend or connection state, so it
+// runs in every branch of runDoltHealthChecksInternal.
+func checkOrphanTestServers() DoctorCheck {
+	n := doltserver.CountOrphanedTestServers()
+	if n == 0 {
+		return DoctorCheck{
+			Name:     "Orphan Test Servers",
+			Status:   StatusOK,
+			Message:  "None detected",
+			Category: CategoryRuntime,
+		}
+	}
+	return DoctorCheck{
+		Name:     "Orphan Test Servers",
+		Status:   StatusWarning,
+		Message:  fmt.Sprintf("%d orphaned test dolt sql-server process(es) detected", n),
+		Detail:   "A test suite's shared Dolt server survived its owning process (e.g. a SIGKILLed `go test` run) and is still holding a port and data directory open.",
+		Fix:      "These are reaped automatically on the next run of the suite that leaked them. To remove sooner, find them with `pgrep -fl 'dolt sql-server'` and confirm the working directory is a test temp dir before killing.",
+		Category: CategoryRuntime,
+	}
 }
 
 // checkSharedServerHealth verifies shared server configuration and health.

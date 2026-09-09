@@ -47,6 +47,7 @@ import (
 func SweepOrphanedTestServers(suiteTempRoots ...string) []int {
 	candidates := gatherDoltServerCandidates()
 	pids := selectOrphanTestServerPIDs(candidates, suiteTempRoots)
+	pids = mergePIDs(pids, selectDeadOwnerServerPIDs(candidates, isProcessAlive))
 
 	self := os.Getpid()
 	var killed []int
@@ -93,6 +94,16 @@ func SweepOrphanedTestServers(suiteTempRoots ...string) []int {
 	return killed
 }
 
+// CountOrphanedTestServers reports how many currently-running dolt
+// sql-server processes look like leaked test debris (deleted cwd, or a
+// dead recorded test owner). Unlike SweepOrphanedTestServers, this never
+// kills anything — it is meant for visibility (bd doctor) so build-up is
+// visible before it becomes several ~200MB processes squatting on ports
+// (be-4c2).
+func CountOrphanedTestServers() int {
+	return countOrphanCandidates(gatherDoltServerCandidates(), isProcessAlive)
+}
+
 // isDoltServerProcess re-reads /proc/<pid>/cmdline and reports whether pid
 // still refers to a dolt sql-server process. Used to revalidate a PID
 // immediately before signaling it, guarding against the kernel having
@@ -137,6 +148,7 @@ func gatherDoltServerCandidates() []serverCandidate {
 			cmdline:    cmdline,
 			cwd:        cwd,
 			cwdDeleted: deleted,
+			ownerPID:   readTestOwnerPID(cwd),
 		})
 	}
 	return candidates

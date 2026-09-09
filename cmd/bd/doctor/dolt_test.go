@@ -31,12 +31,12 @@ func TestRunDoltHealthChecks_DoltBackendNoServer(t *testing.T) {
 	// No BEADS_DOLT_SERVER_PORT set → port 0 → no server running
 	// No BEADS_DOLT_SHARED_SERVER → owned mode (not external)
 	checks := RunDoltHealthChecks(tmpDir)
-	if len(checks) != 7 {
-		t.Fatalf("expected exactly 7 checks (consistent shape), got %d", len(checks))
+	if len(checks) != 8 {
+		t.Fatalf("expected exactly 8 checks (consistent shape), got %d", len(checks))
 	}
 
 	// Verify check names are consistent
-	expectedNames := []string{"Dolt Connection", "Dolt Schema", "Dolt Issue Count", "Dolt Status", "Dolt Lock Health", "Phantom Databases", "Shared Server"}
+	expectedNames := []string{"Dolt Connection", "Dolt Schema", "Dolt Issue Count", "Dolt Status", "Dolt Lock Health", "Phantom Databases", "Shared Server", "Orphan Test Servers"}
 	for i, name := range expectedNames {
 		if checks[i].Name != name {
 			t.Errorf("checks[%d].Name = %q, want %q", i, checks[i].Name, name)
@@ -76,8 +76,8 @@ func TestRunDoltHealthChecks_ExternalModeNoServer(t *testing.T) {
 	t.Setenv("BEADS_DOLT_SERVER_MODE", "1")
 
 	checks := RunDoltHealthChecks(tmpDir)
-	if len(checks) != 7 {
-		t.Fatalf("expected exactly 7 checks (consistent shape), got %d", len(checks))
+	if len(checks) != 8 {
+		t.Fatalf("expected exactly 8 checks (consistent shape), got %d", len(checks))
 	}
 
 	if checks[0].Name != "Dolt Connection" {
@@ -139,8 +139,8 @@ func TestServerMode_NoLockAcquired(t *testing.T) {
 	t.Setenv("BEADS_DOLT_SERVER_MODE", "1") // External mode: server expected
 
 	checks := RunDoltHealthChecks(tmpDir)
-	if len(checks) != 7 {
-		t.Fatalf("expected exactly 7 checks, got %d", len(checks))
+	if len(checks) != 8 {
+		t.Fatalf("expected exactly 8 checks, got %d", len(checks))
 	}
 
 	check := checks[0]

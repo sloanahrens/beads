@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -80,6 +81,25 @@ func testMainInner(m *testing.M) int {
 	// Without this, those helpers leaked ~179MB-1.4GB per test run into
 	// /tmp and exhausted tmpfs over time (bd-3q2u).
 	testTempRoot = tmp
+
+	// Record this long-lived process as the owner of any shared Dolt
+	// server this run's embedded `bd` subprocesses auto-start (subprocess
+	// envs are built from os.Environ(), so this is inherited automatically).
+	// doltserver.Start writes this into the server's data dir when set, so
+	// a future run's startup sweep below can recognize the server as
+	// debris if THIS process is SIGKILLed before it gets a chance to stop
+	// the server itself — its temp HOME (and the server under it) would
+	// otherwise survive an ungraceful death indefinitely (be-4c2).
+	_ = os.Setenv("BEADS_TEST_OWNER_PID", strconv.Itoa(os.Getpid()))
+
+	// Startup sweep: reap any dolt sql-server left behind by a PRIOR run of
+	// this suite that was killed without a chance to clean up after itself.
+	// This must happen before beforeTestsHook (below) starts THIS run's own
+	// server, so a dead predecessor's leftover port/data dir is never
+	// mistaken for something still in use.
+	if killed := doltserver.SweepOrphanedTestServers(testTempRoot); len(killed) > 0 {
+		fmt.Fprintf(os.Stderr, "Info: startup sweep reaped %d orphaned test dolt sql-server process(es) from a previous run: %v\n", len(killed), killed)
+	}
 
 	// Preserve Go build cache before changing HOME.
 	// On macOS, GOCACHE defaults to $HOME/Library/Caches/go-build.

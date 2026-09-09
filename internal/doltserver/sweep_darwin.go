@@ -26,6 +26,7 @@ import (
 func SweepOrphanedTestServers(suiteTempRoots ...string) []int {
 	candidates := gatherDoltServerCandidates()
 	pids := selectOrphanTestServerPIDs(candidates, canonicalDarwinRoots(suiteTempRoots))
+	pids = mergePIDs(pids, selectDeadOwnerServerPIDs(candidates, isProcessAlive))
 
 	self := os.Getpid()
 	var killed []int
@@ -62,6 +63,16 @@ func SweepOrphanedTestServers(suiteTempRoots ...string) []int {
 	return killed
 }
 
+// CountOrphanedTestServers reports how many currently-running dolt
+// sql-server processes look like leaked test debris (deleted cwd, or a
+// dead recorded test owner). Unlike SweepOrphanedTestServers, this never
+// kills anything — it is meant for visibility (bd doctor) so build-up is
+// visible before it becomes several ~200MB processes squatting on ports
+// (be-4c2).
+func CountOrphanedTestServers() int {
+	return countOrphanCandidates(gatherDoltServerCandidates(), isProcessAlive)
+}
+
 // canonicalDarwinRoots makes caller roots comparable with lsof output. macOS
 // commonly reports a cwd below /private/var while os.MkdirTemp returned the
 // equivalent /var path.
@@ -86,7 +97,11 @@ func gatherDoltServerCandidates() []serverCandidate {
 	if err != nil {
 		return nil
 	}
-	return gatherPSCandidates(out, readDarwinCwd)
+	candidates := gatherPSCandidates(out, readDarwinCwd)
+	for i := range candidates {
+		candidates[i].ownerPID = readTestOwnerPID(candidates[i].cwd)
+	}
+	return candidates
 }
 
 func isDoltServerProcess(pid int) bool {
@@ -96,6 +111,9 @@ func isDoltServerProcess(pid int) bool {
 	}
 	return isDoltServerCmdline(strings.TrimSpace(string(out)))
 }
+
+// isProcessAlive (used to decide whether a recorded server owner is dead)
+// is defined once for all non-Windows platforms in doltserver_unix.go.
 
 // readDarwinCwd resolves pid's cwd from lsof's machine-readable field output.
 // lsof emits the name as an `n` field after selecting descriptor `cwd`.
