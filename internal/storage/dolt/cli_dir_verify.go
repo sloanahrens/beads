@@ -14,7 +14,10 @@ import (
 var ansiEscapeSeq = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 // parseDoltLogHash extracts the commit hash from the first line of `dolt log`
-// output ("commit <hash>", optionally ANSI-colored).
+// output ("commit <hash>", optionally ANSI-colored, and — observed on dolt
+// 2.3.2 — sometimes followed by the commit message on the same line once
+// color codes are stripped, since the color reset butts directly against the
+// message with no separating space in the raw output).
 func parseDoltLogHash(out []byte) (string, error) {
 	firstLine := strings.SplitN(string(out), "\n", 2)[0]
 	firstLine = strings.TrimSpace(ansiEscapeSeq.ReplaceAllString(firstLine, ""))
@@ -22,11 +25,12 @@ func parseDoltLogHash(out []byte) (string, error) {
 	if !strings.HasPrefix(firstLine, prefix) {
 		return "", fmt.Errorf("unexpected `dolt log` output: %q", firstLine)
 	}
-	hash := strings.TrimSpace(strings.TrimPrefix(firstLine, prefix))
-	if hash == "" {
+	rest := strings.TrimSpace(strings.TrimPrefix(firstLine, prefix))
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
 		return "", fmt.Errorf("unexpected `dolt log` output: %q", firstLine)
 	}
-	return hash, nil
+	return fields[0], nil
 }
 
 // localBranchHash reads the current commit hash of branch in the on-disk
@@ -80,7 +84,10 @@ func staleLocalCLIDirError(cliDir, database, branch, serverHash, localHash strin
 			"  server branch head:  %s\n"+
 			"  local directory head: %s\n"+
 			"This looks like a stale or unrelated local Dolt directory left over from before "+
-			"this workspace used server mode. Move it aside before retrying, e.g.:\n"+
+			"this workspace used server mode. Before moving it: confirm it is NOT the data "+
+			"directory the running sql-server currently has open — moving that out from under "+
+			"a live server can corrupt or lose its state. Once confirmed safe, move it aside "+
+			"before retrying, e.g.:\n"+
 			"  mv %s %s.STALE-do-not-use",
 		cliDir, database, branch, displayLogHash(serverHash), displayLogHash(localHash), cliDir, cliDir)
 }
@@ -100,6 +107,13 @@ func displayLogHash(hash string) string {
 // staleLocalCLIDirError. Called at the top of doltCLIPush/doltCLIPull so
 // every CLI-routing caller (git-protocol, credential, cloud-auth, and
 // local-remote routing) is covered from one choke point.
+//
+// The server-head and local-head reads are not atomic: a legitimate commit
+// can land on the server between them, making a genuinely-synced directory
+// look momentarily stale (om-editorial review of be-wisp-u88). On a mismatch
+// this re-reads the server head once and accepts if the local hash matches
+// either reading, rather than refusing (and telling the operator to move
+// data aside) on what may be nothing but a race.
 func (s *DoltStore) verifyCLIDirIsServerStore(ctx context.Context, cliDir string) error {
 	serverHash, err := s.branchHash(ctx, s.branch)
 	if err != nil {
@@ -109,5 +123,16 @@ func (s *DoltStore) verifyCLIDirIsServerStore(ctx context.Context, cliDir string
 	if err != nil {
 		return fmt.Errorf("reading local directory %s branch %q hash to verify it matches the connected server: %w", cliDir, s.branch, err)
 	}
-	return staleLocalCLIDirError(cliDir, s.database, s.branch, serverHash, localHash)
+	if staleLocalCLIDirError(cliDir, s.database, s.branch, serverHash, localHash) == nil {
+		return nil
+	}
+
+	serverHash2, err := s.branchHash(ctx, s.branch)
+	if err != nil {
+		return fmt.Errorf("reading server branch %q hash to verify CLI directory %s: %w", s.branch, cliDir, err)
+	}
+	if serverHash2 == localHash {
+		return nil
+	}
+	return staleLocalCLIDirError(cliDir, s.database, s.branch, serverHash2, localHash)
 }
