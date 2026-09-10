@@ -44,10 +44,18 @@ func missingOptionalIssueTable(err error, issueTable string) bool {
 }
 
 func getIssueFromTableInTx(ctx context.Context, tx DBTX, issueTable, labelTable, id string) (*types.Issue, error) {
+	join := sqlbuild.LeaseJoin(issueTable)
 	//nolint:gosec // G201: issueTable is a hardcoded literal supplied by GetIssueInTx ("issues" or "wisps")
-	row := tx.QueryRowContext(ctx, fmt.Sprintf(`SELECT %s FROM %s %s WHERE id = ?`,
-		IssueSelectColumns, issueTable, sqlbuild.LeaseJoin(issueTable)), id)
+	querySQL := fmt.Sprintf(`SELECT %s FROM %s %s WHERE id = ?`, IssueSelectColumns, issueTable, join)
+	row := tx.QueryRowContext(ctx, querySQL, id)
 	issue, err := ScanIssueFrom(row)
+	if err != nil && leasesTableMissing(err) {
+		// Un-migrated database (pre-0055, be-cm3): the leases table this join
+		// read does not exist at all. Retry with the lease overlay stripped
+		// to NULLs instead of failing `bd show` outright.
+		row = tx.QueryRowContext(ctx, degradeLeaseSQL(querySQL, join), id)
+		issue, err = ScanIssueFrom(row)
+	}
 	if err == sql.ErrNoRows || missingOptionalIssueTable(err, issueTable) {
 		return nil, storage.ErrNotFound
 	}

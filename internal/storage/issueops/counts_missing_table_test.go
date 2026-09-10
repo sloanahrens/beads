@@ -59,12 +59,16 @@ func emptyCountsRows() *sqlmock.Rows {
 // plus the lease overlay searchTableInTxT adds (search.go:381).
 var wispPlaneAndLeases = []string{"wisp_labels", "leases"}
 
-// countsMegaQueryTables is the reach of sqlbuild.SearchCountsSQL, which is
-// wispPlaneAndLeases plus the comment-count LEFT JOIN at
-// sqlbuild/counts.go:198. Only the three entry points that render the counts
-// mega-query can be broken by wisp_comments; the plain COUNT(*) forms never
-// name it.
-var countsMegaQueryTables = []string{"wisp_labels", "wisp_comments", "leases"}
+// countsMegaQueryTables is the reach of sqlbuild.SearchCountsSQL: label
+// subqueries plus the comment-count LEFT JOIN at sqlbuild/counts.go:198.
+// Only the three entry points that render the counts mega-query can be
+// broken by wisp_comments; the plain COUNT(*) forms never name it.
+//
+// leases is deliberately absent here: unlike the wisp-plane tables, a
+// missing leases table is not "broken" for the mega-query — scanCountsRowsInTx
+// (be-cm3) retries with the lease overlay stripped instead of erroring. See
+// TestScanCountsRowsDegradesOnMissingLeases in lease_table_compat_test.go.
+var countsMegaQueryTables = []string{"wisp_labels", "wisp_comments"}
 
 var countsEntryPoints = []countsEntryPoint{
 	{
