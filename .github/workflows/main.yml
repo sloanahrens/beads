@@ -536,6 +536,18 @@ jobs:
         if: matrix.coverage
         run: go install gotest.tools/gotestsum@v1.13.0
 
+      # be-r18: this leg (ubuntu-latest, matrix.coverage) runs ./... with
+      # Docker present but the dolthub/dolt-sql-server image not cached, so
+      # without this pull checkDolt() would report doltNoImage and
+      # internal/storage/dolt's TestMain would now fail loudly (by design —
+      # see the macOS BEADS_TEST_SKIP=dolt-container comment below) instead
+      # of the false-pass skip it used to report. Pulling the image is
+      # preferred over another skip: this is the one Linux leg that should
+      # actually exercise the container-backed suite.
+      - name: Pull Dolt sql-server image
+        if: matrix.coverage
+        run: ./scripts/ci/pull-dolt-image.sh
+
       - name: Download build artifacts
         if: matrix.os == 'ubuntu-latest'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

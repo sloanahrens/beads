@@ -75,6 +75,15 @@ jobs:
           dolt config --global --add user.name "CI Bot"
           dolt config --global --add user.email "ci@beads.test"
 
+      # be-r18: this leg (ubuntu-latest) runs ./... with Docker present but
+      # the dolthub/dolt-sql-server image not cached, so without this pull
+      # checkDolt() would report doltNoImage and internal/storage/dolt's
+      # TestMain would now fail loudly instead of the false-pass skip it
+      # used to report. Pulling the image is preferred over a skip token
+      # here since Docker is available on this runner.
+      - name: Pull Dolt sql-server image
+        run: ./scripts/ci/pull-dolt-image.sh
+
       - name: Measure commands
         run: |
           set -euo pipefail
