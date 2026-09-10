@@ -3810,6 +3810,9 @@ func fsckOutputInterrupted(output string) bool {
 // If creds is non-nil, credentials are set on the subprocess environment only,
 // avoiding process-wide env var races with concurrent goroutines.
 func (s *DoltStore) doltCLIPush(ctx context.Context, remote string, force bool, creds *remoteCredentials) error {
+	if err := s.verifyCLIDirIsServerStore(ctx, s.CLIDir()); err != nil {
+		return err
+	}
 	if err := s.prePushFSCK(ctx); err != nil {
 		return err
 	}
@@ -3843,6 +3846,9 @@ func cliTransferError(op, remote string, transferCtx context.Context, out []byte
 // Used for git-protocol remotes where CALL DOLT_PULL times out through the SQL connection.
 // If creds is non-nil, credentials are set on the subprocess environment only.
 func (s *DoltStore) doltCLIPull(ctx context.Context, remote string, creds *remoteCredentials) error {
+	if err := s.verifyCLIDirIsServerStore(ctx, s.CLIDir()); err != nil {
+		return err
+	}
 	cmd, transferCtx, cancel := s.prepareDoltCLITransfer(ctx, remote, creds, "pull", remote, s.branch)
 	defer cancel()
 	out, err := cmd.CombinedOutput()
