@@ -80,6 +80,29 @@ To skip an optional service explicitly, use the existing skip mechanism:
 BEADS_TEST_SKIP=dolt ./scripts/test.sh ./...
 ```
 
+`internal/storage/dolt`'s `TestMain` needs a Dolt container
+(`EnsureDoltContainerForTestMain`) to run its subject at all. If Docker or the
+`dolthub/dolt-sql-server` image isn't available, it fails loudly (exit 1)
+rather than silently skipping every test and reporting a false "ok" — a
+merge gate that only reads the exit code has no other way to tell "passed"
+from "never ran" (be-r18). So `go test ./internal/storage/dolt/...` (or a
+bare `./...` that includes it) now exits 1 on a machine without Docker
+unless you opt out. Two tokens control this:
+
+- `BEADS_TEST_SKIP=dolt` — the existing blanket switch. Also honored by
+  `RequireDoltBinary`, so it additionally skips dolt-CLI-only tests
+  elsewhere that don't need a container.
+- `BEADS_TEST_SKIP=dolt-container` — narrower: opts out of this
+  container-backed suite only, without dropping CLI-only coverage.
+
+```bash
+BEADS_TEST_SKIP=dolt-container go test ./internal/storage/dolt/...
+```
+
+This fail-loud behavior currently applies only to
+`internal/storage/dolt`'s `TestMain`; the other `EnsureDoltContainerForTestMain`
+callers still warn and skip silently (tracked in be-1db).
+
 Tests that need a temporary repository or store should use `t.TempDir()` and
 `t.Cleanup()`. Temporary repositories must set a repository-local hooks path;
 do not inherit the developer's global hooks configuration.

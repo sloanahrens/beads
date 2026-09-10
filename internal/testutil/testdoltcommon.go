@@ -59,6 +59,32 @@ func hasTestSkipForDoltBinary(service string) bool {
 	return false
 }
 
+// doltContainerSkipTokens are the BEADS_TEST_SKIP tokens that opt out of
+// Dolt container-backed tests. "dolt" is the original blanket switch, also
+// honored by RequireDoltBinary (so it additionally skips CLI-only tests).
+// "dolt-container" is narrower: it opts out of container-backed suites
+// without dropping coverage of tests that only need the dolt CLI binary,
+// since RequireDoltBinary does not honor it.
+var doltContainerSkipTokens = []string{"dolt", "dolt-container"}
+
+// DoltTestsExplicitlySkipped reports whether BEADS_TEST_SKIP carries an
+// explicit opt-out for Dolt container-backed tests ("dolt" or
+// "dolt-container"). A TestMain that gates on a Dolt test server (via
+// EnsureDoltContainerForTestMain) can use this to distinguish an
+// intentional, documented skip from an environment that simply can't run
+// the tests — the latter should fail loudly rather than report a false
+// "ok". As of be-r18, only internal/storage/dolt's TestMain does this;
+// the other eleven EnsureDoltContainerForTestMain callers still warn and
+// skip silently (tracked in be-1db).
+func DoltTestsExplicitlySkipped() bool {
+	for _, token := range doltContainerSkipTokens {
+		if hasTestSkipForDoltBinary(token) {
+			return true
+		}
+	}
+	return false
+}
+
 // FindFreePort finds an available TCP port by binding to :0.
 func FindFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")

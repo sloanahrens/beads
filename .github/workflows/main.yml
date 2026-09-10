@@ -536,6 +536,18 @@ jobs:
         if: matrix.coverage
         run: go install gotest.tools/gotestsum@v1.13.0
 
+      # be-r18: this leg (ubuntu-latest, matrix.coverage) runs ./... with
+      # Docker present but the dolthub/dolt-sql-server image not cached, so
+      # without this pull checkDolt() would report doltNoImage and
+      # internal/storage/dolt's TestMain would now fail loudly (by design —
+      # see the macOS BEADS_TEST_SKIP=dolt-container comment below) instead
+      # of the false-pass skip it used to report. Pulling the image is
+      # preferred over another skip: this is the one Linux leg that should
+      # actually exercise the container-backed suite.
+      - name: Pull Dolt sql-server image
+        if: matrix.coverage
+        run: ./scripts/ci/pull-dolt-image.sh
+
       - name: Download build artifacts
         if: matrix.os == 'ubuntu-latest'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -568,11 +580,20 @@ jobs:
             --format testdox \
             -- -tags gms_pure_go -race -short -timeout=25m -coverprofile=coverage.out -skip '^TestEmbedded' ./...
 
+      # BEADS_TEST_SKIP=dolt-container (be-r18): this leg (macos-latest,
+      # !matrix.coverage) has no Docker daemon, so internal/storage/dolt's
+      # TestMain would otherwise fail loudly (by design — a suite that
+      # can't run its subject must not report a false pass). The narrower
+      # "dolt-container" token opts out of just that container-backed
+      # suite; it is NOT honored by RequireDoltBinary, so the dolt-CLI-only
+      # tests this leg already covers (dolt is installed above) keep
+      # running instead of silently skipping under the blanket "dolt" token.
       - name: Test
         if: ${{ !matrix.coverage }}
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/bd
           GOCACHE: ${{ runner.temp }}/go-cache/race
+          BEADS_TEST_SKIP: dolt-container
         run: go test -tags gms_pure_go ${{ matrix.test-flags }} -skip '^TestEmbedded' ./...
 
       - name: Upload coverage to Codecov

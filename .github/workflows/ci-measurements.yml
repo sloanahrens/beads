@@ -75,6 +75,15 @@ jobs:
           dolt config --global --add user.name "CI Bot"
           dolt config --global --add user.email "ci@beads.test"
 
+      # be-r18: this leg (ubuntu-latest) runs ./... with Docker present but
+      # the dolthub/dolt-sql-server image not cached, so without this pull
+      # checkDolt() would report doltNoImage and internal/storage/dolt's
+      # TestMain would now fail loudly instead of the false-pass skip it
+      # used to report. Pulling the image is preferred over a skip token
+      # here since Docker is available on this runner.
+      - name: Pull Dolt sql-server image
+        run: ./scripts/ci/pull-dolt-image.sh
+
       - name: Measure commands
         run: |
           set -euo pipefail
@@ -122,7 +131,14 @@ jobs:
           dolt config --global --add user.name "CI Bot"
           dolt config --global --add user.email "ci@beads.test"
 
+      # BEADS_TEST_SKIP=dolt-container (be-r18): this runner has no Docker
+      # daemon, so internal/storage/dolt's TestMain would otherwise fail
+      # loudly instead of reporting a false pass. The narrower
+      # "dolt-container" token isn't honored by RequireDoltBinary, so
+      # dolt-CLI-only tests (dolt is installed above) keep running.
       - name: Measure commands
+        env:
+          BEADS_TEST_SKIP: dolt-container
         run: |
           set -euo pipefail
           source scripts/ci/lib/timing.sh
@@ -153,7 +169,14 @@ jobs:
           dolt config --global --add user.name "CI Bot"
           dolt config --global --add user.email "ci@beads.test"
 
+      # BEADS_TEST_SKIP=dolt-container (be-r18): this runner has no Docker
+      # daemon, so internal/storage/dolt's TestMain would otherwise fail
+      # loudly instead of reporting a false pass. The narrower
+      # "dolt-container" token isn't honored by RequireDoltBinary, so
+      # dolt-CLI-only tests (dolt is installed above) keep running.
       - name: Measure commands
+        env:
+          BEADS_TEST_SKIP: dolt-container
         run: |
           set -euo pipefail
           source scripts/ci/lib/timing.sh
