@@ -568,11 +568,20 @@ jobs:
             --format testdox \
             -- -tags gms_pure_go -race -short -timeout=25m -coverprofile=coverage.out -skip '^TestEmbedded' ./...
 
+      # BEADS_TEST_SKIP=dolt-container (be-r18): this leg (macos-latest,
+      # !matrix.coverage) has no Docker daemon, so internal/storage/dolt's
+      # TestMain would otherwise fail loudly (by design — a suite that
+      # can't run its subject must not report a false pass). The narrower
+      # "dolt-container" token opts out of just that container-backed
+      # suite; it is NOT honored by RequireDoltBinary, so the dolt-CLI-only
+      # tests this leg already covers (dolt is installed above) keep
+      # running instead of silently skipping under the blanket "dolt" token.
       - name: Test
         if: ${{ !matrix.coverage }}
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/bd
           GOCACHE: ${{ runner.temp }}/go-cache/race
+          BEADS_TEST_SKIP: dolt-container
         run: go test -tags gms_pure_go ${{ matrix.test-flags }} -skip '^TestEmbedded' ./...
 
       - name: Upload coverage to Codecov

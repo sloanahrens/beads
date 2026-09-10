@@ -90,6 +90,15 @@ func testMainInner(m *testing.M) int {
 		return m.Run()
 	}
 	if err := testutil.EnsureDoltContainerForTestMain(); err != nil {
+		explicitlySkipped := testutil.DoltTestsExplicitlySkipped()
+		if shouldFailOnDoltUnavailable(explicitlySkipped) {
+			fmt.Fprintf(os.Stderr, "FATAL: %v\n"+
+				"internal/storage/dolt's tests need a Dolt container and cannot verify their\n"+
+				"subject without one; refusing to report a false pass (be-r18). To skip these\n"+
+				"tests deliberately, set BEADS_TEST_SKIP=dolt-container (or the broader\n"+
+				"BEADS_TEST_SKIP=dolt, which also skips dolt-CLI-only tests elsewhere).\n", err)
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "WARN: %v, skipping Dolt tests\n", err)
 	} else {
 		defer testutil.TerminateDoltContainer()
@@ -136,6 +145,16 @@ func testMainInner(m *testing.M) int {
 	os.Unsetenv("BEADS_TEST_MODE")
 	os.Unsetenv("BEADS_TEST_PDEATHSIG")
 	return code
+}
+
+// shouldFailOnDoltUnavailable decides whether an unavailable Dolt container
+// should fail TestMain loudly (true) or fall back to the historical silent
+// skip (false). It fails loudly unless the operator explicitly opted out —
+// a test suite that cannot run its subject must not report a false "ok"
+// (be-r18: a merge gate reading this package's exit code has no other way
+// to tell "passed" from "never ran").
+func shouldFailOnDoltUnavailable(explicitlySkipped bool) bool {
+	return !explicitlySkipped
 }
 
 // initSharedSchema creates a store on the shared DB, sets config, and commits

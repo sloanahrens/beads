@@ -65,7 +65,7 @@ func (d doltReadiness) String() string {
 	case doltWrongVersion:
 		return fmt.Sprintf("Docker image %s cached but wrong version (run 'docker pull %s')", doltDockerRepo, DoltDockerImage)
 	case doltSkipped:
-		return "Dolt tests skipped (BEADS_TEST_SKIP=dolt)"
+		return "Dolt tests skipped (BEADS_TEST_SKIP=dolt or dolt-container)"
 	case doltReady:
 		return "Dolt ready"
 	default:
@@ -102,8 +102,11 @@ func hasTestSkip(service string) bool {
 // isDoltRepoImageCached, caching the result.
 func checkDolt() doltReadiness {
 	doltCheckOnce.Do(func() {
-		// Explicit skip checked first to avoid ~1s docker info cost.
-		if hasTestSkip("dolt") {
+		// Explicit skip checked first to avoid ~1s docker info cost. "dolt"
+		// is the blanket opt-out (also honored by RequireDoltBinary);
+		// "dolt-container" is the narrower one that only skips
+		// container-backed suites — see DoltTestsExplicitlySkipped.
+		if hasTestSkip("dolt") || hasTestSkip("dolt-container") {
 			doltCached = doltSkipped
 			return
 		}
