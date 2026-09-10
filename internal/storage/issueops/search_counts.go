@@ -155,6 +155,13 @@ func runSearchQueryInTx(ctx context.Context, tx *sql.Tx, tables FilterTables, wh
 //nolint:gosec // G201: query is builder-produced; user input rides ? placeholders.
 func scanCountsRowsInTx(ctx context.Context, tx *sql.Tx, mainTable, query string, args []interface{}, hyd sqlbuild.CountsHydration) ([]*types.IssueWithCounts, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil && leasesTableMissing(err) {
+		// Un-migrated database (pre-0055, be-cm3): sqlbuild.SearchCountsSQL
+		// always joins leases, so `bd list`/`bd ready`/`bd query` would
+		// otherwise hard-fail on a database that has no leases table at all.
+		// Retry with the lease overlay stripped to NULLs.
+		rows, err = tx.QueryContext(ctx, degradeLeaseSQL(query, sqlbuild.LeaseJoin("i")), args...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("search count %s: %w", mainTable, err)
 	}

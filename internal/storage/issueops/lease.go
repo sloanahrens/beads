@@ -179,7 +179,7 @@ func UpsertLeaseInTx(ctx context.Context, tx DBTX, id, holder string, now time.T
 			granted_node = VALUES(granted_node)
 	`, id, holder, now, now.Add(ttl), now, NodeID(ctx))
 	if err != nil {
-		return fmt.Errorf("upsert lease for %s: %w", id, err)
+		return fmt.Errorf("upsert lease for %s: %w", id, wrapLeaseTableMissing(err))
 	}
 	return nil
 }
@@ -190,7 +190,7 @@ func UpsertLeaseInTx(ctx context.Context, tx DBTX, id, holder string, now time.T
 // unconditionally — including for wisp IDs, which never have lease rows.
 func DeleteLeaseInTx(ctx context.Context, tx DBTX, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM leases WHERE issue_id = ?`, id); err != nil {
-		return fmt.Errorf("delete lease for %s: %w", id, err)
+		return fmt.Errorf("delete lease for %s: %w", id, wrapLeaseTableMissing(err))
 	}
 	return nil
 }
@@ -252,7 +252,7 @@ func RestoreLeaseOnImportInTx(ctx context.Context, tx DBTX, issue *types.Issue, 
 			`, issue.ID, assignee, grantedAt, *issue.LeaseExpiresAt, heartbeatAt, issue.LeaseGrantedNode,
 				now, now, now, now, now)
 			if err != nil {
-				return fmt.Errorf("restore lease for %s: %w", issue.ID, err)
+				return fmt.Errorf("restore lease for %s: %w", issue.ID, wrapLeaseTableMissing(err))
 			}
 		}
 	}
@@ -279,7 +279,7 @@ func RestoreLeaseOnImportInTx(ctx context.Context, tx DBTX, issue *types.Issue, 
 			  )
 		`, issue.ID, issue.ID)
 		if err != nil {
-			return fmt.Errorf("reconcile lease for %s: %w", issue.ID, err)
+			return fmt.Errorf("reconcile lease for %s: %w", issue.ID, wrapLeaseTableMissing(err))
 		}
 	}
 	return nil
@@ -357,7 +357,7 @@ func HeartbeatIssueInTx(ctx context.Context, tx DBTX, id, actor string) error {
 		WHERE issue_id = ? AND holder = ?
 	`, now.Add(leaseTTL(ctx)), now, NodeID(ctx), id, actor)
 	if err != nil {
-		return fmt.Errorf("failed to heartbeat issue: %w", err)
+		return fmt.Errorf("failed to heartbeat issue: %w", wrapLeaseTableMissing(err))
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -691,7 +691,7 @@ func ReclaimExpiredLeasesInTx(ctx context.Context, tx DBTX, cutoff time.Time, fi
 		  AND l.lease_expires_at < ?
 	`+replicaSQL+scopeSQL, args...)
 	if err != nil {
-		return nil, fmt.Errorf("scan for stale leases: %w", err)
+		return nil, fmt.Errorf("scan for stale leases: %w", wrapLeaseTableMissing(err))
 	}
 	var stale []types.ReclaimedLease
 	// Provenance of each snapshot row, parallel to stale, for the
