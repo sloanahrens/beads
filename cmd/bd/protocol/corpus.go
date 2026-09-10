@@ -181,6 +181,17 @@ var provenanceValueKeys = map[string]string{
 	"build":   "<BUILD>",
 }
 
+// provenanceNumericKeys are provenance fields like provenanceValueKeys —
+// stable presence, release-specific value — but JSON numbers rather than
+// strings (`db_schema_version` from `bd version --json` is the highest
+// migration the binary knows, which increments on every new migration file).
+// Kept separate from provenanceValueKeys because that map's replacement is
+// gated on the value being a string; these are matched unconditionally like
+// volatileValueKeys below.
+var provenanceNumericKeys = map[string]string{
+	"db_schema_version": "<SCHEMA>",
+}
+
 // revisionPlaceholder is the canonical stand-in for a guarded-write revision
 // (row_lock) token value.
 const revisionPlaceholder = "<REVISION>"
@@ -254,14 +265,14 @@ func canonValue(v any) any {
 			// NOTE ON SCOPE: the provenance transforms below match by bare key
 			// name at every nesting depth of every blob, not just the version
 			// capture. That is safe only because these keys (commit/version/
-			// branch/build) currently appear solely in the version blob
-			// (`grep -rl '"version"' testdata/corpus` lists version blobs only).
-			// If a future command ever emits a field named commit/version/branch/
-			// build, this would silently drop or placeholder it and the corpus
-			// would stop guarding that command's wire shape. Before adding such a
-			// field, scope these transforms to the version capture (thread the
-			// Capture.Name through generation) — note it cannot be done by "top
-			// level only" because envelope mode nests these under "data".
+			// branch/build/db_schema_version) currently appear solely in the
+			// version blob (`grep -rl '"version"' testdata/corpus` lists version
+			// blobs only). If a future command ever emits a field with one of
+			// these names, this would silently drop or placeholder it and the
+			// corpus would stop guarding that command's wire shape. Before adding
+			// such a field, scope these transforms to the version capture (thread
+			// the Capture.Name through generation) — note it cannot be done by
+			// "top level only" because envelope mode nests these under "data".
 			//
 			// Drop build-provenance keys entirely so the canonical corpus does
 			// not depend on how (or where) bd was built.
@@ -276,6 +287,13 @@ func canonValue(v any) any {
 					t[k] = ph
 					continue
 				}
+			}
+			// Replace numeric provenance values (e.g. db_schema_version) with a
+			// placeholder: pin that the field exists, not the migration count,
+			// which would otherwise churn the corpus on every new migration.
+			if ph, ok := provenanceNumericKeys[k]; ok {
+				t[k] = ph
+				continue
 			}
 			// Replace per-write-random token values (the guarded-write revision /
 			// row_lock) with a placeholder: pin that bd show exposes a revision

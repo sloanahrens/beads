@@ -1,6 +1,7 @@
 {
   "branch": "<BRANCH>",
   "build": "<BUILD>",
+  "db_schema_version": "<SCHEMA>",
   "schema_version": 1,
   "version": "<VERSION>"
 }

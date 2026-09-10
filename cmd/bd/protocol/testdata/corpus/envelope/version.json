@@ -2,6 +2,7 @@
   "data": {
     "branch": "<BRANCH>",
     "build": "<BUILD>",
+    "db_schema_version": "<SCHEMA>",
     "version": "<VERSION>"
   },
   "schema_version": 1

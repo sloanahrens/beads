@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/metrics"
+	"github.com/steveyegge/beads/internal/storage/schema"
 )
 
 var (
@@ -39,11 +40,13 @@ var versionCmd = &cobra.Command{
 
 		commit := resolveCommitHash()
 		branch := resolveBranch()
+		schemaVer := schema.LatestVersion()
 
 		if jsonOutput {
 			result := map[string]interface{}{
-				"version": Version,
-				"build":   Build,
+				"version":           Version,
+				"build":             Build,
+				"db_schema_version": schemaVer,
 			}
 			if commit != "" {
 				result["commit"] = commit
@@ -56,12 +59,14 @@ var versionCmd = &cobra.Command{
 			}
 		} else {
 			if commit != "" && branch != "" {
-				fmt.Printf("bd version %s (%s: %s@%s)\n", Version, Build, branch, shortCommit(commit))
+				fmt.Printf("bd version %s (%s: %s@%s) schema<=%d\n", Version, Build, branch, shortCommit(commit), schemaVer)
 			} else if commit != "" {
-				fmt.Printf("bd version %s (%s: %s)\n", Version, Build, shortCommit(commit))
+				fmt.Printf("bd version %s (%s: %s) schema<=%d\n", Version, Build, shortCommit(commit), schemaVer)
 			} else {
-				fmt.Printf("bd version %s (%s)\n", Version, Build)
+				fmt.Printf("bd version %s (%s) schema<=%d\n", Version, Build, schemaVer)
 			}
+			// "schema<=N": the binary knows migrations up to N, not that the
+			// connected DB is at N — an idle binary hasn't opened a DB yet.
 		}
 
 		// Check for multiple bd binaries in PATH

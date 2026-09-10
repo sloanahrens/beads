@@ -41,8 +41,8 @@ The CLI is built on the Cobra framework and consists of command implementations 
    - **scripts/install.sh** (`@/scripts/install.sh`, lines 13-14): Helper script for users who want to build from source with explicit git info passed to `go install`
 
 4. **Output Formatting**:
-   - **Text Output** (lines 52-58 in `version.go`): Shows format like `bd version 0.29.0 (dev: main@7e70940)` when both commit and branch are available
-   - **JSON Output** (lines 39-50): Includes optional `commit` and `branch` fields when available
+   - **Text Output** (lines 52-58 in `version.go`): Shows format like `bd version 0.29.0 (dev: main@7e70940) schema<=66` when both commit and branch are available; `schema<=N` reports the highest migration the binary knows (`internal/storage/schema.LatestVersion()`)
+   - **JSON Output** (lines 39-50): Includes optional `commit` and `branch` fields when available, plus `db_schema_version`
 
 5. **Server Version Checking** (lines 63-109): The `--server` flag shows server/client compatibility by calling health RPC endpoints
 
