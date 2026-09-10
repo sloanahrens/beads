@@ -90,6 +90,11 @@ func testMainInner(m *testing.M) int {
 		return m.Run()
 	}
 	if err := testutil.EnsureDoltContainerForTestMain(); err != nil {
+		if shouldFailOnDoltUnavailable(err, testutil.DoltTestsExplicitlySkipped()) {
+			fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+			fmt.Fprintf(os.Stderr, "FATAL: this package cannot verify storage-layer behavior without a working Dolt test server, so it cannot report a pass. Set BEADS_TEST_SKIP=dolt to skip intentionally (e.g. local dev without Docker).\n")
+			return 1
+		}
 		fmt.Fprintf(os.Stderr, "WARN: %v, skipping Dolt tests\n", err)
 	} else {
 		defer testutil.TerminateDoltContainer()
@@ -136,6 +141,17 @@ func testMainInner(m *testing.M) int {
 	os.Unsetenv("BEADS_TEST_MODE")
 	os.Unsetenv("BEADS_TEST_PDEATHSIG")
 	return code
+}
+
+// shouldFailOnDoltUnavailable reports whether TestMain should fail the whole
+// package rather than silently continue with every Dolt-backed test skipped.
+// A failed Dolt setup is only safe to treat as a silent skip when it comes
+// from the explicit BEADS_TEST_SKIP=dolt opt-out; any other cause (Docker
+// daemon down, image missing, wrong version, Windows CI) means this suite
+// cannot verify the very changes it exists to test, so it must fail instead
+// of reporting a deceiving "ok" (be-r18).
+func shouldFailOnDoltUnavailable(setupErr error, explicitlySkipped bool) bool {
+	return setupErr != nil && !explicitlySkipped
 }
 
 // initSharedSchema creates a store on the shared DB, sets config, and commits

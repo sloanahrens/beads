@@ -59,6 +59,16 @@ func hasTestSkipForDoltBinary(service string) bool {
 	return false
 }
 
+// DoltTestsExplicitlySkipped reports whether Dolt integration tests are
+// skipped via the explicit BEADS_TEST_SKIP=dolt opt-out, as distinct from an
+// environmental gap (Docker daemon unreachable, image missing/wrong version,
+// Windows CI). TestMain functions that gate on a Dolt test server use this to
+// decide whether "cannot run" is an intentional, silent-OK skip or an
+// unverified state that must fail loudly instead of reporting a false pass.
+func DoltTestsExplicitlySkipped() bool {
+	return hasTestSkipForDoltBinary("dolt")
+}
+
 // FindFreePort finds an available TCP port by binding to :0.
 func FindFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
