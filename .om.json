@@ -1,0 +1,39 @@
+{
+  "backend": [
+    "claude",
+    "-p",
+    "--model",
+    "opus"
+  ],
+  "threshold": 0.6,
+  "depth": "standard",
+  "timeout": 300,
+  "context": "beads (bd) is the Dolt-backed issue tracker used by every agent, rig, and human across Gas Town: mayor, refinery, witness, and polecats in every other rig depend on its CLI staying correct and its data staying intact. It also accepts external GitHub contributions (see PR_MAINTAINER_GUIDELINES.md and engdocs/PROJECT_CHARTER.md), so scope discipline protects both the codebase and community trust. A defect here has town-wide blast radius, not just local impact.",
+  "rubric": [
+    {
+      "name": "correctness",
+      "weight": 3,
+      "guidance": "Logic errors, unhandled edge cases, and broken invariants outrank all else."
+    },
+    {
+      "name": "data-safety",
+      "weight": 3,
+      "guidance": "beads' Dolt backend is fragile and shared: it is the git-for-data layer under every issue, mail, and identity record town-wide. Flag schema or migration changes with no rollback or backward-compat path, changes to concurrent-write or locking behavior, and any code that pokes at Dolt/.dolt internals directly instead of going through the documented driver interface (internal/storage/, internal/doltserver/ per the depguard-enforced storage boundary in .golangci.yml)."
+    },
+    {
+      "name": "cli-contract-stability",
+      "weight": 2,
+      "guidance": "bd's CLI output, exit codes, and JSON schemas are contracts consumed by scripts and agents across every rig in the town, not just this repo. Flag any change that could silently alter parseable output shape, exit-code semantics, or flag behavior without a documented migration path."
+    },
+    {
+      "name": "scope-discipline",
+      "weight": 2,
+      "guidance": "engdocs/PROJECT_CHARTER.md draws a hard line: core owns issue-tracking primitives only, orchestration policy (routing, scheduling, model choice) belongs to layers built on top, and Dolt owns storage. Flag core changes that encode orchestration concepts, leak storage-engine specifics outside the driver boundary, or add schema/CLI surface where issue metadata would do."
+    },
+    {
+      "name": "tests",
+      "weight": 1,
+      "guidance": "beads already runs a mechanical test suite outside this gate's control; this criterion is editorial judgment, not execution. Flag meaningfully new behavior that ships with no test at all — not missing coverage on paths already exercised elsewhere."
+    }
+  ]
+}
