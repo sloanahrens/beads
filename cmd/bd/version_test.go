@@ -5,9 +5,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/steveyegge/beads/internal/storage/schema"
 )
 
 func TestVersionCommand(t *testing.T) {
@@ -41,6 +44,10 @@ func TestVersionCommand(t *testing.T) {
 		}
 		if !strings.Contains(output, Version) {
 			t.Errorf("Expected output to contain version %s, got: %s", Version, output)
+		}
+		wantSchema := fmt.Sprintf("schema<=%d", schema.LatestVersion())
+		if !strings.Contains(output, wantSchema) {
+			t.Errorf("Expected output to contain %q, got: %s", wantSchema, output)
 		}
 	})
 
@@ -76,6 +83,9 @@ func TestVersionCommand(t *testing.T) {
 		}
 		if result["build"] == "" {
 			t.Error("Expected build field to be non-empty")
+		}
+		if result["db_schema_version"] != float64(schema.LatestVersion()) {
+			t.Errorf("Expected db_schema_version %d, got %v", schema.LatestVersion(), result["db_schema_version"])
 		}
 		// cgo field removed — server-only operation, no CGO bifurcation
 		if _, ok := result["cgo"]; ok {

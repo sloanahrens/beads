@@ -877,7 +877,7 @@ var rootCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		// Handle --version flag on root command
 		if v, _ := cmd.Flags().GetBool("version"); v {
-			fmt.Printf("bd version %s (%s)\n", Version, Build)
+			fmt.Printf("bd version %s (%s) schema<=%d\n", Version, Build, schema.LatestVersion())
 			return
 		}
 		// No subcommand - show help

@@ -44,9 +44,9 @@ var versionCmd = &cobra.Command{
 
 		if jsonOutput {
 			result := map[string]interface{}{
-				"version": Version,
-				"build":   Build,
-				"schema":  schemaVer,
+				"version":           Version,
+				"build":             Build,
+				"db_schema_version": schemaVer,
 			}
 			if commit != "" {
 				result["commit"] = commit
@@ -65,6 +65,8 @@ var versionCmd = &cobra.Command{
 			} else {
 				fmt.Printf("bd version %s (%s) schema<=%d\n", Version, Build, schemaVer)
 			}
+			// "schema<=N": the binary knows migrations up to N, not that the
+			// connected DB is at N — an idle binary hasn't opened a DB yet.
 		}
 
 		// Check for multiple bd binaries in PATH

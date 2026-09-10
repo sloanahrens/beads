@@ -107,7 +107,7 @@ The version.go file implements functions that retrieve the injected information:
    - Returns empty string if none available
 
 3. **Output Formatting** (lines 52-58):
-   - Displays commit and branch in human-readable format: `bd version 0.29.0 (dev: main@7e70940)`
+   - Displays commit and branch in human-readable format: `bd version 0.29.0 (dev: main@7e70940) schema<=66`
 
 ### Things to Know
 
