@@ -960,6 +960,11 @@ jobs:
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/bd
           GOCACHE: ${{ runner.temp }}/go-cache/race
+          # This runner has no Docker daemon, so internal/storage/dolt's
+          # TestMain cannot start a containerized Dolt server. Without this,
+          # its post-be-r18 fail-loud behavior would exit 1 here even though
+          # nothing is actually broken.
+          BEADS_TEST_SKIP: dolt
         run: go test -tags gms_pure_go -v -race -short -skip '^TestEmbedded' ./...
 
   # Producer-side guard for the Beads<->consumer CLI contract. Runs the whole

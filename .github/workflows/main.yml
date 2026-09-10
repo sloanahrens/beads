@@ -573,6 +573,11 @@ jobs:
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/bd
           GOCACHE: ${{ runner.temp }}/go-cache/race
+          # Only macos-latest runs this step (coverage:false), and it has no
+          # Docker daemon, so internal/storage/dolt's TestMain cannot start a
+          # containerized Dolt server. Without this, its post-be-r18 fail-loud
+          # behavior would exit 1 here even though nothing is actually broken.
+          BEADS_TEST_SKIP: dolt
         run: go test -tags gms_pure_go ${{ matrix.test-flags }} -skip '^TestEmbedded' ./...
 
       - name: Upload coverage to Codecov
