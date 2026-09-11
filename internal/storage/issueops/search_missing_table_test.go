@@ -3,6 +3,7 @@ package issueops
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
@@ -43,14 +44,19 @@ var searchEntryPoints = []searchEntryPoint{
 // wisp-plane tables a database may legitimately not have. The ephemeral branch
 // runs the wisps query as its only query, so its table-not-exist check is the
 // last word on what the caller is told: a table the wisp query reads but the
-// wisp plane does not own -- wisp_labels during hydration, leases through
-// sqlbuild.LeaseJoin -- was answered as "there are no wisps".
+// wisp plane does not own -- wisp_labels during hydration -- was answered as
+// "there are no wisps".
+//
+// leases is deliberately absent from this list (unlike before be-2ex):
+// searchTableInTxT now retries with the lease overlay stripped instead of
+// erroring, so a missing leases table no longer reaches this tolerance check
+// at all. See TestSearchInTxEphemeralDegradesOnMissingLeases below.
 //
 // The assertion is errors.Is against the primed driver error, not a substring
 // of the message: the query text names the joined tables, so a substring check
 // passes on any error that merely echoes the query.
 func TestSearchInTxEphemeralBrokenWispPlaneIsAnError(t *testing.T) {
-	for _, missing := range []string{"wisp_labels", "leases"} {
+	for _, missing := range []string{"wisp_labels"} {
 		for _, tc := range searchEntryPoints {
 			t.Run(missing+"/"+tc.name, func(t *testing.T) {
 				_, mock, tx := beginMockTx(t)
@@ -70,6 +76,39 @@ func TestSearchInTxEphemeralBrokenWispPlaneIsAnError(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestSearchInTxEphemeralDegradesOnMissingLeases covers `bd search --ephemeral`
+// (and any other Ephemeral=true caller of the wide issueProjection): before
+// be-2ex a missing leases table on the wisps-only leg surfaced as a hard
+// error (see TestSearchInTxEphemeralBrokenWispPlaneIsAnError's history);
+// searchTableInTxT now retries with the lease overlay stripped instead, so
+// this leg behaves like every other lease-joining read path (be-cm3).
+//
+// SearchIssueIDsInTx is not covered here: its idProjection never joins
+// leases (search.go's idProjection literal leaves joinLeases false), so a
+// leases-table failure can't occur on that path in practice.
+func TestSearchInTxEphemeralDegradesOnMissingLeases(t *testing.T) {
+	_, mock, tx := beginMockTx(t)
+
+	mock.ExpectQuery(`(?s)FROM wisps`).WillReturnError(tableNotFound("leases"))
+	rows := issueRows()
+	rows.AddRow(issueRowValues("bd-w1", "Wisp Title")...)
+	mock.ExpectQuery(`(?s)FROM wisps`).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT issue_id, label FROM wisp_labels WHERE issue_id IN (?) ORDER BY issue_id, label")).
+		WithArgs("bd-w1").
+		WillReturnRows(sqlmock.NewRows([]string{"issue_id", "label"}))
+
+	out, err := SearchIssuesInTx(context.Background(), tx, "", types.IssueFilter{Ephemeral: boolPtr(true)})
+	if err != nil {
+		t.Fatalf("SearchIssuesInTx (ephemeral) on a database with no leases table: %v", err)
+	}
+	if len(out) != 1 || out[0].ID != "bd-w1" {
+		t.Fatalf("SearchIssuesInTx (ephemeral) returned %+v, want [bd-w1]", out)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
 

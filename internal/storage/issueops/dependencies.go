@@ -1045,9 +1045,16 @@ func GetIssuesByIDsInTx(ctx context.Context, tx DBTX, ids []string, wispSet map[
 			}
 			inClause := strings.Join(placeholders, ",")
 
-			rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-				`SELECT %s FROM %s %s WHERE id IN (%s)`,
-				IssueSelectColumns, pair.table, sqlbuild.LeaseJoin(pair.table), inClause), args...)
+			join := sqlbuild.LeaseJoin(pair.table)
+			querySQL := fmt.Sprintf(`SELECT %s FROM %s %s WHERE id IN (%s)`,
+				IssueSelectColumns, pair.table, join, inClause)
+			rows, err := tx.QueryContext(ctx, querySQL, args...)
+			if err != nil && leasesTableMissing(err) {
+				// Un-migrated database (pre-0055, be-cm3): retry with the
+				// lease overlay stripped instead of failing this batch
+				// (be-2ex, sibling of get_issue.go's same retry).
+				rows, err = tx.QueryContext(ctx, degradeLeaseSQL(querySQL, join), args...)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("get issues by IDs from %s: %w", pair.table, err)
 			}

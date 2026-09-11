@@ -55,10 +55,6 @@ func emptyCountsRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"id"})
 }
 
-// wispPlaneAndLeases is the reach of a wide wisp projection: label subqueries
-// plus the lease overlay searchTableInTxT adds (search.go:381).
-var wispPlaneAndLeases = []string{"wisp_labels", "leases"}
-
 // countsMegaQueryTables is the reach of sqlbuild.SearchCountsSQL: label
 // subqueries plus the comment-count LEFT JOIN at sqlbuild/counts.go:198.
 // Only the three entry points that render the counts mega-query can be
@@ -195,8 +191,12 @@ var countsEntryPoints = []countsEntryPoint{
 		wantTolerated: "count=1",
 	},
 	{
+		// leases is deliberately absent here (unlike before be-2ex): the
+		// wisps leg routes through searchTableInTxT, which now retries with
+		// the lease overlay stripped instead of erroring. See
+		// TestGetReadyWorkInTxDegradesOnMissingLeases below.
 		name:    "GetReadyWorkInTx/unbounded",
-		missing: wispPlaneAndLeases,
+		missing: []string{"wisp_labels"},
 		prime: func(mock sqlmock.Sqlmock, wispErr error) {
 			mock.ExpectQuery(`SELECT id FROM issues`).WillReturnRows(sqlmock.NewRows([]string{"id"}))
 			mock.ExpectQuery(`SELECT 1 FROM wisps LIMIT 1`).
