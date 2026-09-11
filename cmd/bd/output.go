@@ -28,6 +28,19 @@ func outputJSON(v interface{}) error {
 	return outputJSONWithPagination(v, nil)
 }
 
+// paginationMetaFor builds the envelope pagination block for a page whose
+// HasMore verdict and row count are already known. Returns nil when the page
+// was not truncated, so callers can pass the result straight to
+// outputJSONWithPagination without an extra branch. Total is left unset
+// (omitempty) because list/query pages don't carry a full-count probe the
+// way bd ready's does.
+func paginationMetaFor(hasMore bool, returned int) *PaginationMeta {
+	if !hasMore {
+		return nil
+	}
+	return &PaginationMeta{Returned: returned, Truncated: true}
+}
+
 // outputJSONWithPagination emits v as JSON, optionally including pagination
 // metadata. When BD_JSON_ENVELOPE=1 and p is non-nil, the envelope gains a
 // "pagination" key so programmatic consumers can detect truncation without

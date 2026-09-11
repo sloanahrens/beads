@@ -187,6 +187,19 @@ func TestOutputJSONWithPagination_EnvelopeTruncated(t *testing.T) {
 	}
 }
 
+func TestPaginationMetaFor(t *testing.T) {
+	if got := paginationMetaFor(false, 5); got != nil {
+		t.Errorf("hasMore=false: got %+v, want nil", got)
+	}
+	got := paginationMetaFor(true, 5)
+	if got == nil || !got.Truncated || got.Returned != 5 {
+		t.Errorf("hasMore=true, returned=5: got %+v, want {Returned:5 Truncated:true}", got)
+	}
+	if got.Total != 0 {
+		t.Errorf("Total = %d, want 0 (unset/omitempty — list/query have no full-count probe)", got.Total)
+	}
+}
+
 func TestOutputJSONWithPagination_EnvelopeNotTruncated(t *testing.T) {
 	t.Setenv("BD_JSON_ENVELOPE", "1")
 
