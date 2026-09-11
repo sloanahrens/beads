@@ -49,6 +49,34 @@ func bdQueryJSON(t *testing.T, bd, dir string, args ...string) []map[string]inte
 	return results
 }
 
+// bdQueryEnvelope is the shape of `bd query --json` under BD_JSON_ENVELOPE=1
+// when the result is truncated by --limit.
+type bdQueryEnvelope struct {
+	SchemaVersion int                      `json:"schema_version"`
+	Data          []map[string]interface{} `json:"data"`
+	Pagination    *PaginationMeta          `json:"pagination"`
+}
+
+// bdQueryEnvelopeRaw runs "bd query --json" with the given env and parses the
+// envelope response (BD_JSON_ENVELOPE=1 must be in env for "pagination" to
+// ever appear).
+func bdQueryEnvelopeRaw(t *testing.T, bd, dir string, env []string, args ...string) bdQueryEnvelope {
+	t.Helper()
+	fullArgs := append([]string{"query", "--json"}, args...)
+	cmd := exec.Command(bd, fullArgs...)
+	cmd.Dir = dir
+	cmd.Env = env
+	stdout, stderr, err := runCommandBuffers(t, cmd)
+	if err != nil {
+		t.Fatalf("bd query --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+	}
+	var out bdQueryEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("parse query envelope JSON: %v\n%s", err, stdout.String())
+	}
+	return out
+}
+
 // bdQueryFail runs "bd query" expecting failure.
 func bdQueryFail(t *testing.T, bd, dir string, args ...string) string {
 	t.Helper()
@@ -198,6 +226,28 @@ func TestEmbeddedQuery(t *testing.T) {
 		results := bdQueryJSON(t, bd, dir, "--limit", "0", "--all", "priority>=0")
 		if len(results) < 4 {
 			t.Errorf("expected all issues with --limit 0, got %d", len(results))
+		}
+	})
+
+	// be-q5j: under BD_JSON_ENVELOPE=1, a truncated `bd query --json` page
+	// must carry a "pagination" key with truncated:true, so a caller parsing
+	// JSON (the common case for agents) can detect a partial page without
+	// relying on the stderr hint, which is suppressed on piped stderr
+	// (GH#4094, see list_embedded_test.go's limit_truncation_hint subtest).
+	t.Run("query_limit_pagination_envelope", func(t *testing.T) {
+		env := append(bdEnv(dir), "BD_JSON_ENVELOPE=1")
+
+		truncated := bdQueryEnvelopeRaw(t, bd, dir, env, "--limit", "1", "status=open")
+		if !truncated.Pagination.Truncated {
+			t.Errorf("expected pagination.truncated=true for a truncated page, got %+v", truncated.Pagination)
+		}
+		if truncated.Pagination.Returned != 1 {
+			t.Errorf("expected pagination.returned=1, got %d", truncated.Pagination.Returned)
+		}
+
+		full := bdQueryEnvelopeRaw(t, bd, dir, env, "--limit", "0", "status=open")
+		if full.Pagination != nil {
+			t.Errorf("expected no pagination key for an untruncated page, got %+v", full.Pagination)
 		}
 	})
 

@@ -86,6 +86,34 @@ func bdListSkipLabelsJSONOutput(t *testing.T, bd, dir string, args ...string) bd
 	return out
 }
 
+// bdListEnvelope is the shape of `bd list --json` under BD_JSON_ENVELOPE=1
+// when the result is truncated by --limit.
+type bdListEnvelope struct {
+	SchemaVersion int                      `json:"schema_version"`
+	Data          []*types.IssueWithCounts `json:"data"`
+	Pagination    *PaginationMeta          `json:"pagination"`
+}
+
+// bdListEnvelopeRaw runs "bd list --json" with the given env and parses the
+// envelope response (BD_JSON_ENVELOPE=1 must be in env for "pagination" to
+// ever appear).
+func bdListEnvelopeRaw(t *testing.T, bd, dir string, env []string, args ...string) bdListEnvelope {
+	t.Helper()
+	fullArgs := append([]string{"list", "--json"}, args...)
+	cmd := exec.Command(bd, fullArgs...)
+	cmd.Dir = dir
+	cmd.Env = env
+	stdout, stderr, err := runCommandBuffers(t, cmd)
+	if err != nil {
+		t.Fatalf("bd list --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+	}
+	var out bdListEnvelope
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("parse list envelope JSON: %v\n%s", err, stdout.String())
+	}
+	return out
+}
+
 // bdListCapture runs "bd list" and returns (stdout, stderr) separately.
 func bdListCapture(t *testing.T, bd, dir string, args ...string) (string, string) {
 	t.Helper()
@@ -276,6 +304,28 @@ func TestEmbeddedList(t *testing.T) {
 		_, stderrHigh := bdListCapture(t, bd, dir, "--limit", "1000")
 		if strings.Contains(stderrHigh, "more results matched") {
 			t.Errorf("false-positive truncation hint when under limit:\n%s", stderrHigh)
+		}
+	})
+
+	// be-q5j: the stderr hint above is suppressed on piped stderr (GH#4094),
+	// which is exactly how every non-interactive caller (including agents)
+	// invokes bd. Under BD_JSON_ENVELOPE=1, a truncated page must instead
+	// carry a "pagination" key with truncated:true so such a caller can tell
+	// a partial page from a complete one without parsing stderr.
+	t.Run("limit_truncation_pagination_envelope", func(t *testing.T) {
+		env := append(bdEnv(dir), "BD_JSON_ENVELOPE=1")
+
+		truncated := bdListEnvelopeRaw(t, bd, dir, env, "--limit", "2")
+		if truncated.Pagination == nil || !truncated.Pagination.Truncated {
+			t.Errorf("expected pagination.truncated=true for a truncated page, got %+v", truncated.Pagination)
+		}
+		if truncated.Pagination != nil && truncated.Pagination.Returned != 2 {
+			t.Errorf("expected pagination.returned=2, got %d", truncated.Pagination.Returned)
+		}
+
+		full := bdListEnvelopeRaw(t, bd, dir, env, "--limit", "0")
+		if full.Pagination != nil {
+			t.Errorf("expected no pagination key for an untruncated page, got %+v", full.Pagination)
 		}
 	})
 
