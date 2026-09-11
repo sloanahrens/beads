@@ -38,30 +38,18 @@ func GetStaleIssuesInTx(ctx context.Context, tx DBTX, filter types.StaleFilter) 
 	// Heartbeats live in the ephemeral leases table and no longer stamp
 	// issues.updated_at (bd-lrgn1), so an actively-worked claim can carry an
 	// old updated_at: an issue with a heartbeat since the cutoff is not stale.
-	query := fmt.Sprintf(`
-		SELECT id FROM issues
-		WHERE updated_at < ?
-		  AND %s
-		  AND (ephemeral = 0 OR ephemeral IS NULL)
-		  AND NOT EXISTS (
-			SELECT 1 FROM leases WHERE leases.issue_id = issues.id AND leases.heartbeat_at >= ?
-		  )%s
-		ORDER BY updated_at ASC
-	`, statusClause, labelClause)
-	args := []interface{}{cutoff}
-	if filter.Status != "" {
-		args = append(args, filter.Status)
-	}
-	args = append(args, cutoff) // NOT EXISTS heartbeat cutoff, after any status arg
-	// Label placeholders sit after the NOT EXISTS in the query text, so their
-	// args go last.
-	args = append(args, labelArgs...)
-
-	if filter.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", filter.Limit)
-	}
+	query, args := staleIssuesQuery(statusClause, labelClause, true, filter, cutoff, labelArgs)
 
 	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil && leasesTableMissing(err) {
+		// Un-migrated database (pre-0055, be-cm3): the NOT EXISTS heartbeat
+		// guard reads the leases table directly (not via sqlbuild.LeaseJoin,
+		// so degradeLeaseSQL doesn't apply here). No leases table means no
+		// heartbeats exist at all, so drop the guard and retry instead of
+		// failing `bd stale` outright (be-2ex).
+		query, args = staleIssuesQuery(statusClause, labelClause, false, filter, cutoff, labelArgs)
+		rows, err = tx.QueryContext(ctx, query, args...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stale issues: %w", err)
 	}
@@ -110,4 +98,47 @@ func GetStaleIssuesInTx(ctx context.Context, tx DBTX, filter types.StaleFilter) 
 	}
 
 	return ordered, nil
+}
+
+// staleIssuesQuery renders the `bd stale` id-scan query and its args.
+// includeHeartbeatGuard controls the "AND NOT EXISTS (... FROM leases ...)"
+// clause: GetStaleIssuesInTx's first attempt passes true, and on a
+// leasesTableMissing retry passes false to drop the clause (and its cutoff
+// arg) entirely, since a database with no leases table has no heartbeats to
+// guard against.
+//
+// nolint:gosec // G201: statusClause and labelClause contain only literal SQL or ? placeholders
+func staleIssuesQuery(statusClause, labelClause string, includeHeartbeatGuard bool, filter types.StaleFilter, cutoff time.Time, labelArgs []interface{}) (string, []interface{}) {
+	heartbeatClause := ""
+	if includeHeartbeatGuard {
+		heartbeatClause = `
+		  AND NOT EXISTS (
+			SELECT 1 FROM leases WHERE leases.issue_id = issues.id AND leases.heartbeat_at >= ?
+		  )`
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id FROM issues
+		WHERE updated_at < ?
+		  AND %s
+		  AND (ephemeral = 0 OR ephemeral IS NULL)%s%s
+		ORDER BY updated_at ASC
+	`, statusClause, heartbeatClause, labelClause)
+
+	args := []interface{}{cutoff}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+	}
+	if includeHeartbeatGuard {
+		args = append(args, cutoff) // NOT EXISTS heartbeat cutoff, after any status arg
+	}
+	// Label placeholders sit after the NOT EXISTS in the query text, so their
+	// args go last.
+	args = append(args, labelArgs...)
+
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", filter.Limit)
+	}
+
+	return query, args
 }

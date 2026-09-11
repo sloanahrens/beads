@@ -387,6 +387,12 @@ func searchTableInTxT[T any](ctx context.Context, tx DBTX, query string, filter 
 		selectKeyword, proj.columns(tables), fromSQL, whereSQL, sqlbuild.OrderBy(filter.SortBy, filter.SortDesc, ""), limitSQL)
 
 	rows, err := tx.QueryContext(ctx, querySQL, args...)
+	if err != nil && proj.joinLeases && leasesTableMissing(err) {
+		// Un-migrated database (pre-0055, be-cm3): retry with the lease
+		// overlay stripped instead of failing the whole search (be-2ex,
+		// sibling of get_issue.go/search_counts.go's same retry).
+		rows, err = tx.QueryContext(ctx, degradeLeaseSQL(querySQL, sqlbuild.LeaseJoin(tables.Main)), args...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("search %s: %w", tables.Main, err)
 	}
@@ -456,6 +462,12 @@ func searchTablePatternBT[T any](ctx context.Context, tx DBTX, query string, fil
 		proj.columns(tables), fetchFrom, strings.Join(placeholders, ","))
 
 	fetchRows, err := tx.QueryContext(ctx, fetchSQL, fetchArgs...)
+	if err != nil && proj.joinLeases && leasesTableMissing(err) {
+		// Un-migrated database (pre-0055, be-cm3): retry with the lease
+		// overlay stripped instead of failing the Pattern B hydration
+		// fetch (be-2ex).
+		fetchRows, err = tx.QueryContext(ctx, degradeLeaseSQL(fetchSQL, sqlbuild.LeaseJoin(tables.Main)), fetchArgs...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("search %s (hydrate): %w", tables.Main, err)
 	}
