@@ -19,6 +19,7 @@ pushing_version_tag=0
 while read -r local_ref _local_sha _remote_ref _remote_sha; do
     case "$local_ref" in
         refs/tags/v[0-9]*) pushing_version_tag=1 ;;
+        refs/notes/*) ;; # notes pushes (e.g. om-editorial proof) are never version tags — see gt-r8yl
     esac
 done <<< "$push_refs"
 
