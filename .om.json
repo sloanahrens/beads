@@ -1,9 +1,7 @@
 {
   "backend": [
-    "claude",
-    "-p",
-    "--model",
-    "opus"
+    "/Users/sloan/.local/bin/claude-deepseek-pro",
+    "-p"
   ],
   "threshold": 0.6,
   "depth": "standard",
@@ -33,7 +31,7 @@
     {
       "name": "tests",
       "weight": 1,
-      "guidance": "beads already runs a mechanical test suite outside this gate's control; this criterion is editorial judgment, not execution. Flag meaningfully new behavior that ships with no test at all — not missing coverage on paths already exercised elsewhere."
+      "guidance": "beads already runs a mechanical test suite outside this gate's control; this criterion is editorial judgment, not execution. Flag meaningfully new behavior that ships with no test at all \u2014 not missing coverage on paths already exercised elsewhere."
     }
   ]
 }
