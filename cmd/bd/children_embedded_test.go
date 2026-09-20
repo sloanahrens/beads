@@ -100,6 +100,46 @@ func TestEmbeddedChildren(t *testing.T) {
 		}
 	})
 
+	// be-8ws: the durable-only plane suppression the default listing carries
+	// used to reach a --parent scope too. An ephemeral parent's children are
+	// wisps, whose parent-child edges are written to wisp_dependencies, so
+	// `bd children <wisp>` and `bd list --parent <wisp>` answered "has no
+	// children" for a parent that had them — silently, with exit 0.
+	t.Run("children_of_an_ephemeral_parent", func(t *testing.T) {
+		parent := bdCreate(t, bd, dir, "Wisp root", "--ephemeral")
+		child1 := bdCreate(t, bd, dir, "Wisp step 1", "--ephemeral")
+		child2 := bdCreate(t, bd, dir, "Wisp step 2", "--ephemeral")
+		bdDepAdd(t, bd, dir, child1.ID, parent.ID, "--type", "parent-child")
+		bdDepAdd(t, bd, dir, child2.ID, parent.ID, "--type", "parent-child")
+
+		out := bdChildren(t, bd, dir, parent.ID)
+		for _, id := range []string{child1.ID, child2.ID} {
+			if !strings.Contains(out, id) {
+				t.Errorf("expected ephemeral child %s in output: %s", id, out)
+			}
+		}
+	})
+
+	// The scope admits the wisp PLANE, not wisp-specific rows: a parent-child
+	// edge into the wisp plane from a durable parent is a real child, and
+	// `bd show <id> --children` — which has always unioned both dependency
+	// tables — already reports it. `bd children` has to agree with it, so this
+	// pins the pair rather than the durable-only half.
+	t.Run("durable_parent_with_an_ephemeral_child", func(t *testing.T) {
+		parent := bdCreate(t, bd, dir, "Durable parent", "--type", "epic")
+		durableChild := bdCreate(t, bd, dir, "Durable child", "--type", "task")
+		wispChild := bdCreate(t, bd, dir, "Ephemeral child", "--ephemeral")
+		bdDepAdd(t, bd, dir, durableChild.ID, parent.ID, "--type", "parent-child")
+		bdDepAdd(t, bd, dir, wispChild.ID, parent.ID, "--type", "parent-child")
+
+		out := bdChildren(t, bd, dir, parent.ID)
+		for _, id := range []string{durableChild.ID, wispChild.ID} {
+			if !strings.Contains(out, id) {
+				t.Errorf("expected child %s in output: %s", id, out)
+			}
+		}
+	})
+
 	t.Run("children_nonexistent_parent", func(t *testing.T) {
 		cmd := exec.Command(bd, "children", "ch-nonexistent999")
 		cmd.Dir = dir

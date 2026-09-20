@@ -440,14 +440,29 @@ func applyTypeSuppressions(in issueops.ListRequest, cfg ListConfig, filter *type
 		}
 	}
 
-	// The plane bit. Three requests admit the wisp table: an explicit
+	// The plane bit. Four requests admit the wisp table: an explicit
 	// IncludeEphemeral, IncludeInfra (which admits the plane AND drops the
-	// infra-type exclusions above), and naming an infra type (which routed to
-	// the plane alone in BuildListFilter). Everything else is the durable
-	// listing. IncludeAllTypes is a fourth, via the early return above — it is
-	// the union of these flags, so it must decide the plane too, not only the
-	// type exclusions.
-	if !in.IncludeEphemeral && !in.IncludeInfra && (in.IssueType == "" || !cfg.IsInfra(in.IssueType)) {
+	// infra-type exclusions above), naming an infra type (which routed to
+	// the plane alone in BuildListFilter), and ParentID, below. Everything
+	// else is the durable listing. IncludeAllTypes is a fifth, via the early
+	// return above — it is the union of these flags, so it must decide the
+	// plane too, not only the type exclusions.
+	//
+	// ParentID is the exception because a --parent scope is not the default
+	// listing: it names ONE bead and asks for its children, and the children
+	// of an ephemeral (wisp) parent are themselves wisps, whose parent-child
+	// edges live in wisp_dependencies. Suppressing the plane here answered
+	// "no children" for every ephemeral parent (be-8ws): the durable leg's
+	// ParentID subquery reads `dependencies`, where such a parent has no
+	// edges, and the wisp leg — the one that reads wisp_dependencies — never
+	// ran. Admitting the plane does not widen a DURABLE subtree's answer: an
+	// id lives in exactly one plane (EnsureIssueIDAvailableInTx probes both
+	// to guarantee it), so each leg's ParentID clause matches only its own
+	// plane's children and the merge adds nothing for an all-durable
+	// subtree. NoParent is deliberately NOT in this set: it is a complement
+	// over the whole table rather than a subtree scope, so it stays the
+	// durable listing rather than becoming every open wisp city-wide.
+	if !in.IncludeEphemeral && !in.IncludeInfra && (in.IssueType == "" || !cfg.IsInfra(in.IssueType)) && in.ParentID == "" {
 		filter.SkipWisps = true
 	}
 }

@@ -36,6 +36,14 @@ type listFilterGoldenCase struct {
 // EVERY status — silently kept forcing Pinned=false and hid pinned beads from
 // the one selector that says it hides nothing. TestPinnedDefaultBySelector
 // below owns that behavior now; see the PR body for the compatibility note.
+//
+// A SECOND case is re-recorded for a bug fix rather than a compatibility
+// choice: metadata_and_parent's SkipWisps went true -> false (be-8ws). The
+// durable-only plane suppression is a statement about the DEFAULT listing, and
+// the old builder applied it to a --parent scope as well — which answered
+// "has no children" for every ephemeral parent, whose children live in
+// wisp_dependencies. TestParentScopeAdmitsTheWispPlane in
+// list_ephemeral_test.go owns that behavior now.
 func TestBuildListFilterGolden(t *testing.T) {
 	blob, err := os.ReadFile(filepath.Join("testdata", "list_filter_golden.json"))
 	if err != nil {
