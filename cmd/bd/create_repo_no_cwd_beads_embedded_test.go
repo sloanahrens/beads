@@ -132,4 +132,63 @@ func TestEmbeddedCreateRepoFromNonBeadsCwd(t *testing.T) {
 			t.Errorf("expected no embeddeddolt/ to be created at %s (redirect should have been followed)", rigBeadsDir)
 		}
 	})
+
+	// be-z03: the reported shape (om/polecats/flint, 2026-09-08) is a Gas
+	// Town polecat sandbox — a working directory whose OWN .beads/ carries
+	// only a redirect to the rig's real workspace — filing cross-repo with a
+	// bare rig name: `bd create --repo gastown ...`. The source store is
+	// reached through the redirect, so the ambiguous-target guard has to hold
+	// on that path too, not only when the cwd has no workspace at all (the
+	// case the be-6mk subtest above covers). Before the fixes the guessed
+	// target `<sandbox>/gastown/.beads` was auto-vivified into a fresh
+	// embedded Dolt DB: silent, no warning, and the caller believed the bead
+	// had been filed cross-repo. The fossil record of exactly that is still
+	// on disk in the town ($RIG/.beads/embeddeddolt next to a redirect-only
+	// .beads, DB named after the source prefix).
+	t.Run("ambiguous_repo_target_from_redirected_sandbox_does_not_auto_vivify", func(t *testing.T) {
+		// The rig's real workspace, which the sandbox redirects to.
+		realRepoDir, realBeadsDir, _ := bdInit(t, bd, "--prefix", "ry")
+
+		// A polecat-shaped sandbox: .beads/ holds only a redirect. This is a
+		// fully valid workspace (it is where the source store is found), so
+		// the cwd is NOT the "no workspace" case the subtest above covers.
+		sandbox := t.TempDir()
+		sandboxBeadsDir := filepath.Join(sandbox, ".beads")
+		if err := os.MkdirAll(sandboxBeadsDir, 0o750); err != nil {
+			t.Fatalf("mkdir sandbox .beads: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(sandboxBeadsDir, "redirect"), []byte(realBeadsDir+"\n"), 0o600); err != nil {
+			t.Fatalf("write redirect: %v", err)
+		}
+
+		// The bead is filed from inside the sandbox with a bare rig name.
+		out := bdCreateFail(t, bd, sandbox, "cross-repo filing", "--repo", "some-other-rig")
+		if !strings.Contains(out, "won't be auto-created here") {
+			t.Errorf("expected the ambiguous-repo-target error, got:\n%s", out)
+		}
+
+		// Nothing may be created at the guessed target.
+		if _, err := os.Stat(filepath.Join(sandbox, "some-other-rig")); err == nil {
+			t.Errorf("expected no directory to be created at %s, but one exists", filepath.Join(sandbox, "some-other-rig"))
+		}
+
+		// The sandbox's own .beads must not have been turned into a
+		// workspace either — no phantom metadata.json or embedded DB next to
+		// its redirect.
+		for _, artifact := range []string{"metadata.json", "embeddeddolt"} {
+			if _, err := os.Stat(filepath.Join(sandboxBeadsDir, artifact)); err == nil {
+				t.Errorf("expected no %s to be created at %s (the sandbox redirects to a real workspace and must not sprout one)", artifact, sandboxBeadsDir)
+			}
+		}
+
+		// The sandbox must still reach its real workspace, so a properly
+		// targeted create from the same cwd keeps working — the guard
+		// rejects only the unresolvable target, it does not break the
+		// redirected-cwd path the sandbox depends on.
+		issue := bdCreate(t, bd, sandbox, "Routed from sandbox", "--repo", realRepoDir)
+		if !strings.HasPrefix(issue.ID, "ry-") {
+			t.Errorf("ID should have real repo's prefix ry-, got %q", issue.ID)
+		}
+		assertIssueInStore(t, realBeadsDir, "ry", issue.ID)
+	})
 }
