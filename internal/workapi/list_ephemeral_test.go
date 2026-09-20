@@ -60,6 +60,60 @@ func TestIncludeEphemeralIsThePlaneBitAndNothingElse(t *testing.T) {
 	}
 }
 
+// TestParentScopeAdmitsTheWispPlane pins the plane decision for a --parent
+// scope (be-8ws). The durable-only suppression is a statement about the
+// DEFAULT listing — show durable work — and a parent scope is not that
+// listing: it names ONE bead and asks for its children. When that bead is
+// ephemeral its children are wisps, whose parent-child edges live in
+// wisp_dependencies, so with the plane suppressed the durable leg's ParentID
+// subquery reads `dependencies` (where such a parent has no edges), the wisp
+// leg never runs, and the walk answers "has no children" for a parent that
+// has them.
+//
+// This asserts the BIT. What the search then reads, and the merge of the two
+// legs, is covered end-to-end against a real database by
+// TestEmbeddedChildren's ephemeral-parent case (cmd/bd), which was the
+// user-visible failure.
+func TestParentScopeAdmitsTheWispPlane(t *testing.T) {
+	cfg := ListConfig{}
+
+	parent, err := BuildListFilter(issueops.ListRequest{ParentID: "bd-wisp-root"}, cfg)
+	if err != nil {
+		t.Fatalf("BuildListFilter(--parent): %v", err)
+	}
+	if parent.SkipWisps {
+		t.Error("a --parent scope left SkipWisps set; an ephemeral parent's children are exactly what it cannot then see")
+	}
+	if parent.ParentID == nil || *parent.ParentID != "bd-wisp-root" {
+		t.Fatalf("ParentID = %v, want bd-wisp-root", parent.ParentID)
+	}
+	// The plane bit is the ONLY thing a parent scope lifts: it is not a request
+	// for infrastructure work, so the type exclusions stand.
+	if len(parent.ExcludeTypes) == 0 {
+		t.Error("a --parent scope dropped every type exclusion; it is a plane knob, not a type knob")
+	}
+
+	// --no-parent is deliberately NOT in that set. It is a complement over the
+	// whole table rather than a subtree scope, so it stays the durable listing
+	// and does not start enumerating ephemeral work nobody asked for.
+	noParent, err := BuildListFilter(issueops.ListRequest{NoParent: true}, cfg)
+	if err != nil {
+		t.Fatalf("BuildListFilter(--no-parent): %v", err)
+	}
+	if !noParent.SkipWisps {
+		t.Error("--no-parent admitted the wisp plane; it is a complement, not a subtree scope")
+	}
+
+	// And the default listing is unmoved.
+	page, err := BuildListFilter(issueops.ListRequest{}, cfg)
+	if err != nil {
+		t.Fatalf("BuildListFilter(default): %v", err)
+	}
+	if !page.SkipWisps {
+		t.Error("a plain listing admitted the wisp plane")
+	}
+}
+
 // TestReadyProjectionCarriesTheEphemeralPlane pins the ReadyFlag arm's half of
 // the same promise. The projection onto WorkFilter is where a list field is
 // silently dropped, and a dropped IncludeEphemeral would answer `--ready
