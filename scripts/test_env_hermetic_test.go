@@ -30,6 +30,12 @@ func TestMakeTestHermeticEnv(t *testing.T) {
 	const script = `
 set -euo pipefail
 source ci/lib/test-env.sh
+# Under make test this process already runs inside an outer
+# beads_test_env_enter, whose re-entrancy guard (BEADS_TEST_ENV_ACTIVE=1)
+# makes a nested enter a no-op. The subject here is the scrub, so start a
+# fresh enter: drop the guard and the disable switch, and let its own EXIT
+# trap remove the temp root it creates.
+unset BEADS_TEST_ENV_ACTIVE BEADS_TEST_ENV_DISABLE BEADS_TEST_ENV_KEEP
 beads_test_env_enter
 echo "GT_DOLT_PORT=${GT_DOLT_PORT-<unset>}"
 echo "BD_DOLT_AUTO_COMMIT=${BD_DOLT_AUTO_COMMIT-<unset>}"
