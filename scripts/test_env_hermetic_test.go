@@ -36,12 +36,19 @@ source ci/lib/test-env.sh
 # fresh enter: drop the guard and the disable switch, and let its own EXIT
 # trap remove the temp root it creates.
 unset BEADS_TEST_ENV_ACTIVE BEADS_TEST_ENV_DISABLE BEADS_TEST_ENV_KEEP
+# An outer enter (make test) exports BEADS_TEST_MODE=1 and it is not BD_-
+# prefixed, so the sweep would not remove it and the assertion below could
+# not tell a fresh export from the inherited one. Clear both switches so the
+# fresh enter has to set them itself.
+unset BD_DISABLE_METRICS BEADS_TEST_MODE
 beads_test_env_enter
 echo "GT_DOLT_PORT=${GT_DOLT_PORT-<unset>}"
 echo "BD_DOLT_AUTO_COMMIT=${BD_DOLT_AUTO_COMMIT-<unset>}"
 echo "BD_ALLOW_REMOTE_MIGRATE=${BD_ALLOW_REMOTE_MIGRATE-<unset>}"
 echo "BD_ACTOR=${BD_ACTOR-<unset>}"
 echo "BD_A_FUTURE_CONFIG_KEY_NOBODY_ENUMERATED_YET=${BD_A_FUTURE_CONFIG_KEY_NOBODY_ENUMERATED_YET-<unset>}"
+echo "metrics:BD_DISABLE_METRICS=${BD_DISABLE_METRICS-<unset>}"
+echo "metrics:BEADS_TEST_MODE=${BEADS_TEST_MODE-<unset>}"
 `
 	cmd := exec.Command("bash", "-c", script)
 	// cwd is the "scripts" package directory (go test convention), so
@@ -59,6 +66,17 @@ echo "BD_A_FUTURE_CONFIG_KEY_NOBODY_ENUMERATED_YET=${BD_A_FUTURE_CONFIG_KEY_NOBO
 	}
 
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// The two metrics switches are the one thing enter must SET after
+		// the BD_ sweep (be-9zm): with HOME redirected to an empty sandbox
+		// and no user config, every bd the suites spawn would otherwise
+		// resolve metrics enabled — fork the platform machine-id probe,
+		// write event files, and spawn detached send-metrics children.
+		if rest, ok := strings.CutPrefix(line, "metrics:"); ok {
+			if !strings.HasSuffix(rest, "=1") {
+				t.Errorf("beads_test_env_enter left telemetry live for test-spawned bd: %s (want =1)", rest)
+			}
+			continue
+		}
 		if !strings.HasSuffix(line, "=<unset>") {
 			t.Errorf("beads_test_env_enter left a Dolt-server-reaching env var set: %s (want unset)", line)
 		}

@@ -91,6 +91,15 @@ beads_test_env_enter() {
         unset "$bd_var"
     done
 
+    # be-9zm: with HOME pointed at an empty sandbox there is no user config,
+    # so every bd the suites spawn would resolve telemetry ENABLED: fork the
+    # platform machine-id probe (ioreg on macOS) on the cold cache, write
+    # event files under $HOME/.beads/eventsData, and spawn detached
+    # send-metrics children aimed at the real endpoint. Set the two switches
+    # AFTER the sweep above (which would otherwise remove BD_DISABLE_METRICS).
+    export BD_DISABLE_METRICS=1
+    export BEADS_TEST_MODE=1
+
     if command -v dolt >/dev/null 2>&1; then
         dolt config --global --add user.name "beads-test" >/dev/null 2>&1 || true
         dolt config --global --add user.email "test@beads.local" >/dev/null 2>&1 || true
