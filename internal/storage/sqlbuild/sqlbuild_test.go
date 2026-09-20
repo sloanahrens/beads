@@ -491,3 +491,31 @@ func TestOptionalWispTable(t *testing.T) {
 		}
 	}
 }
+
+// TestWispDependencyTable verifies the table name mapping for the wisp dependency table.
+func TestWispDependencyTable(t *testing.T) {
+	t.Parallel()
+
+	// dependencies -> wisp_dependencies
+	if got := WispDependencyTable("dependencies"); got != "wisp_dependencies" {
+		t.Errorf("WispDependencyTable(%q) = %q, want %q", "dependencies", got, "wisp_dependencies")
+	}
+
+	// wisp_dependencies -> dependencies
+	if got := WispDependencyTable("wisp_dependencies"); got != "dependencies" {
+		t.Errorf("WispDependencyTable(%q) = %q, want %q", "wisp_dependencies", got, "dependencies")
+	}
+
+	// Case insensitive matching
+	if got := WispDependencyTable("DEPENDENCIES"); got != "wisp_dependencies" {
+		t.Errorf("WispDependencyTable(%q) = %q, want %q", "DEPENDENCIES", got, "wisp_dependencies")
+	}
+	if got := WispDependencyTable("WISP_DEPENDENCIES"); got != "dependencies" {
+		t.Errorf("WispDependencyTable(%q) = %q, want %q", "WISP_DEPENDENCIES", got, "dependencies")
+	}
+
+	// Unknown table returns as-is
+	if got := WispDependencyTable("unknown"); got != "unknown" {
+		t.Errorf("WispDependencyTable(%q) = %q, want %q", "unknown", got, "unknown")
+	}
+}

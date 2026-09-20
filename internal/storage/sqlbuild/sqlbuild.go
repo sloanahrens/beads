@@ -35,6 +35,19 @@ func OptionalWispTable(name string) bool {
 	return strings.EqualFold(name, "wisps") || strings.EqualFold(name, "wisp_dependencies")
 }
 
+// WispDependencyTable returns the wisp dependency table name that corresponds
+// to the given dependency table name. If input is "dependencies", returns
+// "wisp_dependencies", and vice versa.
+func WispDependencyTable(depTable string) string {
+	if strings.EqualFold(depTable, "dependencies") {
+		return "wisp_dependencies"
+	}
+	if strings.EqualFold(depTable, "wisp_dependencies") {
+		return "dependencies"
+	}
+	return depTable
+}
+
 // DepTargetExpr resolves a dependency row's target across the three
 // mutually-exclusive target columns.
 const DepTargetExpr = "COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)"

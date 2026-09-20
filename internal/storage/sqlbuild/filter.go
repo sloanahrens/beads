@@ -171,13 +171,17 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 		args = append(args, filter.SpecIDPrefix+"%")
 	}
 
+	// ParentID and NoParent filters must query BOTH dependencies and wisp_dependencies
+	// tables because children can be stored in either table (durable issues in
+	// dependencies, ephemeral wisps in wisp_dependencies).
 	if filter.ParentID != nil {
 		parentID := *filter.ParentID
-		whereClauses = append(whereClauses, fmt.Sprintf("(id IN (SELECT issue_id FROM %s WHERE type = 'parent-child' AND %s = ?) OR (id LIKE CONCAT(?, '.%%') AND id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child')))", tables.Dependencies, DepTargetExpr, tables.Dependencies))
+		// Query both dependency tables to find all children
+		whereClauses = append(whereClauses, fmt.Sprintf("(id IN (SELECT issue_id FROM (SELECT issue_id, type, depends_on_issue_id, depends_on_wisp_id, depends_on_external FROM %s UNION ALL SELECT issue_id, type, depends_on_issue_id, depends_on_wisp_id, depends_on_external FROM %s) WHERE type = 'parent-child' AND %s = ?) OR (id LIKE CONCAT(?, '.%%') AND id NOT IN (SELECT issue_id FROM (SELECT issue_id, type, depends_on_issue_id, depends_on_wisp_id, depends_on_external FROM %s UNION ALL SELECT issue_id, type, depends_on_issue_id, depends_on_wisp_id, depends_on_external FROM %s) WHERE type = 'parent-child')))", tables.Dependencies, WispDependencyTable(tables.Dependencies), DepTargetExpr, tables.Dependencies, WispDependencyTable(tables.Dependencies)))
 		args = append(args, parentID, parentID)
 	}
 	if filter.NoParent {
-		whereClauses = append(whereClauses, fmt.Sprintf("id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child')", tables.Dependencies))
+		whereClauses = append(whereClauses, fmt.Sprintf("id NOT IN (SELECT issue_id FROM (SELECT issue_id, type, depends_on_issue_id, depends_on_wisp_id, depends_on_external FROM %s UNION ALL SELECT issue_id, type, depends_on_issue_id, depends_on_wisp_id, depends_on_external FROM %s) WHERE type = 'parent-child')", tables.Dependencies, WispDependencyTable(tables.Dependencies)))
 	}
 
 	if filter.MolType != nil {
