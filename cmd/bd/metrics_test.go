@@ -205,6 +205,11 @@ func TestFirstRunNoticeSuppressedByContext(t *testing.T) {
 
 		initCmd := &cobra.Command{Use: "init"}
 		initCmd.Flags().Bool("stealth", false, "")
+		// Mirror the real init command's LOCAL --quiet, which shadows the
+		// persistent root flag. A synthetic tree without it cannot catch the
+		// be-1ix regression, where the global quietFlag stays false under
+		// `bd init --quiet`.
+		initCmd.Flags().BoolP("quiet", "q", false, "")
 		root.AddCommand(initCmd)
 		cmds["init"] = initCmd
 		return cmds
@@ -259,6 +264,17 @@ func TestFirstRunNoticeSuppressedByContext(t *testing.T) {
 		}
 		if !firstRunNoticeSuppressedByContext(cmds["init"]) {
 			t.Errorf("`bd init --stealth` should suppress the first-run notice")
+		}
+	})
+
+	t.Run("quiet init is suppressed", func(t *testing.T) {
+		reset()
+		cmds := newTree()
+		if err := cmds["init"].Flags().Set("quiet", "true"); err != nil {
+			t.Fatalf("set quiet flag: %v", err)
+		}
+		if !firstRunNoticeSuppressedByContext(cmds["init"]) {
+			t.Errorf("`bd init --quiet` should suppress the first-run notice")
 		}
 	})
 

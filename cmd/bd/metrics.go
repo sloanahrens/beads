@@ -341,6 +341,23 @@ var firstRunNoticeSuppressedCommands = map[string]bool{
 	"powershell":                  true,
 }
 
+// commandQuietFlag reports whether the command under execution was asked for
+// quiet through the flag set it actually parsed. It exists because bd init
+// defines a LOCAL -q/--quiet that shadows the persistent root flag, so during
+// `bd init --quiet` the global quietFlag is false while the user very much
+// asked for quiet — the same shadowing already handled for the dolt advisory
+// in uow_factory.go and init_proxied_server.go. On every other command
+// cmd.Flags() carries the inherited persistent --quiet (cobra merges it at
+// parse time), so this reads the same value quietFlag holds; a command with
+// no quiet flag at all makes GetBool error and reports false.
+func commandQuietFlag(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	quiet, err := cmd.Flags().GetBool("quiet")
+	return err == nil && quiet
+}
+
 // firstRunNoticeSuppressedByContext reports whether the current command/output
 // context must never emit the friendly first-run metrics notice. This is the
 // pure context decision — independent of whether metrics are enabled or the
@@ -349,7 +366,7 @@ var firstRunNoticeSuppressedCommands = map[string]bool{
 // command itself, hook/protocol/completion/shell-init commands, the root
 // --version/-V probe, and stealth init.
 func firstRunNoticeSuppressedByContext(cmd *cobra.Command) bool {
-	if jsonOutput || quietFlag || primeHookJSONMode {
+	if jsonOutput || quietFlag || commandQuietFlag(cmd) || primeHookJSONMode {
 		return true
 	}
 	if os.Getenv("BD_GIT_HOOK") == "1" {
