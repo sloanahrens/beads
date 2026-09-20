@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 )
 
 // machineIDCacheName is the file under ~/.beads that persists the telemetry
@@ -93,6 +96,28 @@ func writeMachineIDCache(path, id string) {
 	}
 }
 
+// machineIDLockPath returns the path to the lock file used to serialize
+// machine ID computation across concurrent bd invocations.
+func machineIDLockPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, dataDirName, "machine-id.lock"), nil
+}
+
+// testHookComputeMachineID is set by tests to intercept computeMachineID calls.
+// This is not exported and only used in tests.
+var testHookComputeMachineID func(appName string) string
+
+// computeMachineIDWithHook calls either the test hook or the actual computeMachineID.
+func computeMachineIDWithHook(appName string) string {
+	if testHookComputeMachineID != nil {
+		return testHookComputeMachineID(appName)
+	}
+	return computeMachineID(appName)
+}
+
 // cachedMachineID returns the stable distinct ID for this machine, reading the
 // ~/.beads/machine-id cache first and falling back to the (slow) platform
 // probe, whose result it caches for every later invocation. Only called when
@@ -101,17 +126,62 @@ func writeMachineIDCache(path, id string) {
 // The probe itself (computeMachineID, backed by eventkit.MachineID) lives in
 // metrics.go: eventkit imports are depguard-fenced to metrics.go/flusher.go
 // (.golangci.yml dolt-storage-boundary), and this file needs none of it.
+//
+// To prevent 2x process amplification under parallel fan-out (be-vv1), this
+// function uses a file lock around the machine ID computation so only one
+// process forks /usr/sbin/ioreg at a time; others wait for the result.
 func cachedMachineID(appName string) string {
 	path, err := machineIDCachePath()
 	if err != nil {
 		return computeMachineID(appName)
 	}
+
+	// Fast path: check cache first without locking.
+	// This handles the common case where the cache already exists.
 	if id := readCachedMachineID(path); id != "" {
 		return id
 	}
-	id := computeMachineID(appName)
+
+	// Cache miss: need to compute and write. Use a lock to prevent
+	// multiple concurrent processes from forking ioreg simultaneously.
+	lockPath, err := machineIDLockPath()
+	if err != nil {
+		return computeMachineIDWithHook(appName)
+	}
+
+	lock, err := util.TryLock(lockPath)
+	if err != nil {
+		// Lock contention: another process is computing the ID.
+		// Wait for it by polling the cache until we get a valid value.
+		return waitForCachedMachineID(path)
+	}
+	defer lock.Unlock()
+
+	// Re-check cache after acquiring lock (another process may have
+	// written while we were waiting for the lock).
+	if id := readCachedMachineID(path); id != "" {
+		return id
+	}
+
+	// Compute the machine ID and write to cache.
+	id := computeMachineIDWithHook(appName)
 	if validMachineID(id) {
 		writeMachineIDCache(path, id)
 	}
 	return id
+}
+
+// waitForCachedMachineID polls the cache until a valid ID is found or the
+// context expires. This is used when another process holds the lock and
+// is computing the machine ID.
+func waitForCachedMachineID(path string) string {
+	// Poll with exponential backoff: 1ms, 2ms, 4ms, 8ms, ... up to 100ms
+	for delay := time.Millisecond; delay <= 100*time.Millisecond; delay *= 2 {
+		if id := readCachedMachineID(path); id != "" {
+			return id
+		}
+		time.Sleep(delay)
+	}
+	// Final attempt after waiting; if still no cache, fall back to compute.
+	return computeMachineIDWithHook("")
 }

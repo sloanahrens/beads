@@ -1,10 +1,13 @@
 package metrics
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -166,5 +169,108 @@ func TestWriteMachineIDCacheAtomicReplace(t *testing.T) {
 		if strings.Contains(e.Name(), ".tmp-") {
 			t.Errorf("temp file litter left behind: %s", e.Name())
 		}
+	}
+}
+
+// TestCachedMachineIDConcurrentAccess verifies that concurrent bd invocations
+// do not fork ioreg multiple times (be-vv1). Multiple goroutines attempt to
+// compute the machine ID simultaneously; only one should fork ioreg, the
+// others should wait and reuse the result.
+func TestCachedMachineIDConcurrentAccess(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	// Clear any existing cache to force computation.
+	dir := filepath.Join(home, ".beads")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove cache dir: %v", err)
+	}
+
+	const numWorkers = 10
+	results := make(chan string, numWorkers)
+	errors := make(chan error, numWorkers)
+
+	var ioregCount int32
+	// Patch testHookComputeMachineID to count forks
+	originalHook := testHookComputeMachineID
+	testHookComputeMachineID = func(appName string) string {
+		atomic.AddInt32(&ioregCount, 1)
+		// Use the original computeMachineID via the public function
+		return computeMachineID(appName)
+	}
+	defer func() { testHookComputeMachineID = originalHook }()
+
+	// Spawn multiple goroutines to call cachedMachineID concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id := cachedMachineID(AppName)
+			if id == "" {
+				errors <- fmt.Errorf("cachedMachineID returned empty")
+				return
+			}
+			results <- id
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+	close(errors)
+
+	// Collect results.
+	var ids []string
+	for id := range results {
+		ids = append(ids, id)
+	}
+	if len(errors) > 0 {
+		t.Fatalf("got %d errors, first: %v", len(errors), <-errors)
+	}
+
+	// All results should be identical.
+	for i := 1; i < len(ids); i++ {
+		if ids[i] != ids[0] {
+			t.Errorf("id[%d]=%q != id[0]=%q", i, ids[i], ids[0])
+		}
+	}
+
+	// Only one process should have forked ioreg, not all 10.
+	// The exact count depends on timing, but under the fix it should be 1.
+	if ioregCount > 1 {
+		t.Errorf("ioreg forked %d times, expected 1 (be-vv1)", ioregCount)
+	}
+
+	// Verify cache was written.
+	path := filepath.Join(dir, machineIDCacheName)
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("cache not written: %v", err)
+	}
+}
+
+// TestCachedMachineIDLockFileExists verifies that the lock file is created
+// during machine ID computation.
+func TestCachedMachineIDLockFileExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	// Clear any existing cache.
+	dir := filepath.Join(home, ".beads")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove cache dir: %v", err)
+	}
+
+	cachedMachineID(AppName)
+
+	// Lock file should exist.
+	lockPath := filepath.Join(dir, "machine-id.lock")
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Errorf("lock file not created: %v", err)
 	}
 }
