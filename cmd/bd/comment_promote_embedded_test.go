@@ -26,12 +26,14 @@ func bdComment(t *testing.T, bd, dir string, args ...string) string {
 // bdCommentList runs "bd comments list" and returns stdout.
 func bdCommentList(t *testing.T, bd, dir, issueID string) string {
 	t.Helper()
-	cmd := exec.Command(bd, "comments", "list", issueID)
+	// `bd comments list <id>` is rejected by design (commentsMisplacedListCmd);
+	// the listing form is `bd comments <id>` (be-nqt).
+	cmd := exec.Command(bd, "comments", issueID)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
 	stdout, stderr, err := runCommandBuffers(t, cmd)
 	if err != nil {
-		t.Fatalf("bd comments list %s failed: %v\nstdout:\n%s\nstderr:\n%s", issueID, err, stdout.String(), stderr.String())
+		t.Fatalf("bd comments %s failed: %v\nstdout:\n%s\nstderr:\n%s", issueID, err, stdout.String(), stderr.String())
 	}
 	return stdout.String()
 }

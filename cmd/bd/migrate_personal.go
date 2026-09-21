@@ -9,10 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/routing"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 )
@@ -20,18 +18,20 @@ import (
 // openMigrationPlanningStore opens the personal planning workspace's store for
 // the copy phase below.
 //
-// It is a factory rather than an inline dolt.New because the store it returns
-// is WRITTEN THROUGH: the migration creates every issue in the planning
-// workspace and then deletes them from the project. Those are ordinary bead
-// mutations in another workspace, so they belong in that workspace's events
-// journal if it has one enabled — and the setting is read from there, not from
-// the workspace bd was launched in.
-func openMigrationPlanningStore(ctx context.Context, planningBeadsDir string) (s storage.DoltStorage, err error) {
-	defer func() { s, err = activateEventsJournalStore(planningBeadsDir, s, err) }()
-	return dolt.New(ctx, &dolt.Config{
-		Path:     doltserver.ResolveDoltDir(planningBeadsDir),
-		BeadsDir: planningBeadsDir,
-	})
+// It opens by the planning workspace's OWN metadata.json (newDoltStoreFromConfig),
+// exactly as the create/--repo routing opens any foreign workspace: a bare
+// dolt.New assumed server mode, so an embedded planning repo — the default
+// shape `bd init` produces — failed with "Dolt server unreachable at
+// 127.0.0.1:0" (be-nqt).
+//
+// The store it returns is WRITTEN THROUGH: the migration creates every issue
+// in the planning workspace and then deletes them from the project. Those are
+// ordinary bead mutations in another workspace, so they belong in that
+// workspace's events journal if it has one enabled — and the setting is read
+// from there, not from the workspace bd was launched in, which
+// newDoltStoreFromConfig already arranges.
+func openMigrationPlanningStore(ctx context.Context, planningBeadsDir string) (storage.DoltStorage, error) {
+	return newDoltStoreFromConfig(ctx, planningBeadsDir)
 }
 
 var migratePersonalCmd = &cobra.Command{

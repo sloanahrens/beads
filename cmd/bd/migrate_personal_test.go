@@ -97,11 +97,12 @@ func TestMigratePersonal_movesIssues(t *testing.T) {
 	if err != nil {
 		// Skip if Dolt server unavailable for planning dir or actor mismatch.
 		lout := strings.ToLower(out)
+		// Only an environment mismatch may skip. A Dolt/server error is a
+		// real failure here: both workspaces are embedded, so no server is
+		// ever needed — matching "server"/"dolt" hid be-nqt for every test
+		// in this file.
 		if strings.Contains(lout, "routing.contributor") ||
-			strings.Contains(lout, "no personal") ||
-			strings.Contains(lout, "dolt") ||
-			strings.Contains(lout, "cannot connect") ||
-			strings.Contains(lout, "server") {
+			strings.Contains(lout, "no personal") {
 			t.Logf("migrate-personal: %v — output: %s", err, out)
 			t.Skip("skipping: Dolt unavailable for planning dir or no actor match")
 		}
@@ -191,11 +192,12 @@ func TestMigratePersonal_preservesComments(t *testing.T) {
 	out, err := bdMigratePersonal(t, bd, dir, "--yes")
 	if err != nil {
 		lout := strings.ToLower(out)
+		// Only an environment mismatch may skip. A Dolt/server error is a
+		// real failure here: both workspaces are embedded, so no server is
+		// ever needed — matching "server"/"dolt" hid be-nqt for every test
+		// in this file.
 		if strings.Contains(lout, "routing.contributor") ||
-			strings.Contains(lout, "no personal") ||
-			strings.Contains(lout, "dolt") ||
-			strings.Contains(lout, "cannot connect") ||
-			strings.Contains(lout, "server") {
+			strings.Contains(lout, "no personal") {
 			t.Logf("migrate-personal: %v — output: %s", err, out)
 			t.Skip("skipping: Dolt unavailable for planning dir or no actor match")
 		}
@@ -203,7 +205,7 @@ func TestMigratePersonal_preservesComments(t *testing.T) {
 	}
 
 	// The comment must survive in the planning repo as a structured comment that
-	// `bd comments list` returns.
+	// `bd comments <id>` returns.
 	got := bdCommentList(t, bd, planningDir, issue.ID)
 	if !strings.Contains(got, commentText) {
 		t.Errorf("migrated issue %s lost its comment in the planning repo %s.\ncomments list output:\n%s",
