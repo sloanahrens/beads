@@ -59,6 +59,18 @@ const (
 	// abandoned file only ages) without the churn. Generous on purpose: a
 	// writer that runs even once a day keeps its state.
 	legacyClosedSweepTTL = 24 * time.Hour
+
+	// liveClosedSweepTTL is the same rule for the LIVE directory. A closed
+	// breaker file is always safe to remove — its absence means "closed" and
+	// the next successful connection rewrites it — so the only reason to keep
+	// one is to avoid churn against a live writer, and a live writer touches
+	// its file on every connection. Servers that die without cleaning up
+	// (test suites start Dolt on an ephemeral port per package) never touch
+	// theirs again: 5,170 such files had accumulated by 2026-09-21, and every
+	// store open read and parsed all of them, which under gate disk load
+	// turned a 0.1 s bd startup into 10 s (be-0v4). One hour is far longer
+	// than any production breaker goes without a connection.
+	liveClosedSweepTTL = time.Hour
 )
 
 // circuitState is the shared file-based circuit breaker state.
@@ -360,11 +372,16 @@ func (cb *circuitBreaker) writeState(state circuitState) {
 }
 
 // CleanStaleCircuitBreakerFiles removes stale circuit breaker files.
-// This cleans up leftover files that could poison fresh inits:
+// This cleans up leftover files that could poison fresh inits or, in bulk,
+// slow every store open:
 //   - Legacy port-0 files (beads-dolt-circuit-0.json) from before the port-0 fix
-//   - Any breaker file whose open/half-open state is older than circuitStaleTTL
+//   - Any breaker file untouched for longer than its directory's closed-sweep
+//     TTL (liveClosedSweepTTL live, legacyClosedSweepTTL legacy) — removed on
+//     the stat alone, whatever its state or validity
+//   - Any fresh breaker file whose open/half-open state is older than
+//     circuitStaleTTL, or that does not parse
 //
-// Called during init to ensure a clean starting state (GH#2598).
+// Called on every store open, so it must stay cheap with thousands of files.
 func CleanStaleCircuitBreakerFiles() {
 	dir, legacyFile := circuitBreakerPaths()
 
@@ -378,11 +395,11 @@ func CleanStaleCircuitBreakerFiles() {
 		_ = os.Remove(filepath.Join("/tmp", "beads-dolt-circuit-0.json"))
 	}
 
-	// Clean stale files in the dedicated subdirectory (fast — typically 0-2
-	// files). Only open/half-open state past circuitStaleTTL is removed here;
-	// closed files are left alone since a live server keeps writing them.
+	// Clean stale files in the dedicated subdirectory. Files untouched for
+	// liveClosedSweepTTL are removed unread (dead ephemeral servers); fresh
+	// files are read and only stale open/half-open state is removed.
 	_ = os.MkdirAll(dir, 0755)
-	cleanStaleCircuitBreakerFilesIn(dir, false)
+	cleanStaleCircuitBreakerFilesIn(dir, liveClosedSweepTTL)
 
 	// Also sweep the legacy hardcoded "/tmp/beads-circuit" location
 	// (C:\tmp\beads-circuit on Windows) where older builds accumulated files
@@ -396,7 +413,7 @@ func CleanStaleCircuitBreakerFiles() {
 	// filename each time, never reused).
 	if os.Getenv(testCircuitBreakerDirEnv) == "" {
 		if legacy := filepath.Join("/tmp", "beads-circuit"); legacy != dir {
-			cleanStaleCircuitBreakerFilesIn(legacy, true)
+			cleanStaleCircuitBreakerFilesIn(legacy, legacyClosedSweepTTL)
 		}
 	}
 }
@@ -404,16 +421,17 @@ func CleanStaleCircuitBreakerFiles() {
 // cleanStaleCircuitBreakerFilesIn is the testable implementation of
 // CleanStaleCircuitBreakerFiles that accepts a directory parameter.
 //
-// removeClosed additionally removes closed-state files whose mtime is older
-// than legacyClosedSweepTTL. It exists for the legacy "/tmp/beads-circuit"
-// directory (GH#4636): a closed state file is written on every successful
-// RecordSuccess, and since ephemeral ports mint a distinct filename per
-// connection, closed sidecars accumulate there with no other cleanup path.
-// The TTL is what makes it safe alongside the directory's remaining LIVE
-// writers (TMPDIR-less processes, whose os.TempDir() is /tmp — they keep
-// their file's mtime fresh). The live directory must not pass true here —
-// a closed file there reflects a healthy, currently-in-use breaker.
-func cleanStaleCircuitBreakerFilesIn(dir string, removeClosed bool) {
+// closedTTL is how long a file may sit unmodified before it is removed
+// unread. Every writer — live or legacy — rewrites its file on each
+// successful connection, so an untouched file past the TTL belongs to a
+// server nobody has talked to in that long: a dead ephemeral test server, or
+// the GH#4636 accumulation in the legacy "/tmp/beads-circuit" directory. Its
+// state no longer matters (open state past circuitStaleTTL is stale anyway;
+// closed state is the default), so it is removed on mtime alone, which is
+// what keeps this sweep cheap when thousands of such files exist. Only
+// files fresher than the TTL are read, and for those only stale open or
+// half-open state is removed; a fresh closed file is a healthy breaker.
+func cleanStaleCircuitBreakerFilesIn(dir string, closedTTL time.Duration) {
 	pattern := filepath.Join(dir, "beads-dolt-circuit-*.json")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -428,8 +446,18 @@ func cleanStaleCircuitBreakerFilesIn(dir string, removeClosed bool) {
 			log.Printf("[circuit-breaker] removed legacy port-0 breaker file: %s", path)
 			continue
 		}
-
-		// For other breaker files, check if the state is stale.
+		// Untouched past the TTL: nobody has connected through this breaker
+		// in that long. Remove without reading — silent on purpose, this is
+		// routine hygiene and there may be thousands of them.
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) > closedTTL {
+			_ = os.Remove(path)
+			continue
+		}
+		// For fresh files, check whether the recorded state is stale.
 		data, err := os.ReadFile(path) //nolint:gosec // G304: path is from filepath.Glob with controlled pattern
 		if err != nil {
 			continue
@@ -438,20 +466,6 @@ func cleanStaleCircuitBreakerFilesIn(dir string, removeClosed bool) {
 		if err := json.Unmarshal(data, &state); err != nil {
 			// Corrupt file — remove it
 			_ = os.Remove(path)
-			continue
-		}
-		if state.State == circuitClosed {
-			// Legacy-directory mode only — and only past an mtime TTL: the
-			// legacy dir has LIVE writers wherever os.TempDir() is /tmp
-			// (TMPDIR-less launchd/cron/ssh processes), so an unconditional
-			// remove churned against them forever (see legacyClosedSweepTTL).
-			// Silent on purpose: removing routine closed-state hygiene is not
-			// worth a stderr line per file per invocation.
-			if removeClosed {
-				if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > legacyClosedSweepTTL {
-					_ = os.Remove(path)
-				}
-			}
 			continue
 		}
 		if state.State != circuitOpen && state.State != circuitHalfOpen {
