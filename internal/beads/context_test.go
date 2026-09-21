@@ -25,7 +25,7 @@ func TestGetRepoContextForWorkspace_NormalRepo(t *testing.T) {
 	if err := os.MkdirAll(beadsDir, 0750); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
-	// Create a database file (required for hasBeadsProjectFiles)
+	// Create a database file (required for HasBeadsProjectFiles)
 	if err := os.WriteFile(filepath.Join(beadsDir, "beads.db"), []byte{}, 0644); err != nil {
 		t.Fatalf("failed to create beads.db: %v", err)
 	}

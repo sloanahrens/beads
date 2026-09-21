@@ -21,6 +21,11 @@ func Open(_ context.Context, _, _, _ string) (*EmbeddedDoltStore, error) {
 	return nil, errNoCGO
 }
 
+// OpenExisting returns an error when CGO is not enabled.
+func OpenExisting(_ context.Context, _, _, _ string) (*EmbeddedDoltStore, error) {
+	return nil, errNoCGO
+}
+
 // OpenReadOnly returns an error when CGO is not enabled.
 func OpenReadOnly(_ context.Context, _, _, _ string) (*EmbeddedDoltStore, error) {
 	return nil, errNoCGO

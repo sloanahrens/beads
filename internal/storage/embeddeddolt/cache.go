@@ -32,6 +32,47 @@ func Open(ctx context.Context, beadsDir, database, branch string) (*EmbeddedDolt
 	return openCached(ctx, beadsDir, database, branch, openStrict)
 }
 
+// OpenExisting is Open with an explicit refuse-to-create mode: it fails unless
+// beadsDir/embeddeddolt/<database> is already an embedded Dolt repository.
+//
+// Open's contract is "create the database if it does not exist", which makes
+// every Open a create-or-open — so any caller that reaches one with a
+// misresolved or fossil directory fabricates a database there, and bd's
+// discovery then finds that database forever after (be-6mk, be-dxx, be-n2s).
+// Only the caller can tell "open the workspace I just resolved" from "create
+// me a new workspace", so a caller that knows it is opening an
+// already-initialized workspace uses this, and a wrong path becomes a loud
+// error instead of a new database.
+//
+// On success it delegates to the ordinary cached open: existence having been
+// established, the open's MkdirAll and CREATE DATABASE IF NOT EXISTS are
+// no-ops, a cache hit returns exactly the store Open would have, and there is
+// no second store lifecycle to keep in step with the first.
+func OpenExisting(ctx context.Context, beadsDir, database, branch string) (*EmbeddedDoltStore, error) {
+	if err := RequireDatabase(beadsDir, database); err != nil {
+		return nil, err
+	}
+	return openCached(ctx, beadsDir, database, branch, openStrict)
+}
+
+// RequireDatabase returns nil when beadsDir/embeddeddolt/<database> is an
+// existing embedded Dolt repository, and otherwise the error describing what
+// was expected of the directory.
+//
+// It is the single wording for "this is not an initialized workspace", so
+// callers that guard a create-capable open (OpenExisting) and callers that
+// decide whether to reach one at all answer with the same message rather than
+// each inventing their own. The remedy is named because it exists: bd init
+// opens with Config.CreateIfMissing, which is the sanctioned way to create a
+// database in a directory that has one of these shells in it.
+func RequireDatabase(beadsDir, database string) error {
+	if HasDatabase(beadsDir, database) {
+		return nil
+	}
+	return fmt.Errorf("embeddeddolt: no embedded database %q under %s — refusing to create one; this directory is not an initialized workspace (run 'bd init' here to create one)",
+		database, filepath.Join(beadsDir, "embeddeddolt"))
+}
+
 // OpenForReadOnlyCommand opens like Open, except that a #4259 remote-migrate
 // gate refusal skips the pending migrations with a stderr warning instead of
 // failing the open (bd-578h9.5): the gate exists to stop in-place migration,

@@ -295,3 +295,261 @@ func TestNewDoltStore_StrictReadOnlyRefusesWritesOnFreshDatabase(t *testing.T) {
 		t.Fatalf("classified-read open did not initialize %s: %v", classifiedDataDir, statErr)
 	}
 }
+
+// TestRefuseToCreateEmbedded pins the decision boundary for be-n2s. Both
+// directions matter. Refusing when the caller declared the create would break
+// bd init outright: init creates .beads/embeddeddolt/ — for its lock — before
+// it writes metadata.json, so at its store open the directory is marker-less
+// with an embeddeddolt/ shell in it, which is otherwise exactly the fossil
+// shape. Refusing a directory with no embeddeddolt/ at all would break the
+// documented first-run paths (bd import on a bare directory, a fresh clone
+// rebuilt from tracked issues.jsonl, `--repo` auto-vivify); refusing a
+// directory that carries a marker would break rebuilding a workspace whose
+// database is legitimately absent.
+func TestRefuseToCreateEmbedded(t *testing.T) {
+	tests := []struct {
+		name            string
+		createIfMissing bool
+		setup           func(t *testing.T, beadsDir string)
+		want            bool
+	}{
+		{name: "bare directory", want: false},
+		{
+			name: "metadata.json and no embeddeddolt tree",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				writeMetadataMarker(t, beadsDir)
+			},
+			want: false,
+		},
+		{
+			name: "markerless embeddeddolt tree",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(beadsDir, "embeddeddolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+		{
+			name: "markerless embeddeddolt tree holding a database",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(beadsDir, "embeddeddolt", "beads", ".dolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+		{
+			// bd init's shape: the shell is already on disk, but the caller
+			// declared that it is creating the database.
+			name:            "markerless embeddeddolt tree with a declared create",
+			createIfMissing: true,
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(beadsDir, "embeddeddolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "metadata.json beside an embeddeddolt tree",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(beadsDir, "embeddeddolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				writeMetadataMarker(t, beadsDir)
+			},
+			want: false,
+		},
+		{
+			name: "config.yaml beside an embeddeddolt tree",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(beadsDir, "embeddeddolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(beadsDir, "config.yaml"), []byte("dolt:\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			// A plain file named embeddeddolt is not a data directory, so the
+			// directory is not workspace-shaped at all.
+			name: "embeddeddolt as a regular file",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(beadsDir, "embeddeddolt"), []byte("not a dir"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			beadsDir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, beadsDir)
+			}
+			cfg := &dolt.Config{BeadsDir: beadsDir, Database: "testdb", CreateIfMissing: tt.createIfMissing}
+			if got := refuseToCreateEmbedded(cfg); got != tt.want {
+				t.Fatalf("refuseToCreateEmbedded() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNewDoltStore_RefuseToCreateEmbedded is the end-to-end half: through the
+// factory, a markerless embeddeddolt/ shell must fail the open rather than
+// gain a database, while the shapes that legitimately need creation must still
+// create. The refusal is asserted on the data directory's entries as well as
+// on the named database's absence, because the failure mode this guards
+// against is a database appearing on disk, not an error being returned late.
+func TestNewDoltStore_RefuseToCreateEmbedded(t *testing.T) {
+	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
+		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt tests")
+	}
+
+	// markerlessShell builds the fossil shape: .beads/ with an embeddeddolt/
+	// tree (holding a real database when withDatabase is set) and no
+	// metadata.json or config.yaml.
+	markerlessShell := func(t *testing.T, withDatabase bool) (beadsDir, dataDir string) {
+		t.Helper()
+		beadsDir = t.TempDir()
+		dataDir = filepath.Join(beadsDir, "embeddeddolt")
+		databaseDir := filepath.Join(dataDir, "testdb")
+		if !withDatabase {
+			databaseDir = dataDir
+		}
+		if err := os.MkdirAll(databaseDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return beadsDir, dataDir
+	}
+
+	t.Run("markerless shell refuses and creates nothing", func(t *testing.T) {
+		beadsDir, dataDir := markerlessShell(t, false)
+		before := embeddedDataDirEntries(t, dataDir)
+
+		_, err := newDoltStore(t.Context(), &dolt.Config{BeadsDir: beadsDir, Database: "testdb"})
+		if err == nil {
+			t.Fatal("newDoltStore on a markerless embeddeddolt/ shell = nil error, want refusal")
+		}
+		if !strings.Contains(err.Error(), "refusing to create") {
+			t.Errorf("refusal should name the reason, got: %v", err)
+		}
+		if got := embeddedDataDirEntries(t, dataDir); got != before {
+			t.Errorf("refusal changed %s entries to %q, want %q; it must create nothing", dataDir, got, before)
+		}
+	})
+
+	t.Run("markerless shell opens an existing database", func(t *testing.T) {
+		beadsDir, _ := markerlessShell(t, false)
+
+		// Create the database the way bd init does, then reopen without the
+		// declared create: the shell is still marker-less, but the requested
+		// database is on disk, so the open must find it rather than refuse.
+		created, err := newDoltStore(t.Context(), &dolt.Config{
+			BeadsDir:        beadsDir,
+			Database:        "testdb",
+			CreateIfMissing: true,
+		})
+		if err != nil {
+			t.Fatalf("seed the markerless shell: %v", err)
+		}
+		if err := created.Close(); err != nil {
+			t.Fatalf("close seeded store: %v", err)
+		}
+
+		store, err := newDoltStore(t.Context(), &dolt.Config{BeadsDir: beadsDir, Database: "testdb"})
+		if err != nil {
+			t.Errorf("newDoltStore on a markerless shell holding the requested database: %v", err)
+			return
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	t.Run("declared create still creates in a markerless shell", func(t *testing.T) {
+		beadsDir, _ := markerlessShell(t, false)
+
+		store, err := newDoltStore(t.Context(), &dolt.Config{
+			BeadsDir:        beadsDir,
+			Database:        "testdb",
+			CreateIfMissing: true,
+		})
+		if err != nil {
+			t.Fatalf("newDoltStore with CreateIfMissing on a markerless shell (bd init's shape): %v", err)
+		}
+		defer func() { _ = store.Close() }()
+		if _, statErr := os.Stat(filepath.Join(beadsDir, "embeddeddolt", "testdb")); statErr != nil {
+			t.Fatalf("declared create did not create the database: %v", statErr)
+		}
+	})
+
+	t.Run("bare directory still creates", func(t *testing.T) {
+		beadsDir := t.TempDir()
+		store, err := newDoltStore(t.Context(), &dolt.Config{BeadsDir: beadsDir, Database: "testdb"})
+		if err != nil {
+			t.Fatalf("newDoltStore on a bare directory: %v", err)
+		}
+		defer func() { _ = store.Close() }()
+		if _, statErr := os.Stat(filepath.Join(beadsDir, "embeddeddolt", "testdb")); statErr != nil {
+			t.Fatalf("first-run open did not create the database: %v", statErr)
+		}
+	})
+
+	t.Run("marked workspace with an empty data tree still creates", func(t *testing.T) {
+		beadsDir := t.TempDir()
+		writeMetadataMarker(t, beadsDir)
+		if err := os.Mkdir(filepath.Join(beadsDir, "embeddeddolt"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		store, err := newDoltStore(t.Context(), &dolt.Config{BeadsDir: beadsDir, Database: "testdb"})
+		if err != nil {
+			t.Fatalf("newDoltStore on a marked workspace: %v", err)
+		}
+		defer func() { _ = store.Close() }()
+		if _, statErr := os.Stat(filepath.Join(beadsDir, "embeddeddolt", "testdb")); statErr != nil {
+			t.Fatalf("marked workspace did not rebuild its database: %v", statErr)
+		}
+	})
+}
+
+// embeddedDataDirEntries renders the entries under an embeddeddolt data
+// directory, for asserting that a refused open left the directory untouched.
+func embeddedDataDirEntries(t *testing.T, dataDir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dataDir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return strings.Join(names, ",")
+}
+
+// writeMetadataMarker writes a metadata.json declaring an embedded workspace,
+// which is the marker HasWorkspaceMarker looks for.
+func writeMetadataMarker(t *testing.T, beadsDir string) {
+	t.Helper()
+	cfg := configfile.DefaultConfig()
+	cfg.Backend = configfile.BackendDolt
+	cfg.DoltDatabase = "testdb"
+	cfg.DoltMode = configfile.DoltModeEmbedded
+	if err := cfg.Save(beadsDir); err != nil {
+		t.Fatalf("save metadata.json: %v", err)
+	}
+}

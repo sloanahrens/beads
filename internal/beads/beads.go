@@ -162,13 +162,13 @@ func FollowRedirect(beadsDir string) string {
 	// supplying its own dolt_database via ResolveRedirect/fb51196f7) is a
 	// documented, supported topology, not a staleness signal.
 	//
-	// hasBeadsProjectFiles treats bare presence of metadata.json in the
+	// HasBeadsProjectFiles treats bare presence of metadata.json in the
 	// target as sufficient, even if it later fails to parse: a
 	// present-but-corrupt metadata.json is a config problem, not a
 	// missing-database problem, and store_factory.go's
 	// newDoltStoreFromConfig already hard-errors loudly on an unloadable
 	// metadata.json rather than silently falling back to the embedded store.
-	if !hasBeadsProjectFiles(target) {
+	if !HasBeadsProjectFiles(target) {
 		warnInvalidRedirectTargetOnce(beadsDir, target)
 		return beadsDir
 	}
@@ -426,7 +426,7 @@ func findLocalBeadsDir() string {
 			}
 			// Check for worktree's own .beads with project files (separate-DB mode)
 			if info, err := os.Stat(wt); err == nil && info.IsDir() {
-				if hasBeadsProjectFiles(wt) {
+				if HasBeadsProjectFiles(wt) {
 					return wt
 				}
 			}
@@ -611,7 +611,7 @@ func FindBeadsDirFrom(startDir string) string {
 			primaryBeadsDir := filepath.Join(primaryRoot, ".beads")
 			if info, err := os.Stat(primaryBeadsDir); err == nil && info.IsDir() {
 				resolved := FollowRedirect(primaryBeadsDir)
-				if hasBeadsProjectFiles(resolved) {
+				if HasBeadsProjectFiles(resolved) {
 					jjPrimaryBeadsDir = resolved
 					jjPrimaryHasDB = hasBeadsDatabase(resolved)
 				}
@@ -644,7 +644,7 @@ func FindBeadsDirFrom(startDir string) string {
 				// A jj secondary workspace can likewise contain inherited
 				// .beads metadata without the ignored database directory.
 				// Match FindBeadsDir by preferring the primary workspace DB.
-			} else if hasBeadsProjectFiles(resolved) {
+			} else if HasBeadsProjectFiles(resolved) {
 				return resolved
 			}
 		}
@@ -659,7 +659,7 @@ func FindBeadsDirFrom(startDir string) string {
 	if fallbackBeadsDir != "" {
 		if info, err := os.Stat(fallbackBeadsDir); err == nil && info.IsDir() {
 			resolved := FollowRedirect(fallbackBeadsDir)
-			if hasBeadsProjectFiles(resolved) {
+			if HasBeadsProjectFiles(resolved) {
 				return resolved
 			}
 		}
@@ -672,44 +672,54 @@ func FindBeadsDirFrom(startDir string) string {
 	return ""
 }
 
-// hasBeadsProjectFiles checks if a .beads directory contains actual project files.
+// HasBeadsProjectFiles checks if a .beads directory contains actual project files.
 // Returns true if the directory contains any of:
 // - metadata.json or config.yaml (project configuration)
 // - Any *.db file (excluding backups and vc.db)
-// - A dolt/ directory (Dolt database)
+// - A dolt/ or embeddeddolt/ directory (Dolt database)
 //
 // Returns false for directories that only contain legacy registry files.
 // This prevents FindBeadsDir from returning ~/.beads/ which only has registry.json.
-func hasBeadsProjectFiles(beadsDir string) bool {
-	// Check for project configuration files
+//
+// This is the ONE predicate answering "does a workspace already exist here?".
+// Discovery (FindBeadsDir, FollowRedirect) and the cmd/bd create/--repo guards
+// that refuse to fabricate a workspace all route through it, so the two can no
+// longer disagree about a directory that is already initialized (be-n2s). A
+// guard keyed on metadata.json alone disagreed with discovery on the two
+// marker-less-but-initialized shapes discovery accepts — config.yaml only, and
+// a bare embeddeddolt/ database directory — and each disagreement ended in a
+// phantom database written into a directory that was not the caller's target.
+func HasBeadsProjectFiles(beadsDir string) bool {
+	return HasWorkspaceMarker(beadsDir) || hasBeadsDatabase(beadsDir)
+}
+
+// HasWorkspaceMarker reports whether beadsDir carries an explicit workspace
+// marker: metadata.json or config.yaml.
+//
+// This is the half of HasBeadsProjectFiles that says "someone declared a
+// workspace here" rather than "something workspace-shaped is on disk". The two
+// halves are split because they answer different questions, and only this one
+// is safe to gate creation on: a directory whose sole claim is a database
+// directory is a directory bd may OPEN, but it is also exactly the shape a
+// stale, fossil, or misresolved path leaves behind — a bare embeddeddolt/
+// shell created by an earlier misdirected open (be-n2s). Fabricating a
+// database into that shell is what makes a phantom self-perpetuating, since
+// findDatabaseInBeadsDir's fallback then finds it forever after.
+//
+// A fresh clone is unaffected: metadata.json is written by bd init and by the
+// auto-vivify path, so a workspace that is legitimately missing only its
+// embeddeddolt/ database still has the marker.
+func HasWorkspaceMarker(beadsDir string) bool {
 	if _, err := os.Stat(filepath.Join(beadsDir, "metadata.json")); err == nil {
 		return true
 	}
 	if _, err := os.Stat(filepath.Join(beadsDir, "config.yaml")); err == nil {
 		return true
 	}
-
-	// Check for Dolt database directory (server mode uses dolt/, embedded uses embeddeddolt/)
-	if info, err := os.Stat(filepath.Join(beadsDir, "dolt")); err == nil && info.IsDir() {
-		return true
-	}
-	if info, err := os.Stat(filepath.Join(beadsDir, "embeddeddolt")); err == nil && info.IsDir() {
-		return true
-	}
-
-	// Check for database files (excluding backups and vc.db)
-	dbMatches, _ := filepath.Glob(filepath.Join(beadsDir, "*.db"))
-	for _, match := range dbMatches {
-		baseName := filepath.Base(match)
-		if !strings.Contains(baseName, ".backup") && baseName != "vc.db" {
-			return true
-		}
-	}
-
 	return false
 }
 
-// hasBeadsDatabase is the strict counterpart to hasBeadsProjectFiles: it
+// hasBeadsDatabase is the strict counterpart to HasBeadsProjectFiles: it
 // returns true only when beadsDir contains an actual database — a dolt/
 // directory, an embeddeddolt/ directory, or a non-backup *.db file. Mere
 // presence of metadata.json / config.yaml / issues.jsonl does not count.
@@ -764,7 +774,7 @@ func FindBeadsDir() string {
 
 		if info, err := os.Stat(absBeadsDir); err == nil && info.IsDir() {
 			// Validate directory contains actual project files
-			if hasBeadsProjectFiles(absBeadsDir) {
+			if HasBeadsProjectFiles(absBeadsDir) {
 				return absBeadsDir
 			}
 		}
@@ -831,7 +841,7 @@ func FindBeadsDir() string {
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
 			beadsDir = FollowRedirect(beadsDir)
-			if hasBeadsProjectFiles(beadsDir) {
+			if HasBeadsProjectFiles(beadsDir) {
 				return beadsDir
 			}
 		}
@@ -851,7 +861,7 @@ func FindBeadsDir() string {
 		// 3a. Per-worktree redirect override
 		if target := worktreeRedirectTarget(); target != "" {
 			if info, err := os.Stat(target); err == nil && info.IsDir() {
-				if hasBeadsProjectFiles(target) {
+				if HasBeadsProjectFiles(target) {
 					return target
 				}
 			}
@@ -870,7 +880,7 @@ func FindBeadsDir() string {
 		// directory, which cannot serve the project's database.
 		//
 		// If no fallback is available (non-worktree edge case, or the main
-		// repo itself has no .beads/), fall back to hasBeadsProjectFiles so a
+		// repo itself has no .beads/), fall back to HasBeadsProjectFiles so a
 		// fresh `bd init` can still locate the nascent project directory.
 		if worktreeRoot := git.GetRepoRoot(); worktreeRoot != "" {
 			worktreeBeadsDir := filepath.Join(worktreeRoot, ".beads")
@@ -888,7 +898,7 @@ func FindBeadsDir() string {
 						fallbackHasDB = hasBeadsDatabase(resolved)
 					}
 				}
-				if !fallbackHasDB && hasBeadsProjectFiles(worktreeBeadsDir) {
+				if !fallbackHasDB && HasBeadsProjectFiles(worktreeBeadsDir) {
 					return worktreeBeadsDir
 				}
 			}
@@ -898,7 +908,7 @@ func FindBeadsDir() string {
 		if fallbackBeadsDir := GetWorktreeFallbackBeadsDir(); fallbackBeadsDir != "" {
 			if info, err := os.Stat(fallbackBeadsDir); err == nil && info.IsDir() {
 				fallbackBeadsDir = FollowRedirect(fallbackBeadsDir)
-				if hasBeadsProjectFiles(fallbackBeadsDir) {
+				if HasBeadsProjectFiles(fallbackBeadsDir) {
 					return fallbackBeadsDir
 				}
 			}
@@ -930,7 +940,7 @@ func FindBeadsDir() string {
 						primaryFallbackHasDB = hasBeadsDatabase(FollowRedirect(primaryBeadsDir))
 					}
 				}
-				if !primaryFallbackHasDB && hasBeadsProjectFiles(secondaryBeadsDir) {
+				if !primaryFallbackHasDB && HasBeadsProjectFiles(secondaryBeadsDir) {
 					return secondaryBeadsDir
 				}
 			}
@@ -941,7 +951,7 @@ func FindBeadsDir() string {
 			primaryBeadsDir := filepath.Join(jjPrimaryRoot, ".beads")
 			if info, err := os.Stat(primaryBeadsDir); err == nil && info.IsDir() {
 				resolved := FollowRedirect(primaryBeadsDir)
-				if hasBeadsProjectFiles(resolved) {
+				if HasBeadsProjectFiles(resolved) {
 					return resolved
 				}
 			}
@@ -972,7 +982,7 @@ func FindBeadsDir() string {
 			beadsDir := filepath.Join(dir, ".beads")
 			if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
 				beadsDir = FollowRedirect(beadsDir)
-				if hasBeadsProjectFiles(beadsDir) {
+				if HasBeadsProjectFiles(beadsDir) {
 					return beadsDir
 				}
 			}

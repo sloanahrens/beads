@@ -267,7 +267,7 @@ func TestFindDatabasePath_BEADS_DB_DirectoryTrailingSlash(t *testing.T) {
 	}
 }
 
-// TestHasBeadsProjectFiles verifies that hasBeadsProjectFiles correctly
+// TestHasBeadsProjectFiles verifies that HasBeadsProjectFiles correctly
 // distinguishes between project directories and daemon-only directories (bd-420)
 func TestHasBeadsProjectFiles(t *testing.T) {
 	tests := []struct {
@@ -333,11 +333,113 @@ func TestHasBeadsProjectFiles(t *testing.T) {
 				}
 			}
 
-			result := hasBeadsProjectFiles(tmpDir)
+			result := HasBeadsProjectFiles(tmpDir)
 			if result != tt.expected {
-				t.Errorf("hasBeadsProjectFiles() = %v, want %v", result, tt.expected)
+				t.Errorf("HasBeadsProjectFiles() = %v, want %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestHasWorkspaceMarker pins the split that ends the guard-vs-discovery
+// disagreement (be-n2s). A directory can be an initialized workspace for
+// discovery — HasBeadsProjectFiles is true — while carrying no marker a
+// create-safety decision may trust. Both halves are asserted together so the
+// two cannot silently collapse back into one: the database-only rows must stay
+// false for the marker while HasBeadsProjectFiles stays true, which is exactly
+// the state the create/--repo guards used to misread as "nothing here".
+func TestHasWorkspaceMarker(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, dir string)
+		wantMarker  bool
+		wantProject bool
+	}{
+		{name: "empty directory", wantMarker: false, wantProject: false},
+		{
+			name: "daemon registry only",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				writeTestFiles(t, dir, "registry.json", "registry.lock")
+			},
+			wantMarker:  false,
+			wantProject: false,
+		},
+		{
+			name: "metadata.json",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				writeTestFiles(t, dir, "metadata.json")
+			},
+			wantMarker:  true,
+			wantProject: true,
+		},
+		{
+			name: "config.yaml",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				writeTestFiles(t, dir, "config.yaml")
+			},
+			wantMarker:  true,
+			wantProject: true,
+		},
+		{
+			// The shape be-n2s is about: a bare database directory is a
+			// workspace to discovery, and a fossil to everyone else.
+			name: "embeddeddolt directory only",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(dir, "embeddeddolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantMarker:  false,
+			wantProject: true,
+		},
+		{
+			name: "dolt directory only",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(dir, "dolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantMarker:  false,
+			wantProject: true,
+		},
+		{
+			name: "database file only",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				writeTestFiles(t, dir, "beads.db")
+			},
+			wantMarker:  false,
+			wantProject: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, dir)
+			}
+			if got := HasWorkspaceMarker(dir); got != tt.wantMarker {
+				t.Errorf("HasWorkspaceMarker() = %v, want %v", got, tt.wantMarker)
+			}
+			if got := HasBeadsProjectFiles(dir); got != tt.wantProject {
+				t.Errorf("HasBeadsProjectFiles() = %v, want %v", got, tt.wantProject)
+			}
+		})
+	}
+}
+
+func writeTestFiles(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

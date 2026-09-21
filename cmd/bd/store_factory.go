@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/lockfile"
@@ -77,6 +78,21 @@ func newDoltStore(ctx context.Context, cfg *dolt.Config) (s storage.DoltStorage,
 	if cfg.ServerMode {
 		return dolt.New(ctx, cfg)
 	}
+	if refuseToCreateEmbedded(cfg) {
+		// be-n2s: every embedded open below is create-or-open, and bd's
+		// discovery accepts a bare embeddeddolt/ directory as an initialized
+		// workspace — so a directory that merely HAS one gains a database on
+		// the next command of any kind, whether or not any command ever
+		// declared a workspace there, and discovery then finds it forever
+		// after. A caller that declared the create (Config.CreateIfMissing:
+		// bd init, bd bootstrap, the --repo auto-vivify) is not refused, and
+		// neither is a shell that does hold the requested database: the
+		// guard establishes that the open is not a create, it does not
+		// replace the open.
+		if err := embeddeddolt.RequireDatabase(cfg.BeadsDir, cfg.Database); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Preview {
 		// Preview commands are stricter than ordinary read commands: they
 		// must not run schema initialization or permit incidental writes
@@ -108,6 +124,41 @@ func newDoltStore(ctx context.Context, cfg *dolt.Config) (s storage.DoltStorage,
 		return embeddeddolt.OpenForWorkingSetReconcile(ctx, cfg.BeadsDir, cfg.Database, "main")
 	}
 	return embeddeddolt.Open(ctx, cfg.BeadsDir, cfg.Database, "main")
+}
+
+// refuseToCreateEmbedded reports whether an embedded open must not be allowed
+// to create the database it names.
+//
+// The signal is a directory that carries an embeddeddolt/ tree but no
+// explicit workspace marker: it already looks like a workspace to discovery
+// (internal/beads' findDatabaseInBeadsDir falls back to a bare embeddeddolt/
+// directory, so it resolves a database path here), yet nothing ever declared
+// it one — no bd init, no metadata.json, no config.yaml. In that state a
+// missing database is an inconsistency to report, not a fresh install to
+// perform: creating one is precisely the phantom that made the town's fossil
+// rig roots (be-n2s), and bd init already treats the same combination as
+// "this workspace is already initialized" (cmd/bd/init.go).
+//
+// The check runs before the open's intent dispatch rather than inside one
+// branch, because every embedded intent except preview is create-capable —
+// including the ordinary classified-read open, so `bd list` in a fossil
+// directory fabricated a database just as `bd create` did.
+//
+// Two shapes are deliberately NOT refused. Config.CreateIfMissing is the
+// caller declaring the create (bd init, bd bootstrap, the --repo
+// auto-vivify), and init needs it precisely here: init creates
+// .beads/embeddeddolt/ — for its lock — before it writes metadata.json, so at
+// its store open the directory is marker-less with a shell in it. And a
+// directory with no embeddeddolt/ at all is the shape of a genuine first run
+// (bd import on a bare directory, a fresh clone rebuilt from tracked
+// issues.jsonl), which must keep creating. A workspace legitimately missing
+// only its database still has its marker, so it is not refused either.
+func refuseToCreateEmbedded(cfg *dolt.Config) bool {
+	if cfg.CreateIfMissing || beads.HasWorkspaceMarker(cfg.BeadsDir) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(cfg.BeadsDir, "embeddeddolt"))
+	return err == nil && info.IsDir()
 }
 
 // acquireEmbeddedLock acquires an exclusive flock on the embeddeddolt data

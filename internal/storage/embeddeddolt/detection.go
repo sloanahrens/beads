@@ -31,6 +31,37 @@ func SoleRepository(beadsDir string) (string, bool) {
 	return names[0], true
 }
 
+// HasDatabase reports whether beadsDir/embeddeddolt/<database> is an existing
+// embedded Dolt repository: the per-name form of HasRepository's question.
+//
+// The per-name question is the one a refuse-to-create open needs. A rename, a
+// re-point at a differently-named database, or a bare embeddeddolt/ shell left
+// behind by an earlier misdirected open can all leave a directory holding
+// repositories while holding NONE under the name the caller is about to open —
+// and the engine's answer to "no database by that name" is to create one
+// (be-n2s).
+//
+// It shares embeddedRepositories rather than restating the probe, so a name
+// this accepts is exactly a name HasRepository and SoleRepository accept, and
+// the three cannot drift apart.
+func HasDatabase(beadsDir, database string) bool {
+	if !isSinglePathElement(database) {
+		return false
+	}
+	for _, name := range embeddedRepositories(beadsDir) {
+		if name == database {
+			return true
+		}
+	}
+	return false
+}
+
+// isSinglePathElement reports whether name is usable as one path component —
+// not empty, not a separator-bearing path, not "." or "..".
+func isSinglePathElement(name string) bool {
+	return name != "" && name != "." && name != ".." && filepath.Base(name) == name
+}
+
 // embeddedRepositories returns the names of every usable embedded Dolt
 // repository beneath beadsDir, sorted as os.ReadDir reports them. A root that is
 // missing or is itself a symlink has none: a workspace symlinking its

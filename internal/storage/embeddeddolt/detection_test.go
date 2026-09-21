@@ -194,3 +194,135 @@ func TestSoleRepository(t *testing.T) {
 		})
 	}
 }
+
+// TestHasDatabase pins the per-name form of the marker probe. HasRepository
+// asks "does this directory hold an embedded repository at all"; a
+// refuse-to-create open needs "does it hold one under the name I am about to
+// open", and the two diverge on exactly the fossil shape — a directory holding
+// a repository under a name nobody is opening any more (be-n2s). The
+// containment is asserted as well: a name HasDatabase accepts must be one
+// HasRepository accepts, or a refusal would be decided against a directory
+// that the rest of the adapter considers empty.
+func TestHasDatabase(t *testing.T) {
+	// writeRepository writes a usable embedded repository — a directory whose
+	// .dolt marker is non-empty — and, when markerEntries is 0, the empty
+	// marker that is deliberately not one.
+	writeRepository := func(t *testing.T, beadsDir, database string, markerEntries int) {
+		t.Helper()
+		marker := filepath.Join(beadsDir, "embeddeddolt", database, ".dolt")
+		if err := os.MkdirAll(marker, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for i := range markerEntries {
+			entry := filepath.Join(marker, "opaque-entry-"+string(rune('a'+i)))
+			if err := os.WriteFile(entry, []byte("not inspected"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	tests := []struct {
+		name     string
+		database string
+		setup    func(t *testing.T, beadsDir string)
+		want     bool
+	}{
+		{name: "missing root", database: "beads", want: false},
+		{
+			name:     "empty embeddeddolt root",
+			database: "beads",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(beadsDir, "embeddeddolt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name:     "database directory without a marker",
+			database: "beads",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(beadsDir, "embeddeddolt", "beads"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name:     "empty marker is not a repository",
+			database: "beads",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				writeRepository(t, beadsDir, "beads", 0)
+			},
+			want: false,
+		},
+		{
+			name:     "nonempty marker",
+			database: "beads",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				writeRepository(t, beadsDir, "beads", 1)
+			},
+			want: true,
+		},
+		{
+			// The fossil shape: a repository exists, but under a name the
+			// caller is not opening. HasRepository is true here; HasDatabase
+			// must be false, or the open would add a second repository beside
+			// the first in a directory nothing ever declared a workspace.
+			name:     "marker belongs to a different database",
+			database: "hq",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				writeRepository(t, beadsDir, "beads", 1)
+			},
+			want: false,
+		},
+		{
+			name:     "symlink marker is refused",
+			database: "beads",
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				databaseDir := filepath.Join(beadsDir, "embeddeddolt", "beads")
+				if err := os.MkdirAll(databaseDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(beadsDir, filepath.Join(databaseDir, ".dolt")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{name: "empty name", database: "", want: false},
+		{
+			name:     "name that is not a single path element",
+			database: filepath.Join("..", "beads"),
+			setup: func(t *testing.T, beadsDir string) {
+				t.Helper()
+				writeRepository(t, beadsDir, "beads", 1)
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			beadsDir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, beadsDir)
+			}
+			if got := HasDatabase(beadsDir, tt.database); got != tt.want {
+				t.Fatalf("HasDatabase(%q) = %v, want %v", tt.database, got, tt.want)
+			}
+			// Containment: a name HasDatabase accepts is a name HasRepository
+			// accepts. The probes ask different questions, so the reverse does
+			// not hold — see the different-database row.
+			if tt.want && !HasRepository(beadsDir) {
+				t.Fatalf("HasDatabase(%q) = true but HasRepository() = false — the probes disagree about a directory", tt.database)
+			}
+		})
+	}
+}

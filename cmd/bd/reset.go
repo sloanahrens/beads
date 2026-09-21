@@ -167,7 +167,7 @@ func collectResetItems(gitCommonDir, beadsDir string) (items, preserved []resetI
 // up from the working directory with no upper boundary — repoRoot is used to
 // classify a hit, never to stop the climb. So in any git repository under the
 // home directory that has no .beads of its own, the walk continues past the repo
-// and lands on ~/.beads. hasBeadsProjectFiles is documented as the thing that
+// and lands on ~/.beads. HasBeadsProjectFiles is documented as the thing that
 // prevents this, but it is a content guard, not a boundary guard: it holds only
 // while the global directory is not itself a real project. Once a user has one,
 // it stops holding, and that is when it matters.
