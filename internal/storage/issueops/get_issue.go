@@ -49,13 +49,15 @@ func getIssueFromTableInTx(ctx context.Context, tx DBTX, issueTable, labelTable,
 	querySQL := fmt.Sprintf(`SELECT %s FROM %s %s WHERE id = ?`, IssueSelectColumns, issueTable, join)
 	row := tx.QueryRowContext(ctx, querySQL, id)
 	issue, err := ScanIssueFrom(row)
-	if err != nil && leasesTableMissing(err) {
-		// Un-migrated database (pre-0055, be-cm3): the leases table this join
-		// read does not exist at all. Retry with the lease overlay stripped
-		// to NULLs instead of failing `bd show` outright.
-		row = tx.QueryRowContext(ctx, degradeLeaseSQL(querySQL, join), id)
-		issue, err = ScanIssueFrom(row)
-	}
+	// Deliberately NOT degraded here, unlike the counts/search read paths that
+	// call degradeLeaseSQL (be-bz4). Those project the lease overlay into a
+	// listing, where a degraded "no live lease" is a tolerable answer. This is
+	// the single-row hydration behind `bd show`, which renders the lease line
+	// from it (cmd/bd/show_format.go), and the pre-image the mutation paths
+	// read (claim.go, update.go): a degraded answer is indistinguishable from
+	// a healthy unleased row, so nobody is told the table this row depends on
+	// is gone. The missing table reaches the caller and names itself.
+	// See TestGetIssueInTxMissingLeasesTableIsAnError.
 	if err == sql.ErrNoRows || missingOptionalIssueTable(err, issueTable) {
 		return nil, storage.ErrNotFound
 	}

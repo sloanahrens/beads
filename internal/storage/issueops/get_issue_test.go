@@ -42,6 +42,12 @@ func expectHydrationQuery(mock sqlmock.Sqlmock, table, id string, err error) {
 // table-not-exist tolerance exists for the optional wisps plane only; folding
 // a missing leases table into "row absent" hands the caller a 404 it cannot
 // tell apart from a deletion.
+//
+// The path must also not retry the query with the overlay stripped the way the
+// counts and search reads do (lease_table_compat_test.go,
+// sibling_lease_paths_test.go): this hydration is what `bd show` renders the
+// lease line from, so a degraded "no live lease" is indistinguishable from a
+// healthy unleased row. be-cm3 degraded it anyway; be-bz4 corrects that.
 func TestGetIssueInTxMissingLeasesTableIsAnError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -55,10 +61,10 @@ func TestGetIssueInTxMissingLeasesTableIsAnError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, mock, tx := beginMockTx(t)
 
-			// Both planes are primed: before the fix the issues query is
-			// swallowed and the wisps query runs too, so ExpectationsWereMet
-			// is deliberately not asserted here — the returned error is the
-			// assertion.
+			// Both planes are primed: the issues-plane failure must stop the
+			// lookup, and if it were tolerated as absent the wisps query would
+			// run too. ExpectationsWereMet is deliberately not asserted here —
+			// the returned error is the assertion.
 			expectHydrationQuery(mock, "issues", "bd-1", tc.err)
 			expectHydrationQuery(mock, "wisps", "bd-1", tc.err)
 
@@ -68,6 +74,14 @@ func TestGetIssueInTxMissingLeasesTableIsAnError(t *testing.T) {
 			}
 			if errors.Is(err, storage.ErrNotFound) {
 				t.Fatalf("GetIssueInTx reported the row absent for a broken lease join: %v", err)
+			}
+			// Identity, not a substring of the message: the query text names
+			// the joined tables, so a substring check passes on any error that
+			// merely echoes the query — including a degraded retry whose
+			// expectation was never primed, which is how this pin passed
+			// vacuously while the path was degrading.
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("error is not the missing-leases failure: %v", err)
 			}
 			if !strings.Contains(err.Error(), "leases") {
 				t.Fatalf("error does not name the missing table: %v", err)
