@@ -396,7 +396,7 @@ func TestCleanStaleCircuitBreakerFiles(t *testing.T) {
 
 	// Call the cleanup function with the test directory, in live-directory
 	// mode (closed files are left alone — they reflect an in-use breaker).
-	cleanStaleCircuitBreakerFilesIn(dir, false)
+	cleanStaleCircuitBreakerFilesIn(dir, liveClosedSweepTTL)
 
 	// Legacy port-0 file should be removed
 	if _, err := os.Stat(port0File); !os.IsNotExist(err) {
@@ -419,10 +419,9 @@ func TestCleanStaleCircuitBreakerFiles(t *testing.T) {
 	}
 }
 
-// TestCleanStaleCircuitBreakerFilesIn_LegacyRemovesClosed verifies that, in
-// legacy-directory mode (removeClosed=true), closed breaker files ARE swept —
-// unlike the live directory — but only past the legacyClosedSweepTTL mtime
-// threshold. The legacy "/tmp/beads-circuit" location (GH#4636) is not fully
+// TestCleanStaleCircuitBreakerFilesIn_LegacyRemovesClosed verifies that, with
+// the legacy directory's TTL (legacyClosedSweepTTL), closed breaker files ARE
+// swept — but only past that mtime threshold. The legacy "/tmp/beads-circuit" location (GH#4636) is not fully
 // abandoned: TMPDIR-less processes (launchd, cron, bare ssh) resolve
 // os.TempDir() to /tmp and rewrite live closed state there on every success,
 // and the old unconditional remove churned against them forever — recreate,
@@ -457,7 +456,7 @@ func TestCleanStaleCircuitBreakerFilesIn_LegacyRemovesClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cleanStaleCircuitBreakerFilesIn(dir, true)
+	cleanStaleCircuitBreakerFilesIn(dir, legacyClosedSweepTTL)
 
 	if _, err := os.Stat(agedClosedFile); !os.IsNotExist(err) {
 		t.Errorf("aged legacy closed breaker file should have been removed: %s", agedClosedFile)
@@ -714,5 +713,51 @@ func newTestCircuitBreakerOnPort(t *testing.T, port int) *circuitBreaker {
 		host:     "127.0.0.1",
 		port:     port,
 		filePath: filepath.Join(dir, "circuit.json"),
+	}
+}
+
+// The live directory accumulated 5,170 closed-state sidecars from test-suite
+// Dolt servers on ephemeral ports (2026-09-21): a dead server never rewrites
+// its file, and the live sweep only ever removed open/half-open state, so every
+// store open read and parsed all of them (be-0v4). A closed file is always safe
+// to drop — its absence means closed — so the live dir gets the same mtime-TTL
+// rule as the legacy dir, and aged files go without being read at all.
+func TestCleanStaleCircuitBreakerFilesIn_LiveRemovesAgedClosedWithoutReading(t *testing.T) {
+	dir := t.TempDir()
+	closedData, _ := json.Marshal(circuitState{State: circuitClosed})
+	write := func(name string, data []byte, age time.Duration) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if age > 0 {
+			ts := time.Now().Add(-age)
+			if err := os.Chtimes(p, ts, ts); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return p
+	}
+	// Dead ephemeral-port test server: closed, untouched for hours.
+	agedClosed := write("beads-dolt-circuit-127-0-0-1-55005-testdb_deadbeef.json", closedData, liveClosedSweepTTL+time.Hour)
+	// Aged file that is not even valid JSON: must go without a parse error path.
+	agedGarbage := write("beads-dolt-circuit-127-0-0-1-55006-testdb_cafe.json", []byte("{not json"), liveClosedSweepTTL+time.Hour)
+	// Live production breaker: closed, rewritten on the last connection.
+	freshClosed := write("beads-dolt-circuit-127-0-0-1-3307-hq.json", closedData, 0)
+	// Fresh open state with a recent trip: kept (a real outage in progress).
+	openData, _ := json.Marshal(circuitState{State: circuitOpen, TrippedAt: time.Now()})
+	freshOpen := write("beads-dolt-circuit-127-0-0-1-3307-gt.json", openData, 0)
+
+	cleanStaleCircuitBreakerFilesIn(dir, liveClosedSweepTTL)
+
+	for _, p := range []string{agedClosed, agedGarbage} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("aged file should have been removed: %s", filepath.Base(p))
+		}
+	}
+	for _, p := range []string{freshClosed, freshOpen} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("fresh file should have been kept: %s", filepath.Base(p))
+		}
 	}
 }
