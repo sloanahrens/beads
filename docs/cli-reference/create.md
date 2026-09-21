@@ -49,7 +49,7 @@ bd create [title] [flags]
       --notes string            Additional notes
       --parent string           Parent issue ID for hierarchical child (e.g., 'bd-a3f8e9')
   -p, --priority string         Priority (0-4 or P0-P4, 0=highest) (default "2")
-      --repo string             Target repository for issue (overrides auto-routing)
+      --repo string             Filesystem path of the target workspace (a directory containing .beads/), not a rig or repository name; overrides auto-routing
       --silent                  Output only the issue ID (for scripting)
       --skills string           Required skills for this issue
       --spec-id string          Link to specification document

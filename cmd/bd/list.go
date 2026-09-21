@@ -469,7 +469,7 @@ func init() {
 	listCmd.Flags().Bool("include-gates", false, "Include gate issues in output (normally hidden)")
 
 	// Infra type filtering: exclude agent/role/message by default
-	listCmd.Flags().Bool("include-infra", false, "Include infrastructure beads (agent/role/message) in output")
+	listCmd.Flags().Bool("include-infra", false, "Include infrastructure beads (agent/role/message) and ephemeral wisps (wisp-* ids, molecules, mail, cleanup beads), which are hidden by default")
 
 	// Ephemeral plane: the wisps table is suppressed by default. This is the
 	// PLANE knob on its own — ListRequest.IncludeEphemeral — as distinct from

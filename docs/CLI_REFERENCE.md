@@ -506,7 +506,7 @@ bd create [title] [flags]
       --notes string            Additional notes
       --parent string           Parent issue ID for hierarchical child (e.g., 'bd-a3f8e9')
   -p, --priority string         Priority (0-4 or P0-P4, 0=highest) (default "2")
-      --repo string             Target repository for issue (overrides auto-routing)
+      --repo string             Filesystem path of the target workspace (a directory containing .beads/), not a rig or repository name; overrides auto-routing
       --silent                  Output only the issue ID (for scripting)
       --skills string           Required skills for this issue
       --spec-id string          Link to specification document
@@ -914,7 +914,7 @@ bd list [flags]
       --has-metadata-key string      Filter issues that have this metadata key set
       --id string                    Filter by specific issue IDs (comma-separated, e.g., bd-1,bd-5,bd-10)
       --include-gates                Include gate issues in output (normally hidden)
-      --include-infra                Include infrastructure beads (agent/role/message) in output
+      --include-infra                Include infrastructure beads (agent/role/message) and ephemeral wisps (wisp-* ids, molecules, mail, cleanup beads), which are hidden by default
       --include-templates            Include template molecules in output
   -l, --label strings                Filter by labels (AND: must have ALL). Can combine with --label-any
       --label-any strings            Filter by labels (OR: must have AT LEAST ONE). Can combine with --label
