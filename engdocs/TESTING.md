@@ -103,6 +103,45 @@ This fail-loud behavior currently applies only to
 `internal/storage/dolt`'s `TestMain`; the other `EnsureDoltContainerForTestMain`
 callers still warn and skip silently (tracked in be-1db).
 
+#### What `make test` does not cover (be-1kk)
+
+`go test` prints `ok <pkg> <duration>` for a package whose tests all skipped, so
+a green package line is not by itself evidence that the package ran. Some suites
+here opt in on an environment variable that `make test` does not set.
+`scripts/test.sh` says which, in the header and again at the end of a passing
+run:
+
+```
+NOT COVERED by this run (env-gated; their 'ok' is not evidence):
+  SKIPPED  internal/storage/embeddeddolt/  [BEADS_TEST_EMBEDDED_DOLT unset]  ...
+  SKIPPED  cmd/bd/  [BEADS_TEST_EMBEDDED_DOLT unset]  ...
+```
+
+`BEADS_TEST_EMBEDDED_DOLT` is withheld from the gate deliberately, not by
+oversight. It is not a per-package switch: setting it also enables cmd/bd's 184
+`TestEmbedded*` tests, which CI only fits by sharding them across 20 jobs, and
+inside `make test` they would land in cmd/bd's single package run — already
+measured at 1003.7s and up to 1533s under load against the runner's 1500s
+per-package deadline (be-128). The export would trade a false green for a
+guaranteed false red. Real coverage of `internal/storage/embeddeddolt` needs a
+package-scoped pass instead, and that is blocked on be-bz4: the suite is red on
+main today, so adding it to the gate would stop the merge queue on a
+pre-existing failure.
+
+The suites are still covered, just not here: `scripts/conformance.sh` runs the
+embedded-Dolt storage oracle with the variable set and fails loudly if the
+top-level suite skips, and CI shards both embedded suites. For a change that
+touches `internal/storage/embeddeddolt`, `internal/doltserver` or `cmd/bd`, take
+the same evidence by hand and put it in the MR:
+
+```bash
+BEADS_TEST_EMBEDDED_DOLT=1 go test -tags gms_pure_go -count=1 -timeout 25m \
+  ./internal/storage/embeddeddolt/
+```
+
+Until the gate runs it, that evidence is required; a green `make test` is not a
+substitute for it.
+
 Tests that need a temporary repository or store should use `t.TempDir()` and
 `t.Cleanup()`. Temporary repositories must set a repository-local hooks path;
 do not inherit the developer's global hooks configuration.

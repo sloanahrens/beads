@@ -120,6 +120,48 @@ beads_test_env_add_skip() {
     fi
 }
 
+# Coverage boundary of this environment (be-1kk).
+#
+# Some suites OPT IN on an env var. When that var is unset they skip every
+# test and `go test` still prints `ok <pkg> <duration>` — indistinguishable
+# from a package that ran and passed. A green from such a package is not
+# evidence about it, which is how main sat red (be-bz4) behind a gate
+# reporting `ok internal/storage/embeddeddolt 265.768s`.
+#
+# Every var below is therefore NOT an accidental omission: the gate declines
+# to set it, deliberately, and scripts/test.sh prints the result as a
+# COVERAGE GAP block so no reader (refinery, witness, om, a human) can take
+# the green for evidence. See engdocs/TESTING.md.
+#
+#   BEADS_TEST_EMBEDDED_DOLT — embedded-Dolt suites. Cannot be exported here
+#     even though it looks like a one-line fix. The var is package-scoped in
+#     intent and process-wide in effect: setting it also switches on cmd/bd's
+#     184 TestEmbedded* functions, which CI only fits by sharding them across
+#     20 jobs (.github/workflows/main.yml). Inside `make test` those land in
+#     cmd/bd's single package run, already measured at 1003.7s and up to
+#     1533s under load against scripts/test.sh's 1500s per-package deadline
+#     (be-128), so the export would trade a false green for a guaranteed
+#     false red. internal/storage/embeddeddolt alone costs 993.5s / ~1007s
+#     wall with the var set (measured 2026-09-21, ~34% headroom on that same
+#     deadline), so real coverage needs a package-scoped pass rather than an
+#     export. That pass is blocked on be-bz4: the suite is red on main today
+#     (TestGetIssue/missing_leases_table_is_an_error_not_absent), so adding
+#     it to the gate would halt the merge queue on a pre-existing failure
+#     until be-bz4 lands.
+#     Until then, an MR touching internal/storage/embeddeddolt,
+#     internal/doltserver or cmd/bd needs env-gated evidence in its
+#     verification rather than a green `make test` — scripts/conformance.sh
+#     runs the storage suite and already fails loudly on a silent skip.
+beads_test_env_coverage_gaps() {
+    # One "<gate-var>|<package>|<why>" line per suite whose gate var is unset
+    # here, i.e. that this run skips while still reporting the package "ok".
+    if [[ "${BEADS_TEST_EMBEDDED_DOLT:-}" != "1" ]]; then
+        printf '%s\n' \
+            "BEADS_TEST_EMBEDDED_DOLT|internal/storage/embeddeddolt/|embedded-Dolt storage suite: 240 assertions, 267 of 363 tests skipped without it (be-1kk)" \
+            "BEADS_TEST_EMBEDDED_DOLT|cmd/bd/|TestEmbedded* subprocess suite: 184 top-level tests, sharded 20 ways in CI so they cannot fit this package's budget (be-128)"
+    fi
+}
+
 beads_test_env_cleanup() {
     if [[ "${BEADS_TEST_ENV_KEEP:-0}" == "1" ]]; then
         return 0

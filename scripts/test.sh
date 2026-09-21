@@ -195,6 +195,22 @@ CMD+=("${PACKAGES[@]}")
 
 echo "Running: ${CMD[*]}" >&2
 echo "Skipping: $SKIP_PATTERN" >&2
+
+# be-1kk: env-gated suites this run will skip while still reporting the
+# package "ok". Announce them beside "Skipping:" — same concept, different
+# mechanism — so a green run states its own coverage boundary instead of
+# implying it exercised everything it listed. The vars, and why the gate
+# declines to set them, are documented in scripts/ci/lib/test-env.sh.
+COVERAGE_GAPS="$(beads_test_env_coverage_gaps)"
+COVERAGE_GAP_COUNT=0
+if [[ -n "$COVERAGE_GAPS" ]]; then
+    echo "NOT COVERED by this run (env-gated; their 'ok' is not evidence):" >&2
+    while IFS='|' read -r _gap_var _gap_pkg _gap_why; do
+        [[ -z "$_gap_var" ]] && continue
+        COVERAGE_GAP_COUNT=$((COVERAGE_GAP_COUNT + 1))
+        echo "  SKIPPED  $_gap_pkg  [${_gap_var} unset]  $_gap_why" >&2
+    done <<<"$COVERAGE_GAPS"
+fi
 echo "" >&2
 
 "${CMD[@]}"
@@ -203,6 +219,14 @@ status=$?
 if [[ -n "$COVERAGE" ]]; then
     total=$(go tool cover -func="$COVERPROFILE" | awk '/^total:/ {print $NF}')
     echo "Total coverage: ${total} (profile: ${COVERPROFILE})" >&2
+fi
+
+# be-1kk: restate the boundary at the end of the log. The header is the right
+# place for run configuration, but a consumer that reads only the tail — which
+# is what a failing-gate triage does — must still not mistake this green for
+# coverage of the suites listed above.
+if [[ $status -eq 0 && $COVERAGE_GAP_COUNT -gt 0 ]]; then
+    echo "NOTE: passed, but $COVERAGE_GAP_COUNT env-gated suite(s) did NOT run (see 'NOT COVERED' above); this green is not evidence about them." >&2
 fi
 
 exit $status
