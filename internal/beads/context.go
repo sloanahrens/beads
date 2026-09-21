@@ -510,7 +510,7 @@ func buildRepoContextForWorkspace(workspacePath string) (*RepoContext, error) {
 	}
 
 	// 5. Validate directory contains actual project files
-	if !hasBeadsProjectFiles(beadsDir) {
+	if !HasBeadsProjectFiles(beadsDir) {
 		return nil, fmt.Errorf("beads directory missing required files: %s", beadsDir)
 	}
 

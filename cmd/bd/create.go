@@ -982,12 +982,11 @@ func openDryRunTargetStore(ctx context.Context, repoPath string) (storage.DoltSt
 
 	targetPath := routing.ExpandPath(repoPath)
 	beadsDir := beads.FollowRedirect(filepath.Join(targetPath, ".beads"))
-	metadataPath := filepath.Join(beadsDir, "metadata.json")
-	if _, err := os.Stat(metadataPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("target repo %s is not initialized; refusing to initialize it during dry-run", targetPath)
-		}
-		return nil, fmt.Errorf("failed to inspect target repo %s: %w", targetPath, err)
+	if !beads.HasBeadsProjectFiles(beadsDir) {
+		// Same predicate as ensureBeadsDirForPath: a dry-run must not call an
+		// initialized workspace uninitialized, and must not initialize one it
+		// calls uninitialized (be-n2s).
+		return nil, fmt.Errorf("target repo %s is not initialized; refusing to initialize it during dry-run", targetPath)
 	}
 
 	store, err := newPreviewStoreFromConfig(ctx, beadsDir)
@@ -1025,11 +1024,15 @@ func ensureBeadsDirForPath(ctx context.Context, targetPath string, sourceStore s
 	// database right next to the redirect, bricking the redirected rig's
 	// writes with a PROJECT IDENTITY MISMATCH on the next open (be-dxx).
 	resolvedBeadsDir := beads.FollowRedirect(beadsDir)
-	metadataPath := filepath.Join(resolvedBeadsDir, "metadata.json")
 
-	// Check if beads directory already exists with a Dolt database.
-	// metadata.json is the canonical marker for an initialized beads dir.
-	if _, err := os.Stat(metadataPath); err == nil {
+	// Check if beads directory already exists with a Dolt database. This asks
+	// discovery's own question — beads.HasBeadsProjectFiles — rather than
+	// stat'ing metadata.json alone. The two disagreed on the shapes that are
+	// initialized without a metadata.json (a config.yaml-only directory, or a
+	// bare embeddeddolt/ database directory), and the guard's answer is the
+	// one that lights the create path below: fabricating a database and a
+	// metadata.json into a directory the caller never targeted (be-n2s).
+	if beads.HasBeadsProjectFiles(resolvedBeadsDir) {
 		return resolvedBeadsDir, nil
 	}
 

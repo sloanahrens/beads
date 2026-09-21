@@ -104,7 +104,7 @@ func TestFindAllDatabases_Unit(t *testing.T) {
 		if err := os.MkdirAll(beadsDir, 0755); err != nil {
 			t.Fatal(err)
 		}
-		// Create metadata.json so hasBeadsProjectFiles returns true
+		// Create metadata.json so HasBeadsProjectFiles returns true
 		if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{"backend":"dolt"}`), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +216,7 @@ func TestRepoContext_GitCmdCWD(t *testing.T) {
 	if err := os.MkdirAll(beadsDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// Create metadata.json so hasBeadsProjectFiles returns true
+	// Create metadata.json so HasBeadsProjectFiles returns true
 	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{"backend":"dolt"}`), 0644); err != nil {
 		t.Fatal(err)
 	}

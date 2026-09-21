@@ -1310,7 +1310,15 @@ var rootCmd = &cobra.Command{
 						// that already has a workspace, or an unambiguous
 						// absolute/"~"-prefixed path, is unaffected — routing
 						// proceeds as before.
-						if _, err := os.Stat(filepath.Join(targetBeadsDir, "metadata.json")); err != nil {
+						//
+						// be-n2s: "has a workspace" is asked through
+						// beads.HasBeadsProjectFiles, the same predicate
+						// discovery answers with, not metadata.json alone. The
+						// narrower check called a config.yaml-only or
+						// bare-embeddeddolt/ target uninitialized, which both
+						// refused legitimate relative targets and disagreed
+						// with the discovery that had just resolved them.
+						if !beads.HasBeadsProjectFiles(targetBeadsDir) {
 							if isAmbiguousRepoTarget(true, repoVal) {
 								fmt.Fprintf(os.Stderr, "Error: no beads workspace found at %s and --repo's value is a relative/bare path, so it won't be auto-created here (this is likely not the target you intended). Pass an absolute or \"~/\"-prefixed --repo path to an existing workspace instead\n", routing.ExpandPath(repoVal))
 								return SilentExit()
