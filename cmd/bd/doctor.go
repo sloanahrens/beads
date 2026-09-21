@@ -12,7 +12,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/cmd/bd/doctor"
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/metrics"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/ui"
 )
 
@@ -359,9 +361,9 @@ func shouldSkipDoctorNetworkChecks() bool {
 }
 
 // validateDoctorWorkspaceBackend keeps doctor diagnostics read-only when metadata
-// selects a removed or unknown implementation or cannot be parsed. Doctor contains
-// direct diagnostic store paths and may run under shared-server mode, so corrupt
-// metadata must be rejected before version tracking or any database check begins.
+// selects a removed or unknown implementation, or cannot be read at all. Doctor
+// contains direct diagnostic store paths and may run under shared-server mode, so
+// that has to be rejected before version tracking or any database check begins.
 func validateDoctorWorkspaceBackend(path string) error {
 	beadsDir := doctor.ResolveBeadsDirForRepo(path)
 	if err := guardLegacyUpgradeWorkspace(beadsDir); err != nil {
@@ -369,7 +371,21 @@ func validateDoctorWorkspaceBackend(path string) error {
 	}
 	cfg, err := configfile.LoadForDiscovery(beadsDir)
 	if err != nil {
-		return fmt.Errorf("failed to load %s: %w; no storage database was opened or modified; fix or restore metadata.json and retry", configfile.ConfigPath(beadsDir), err)
+		// An unreadable metadata.json leaves this workspace unidentified, which
+		// doctor can accept only where nothing else depends on the answer: a
+		// single embedded database under .beads/embeddeddolt names the storage
+		// mode and database by itself, and no server is in play to be
+		// misidentified. There the refusal would instead make the corruption
+		// unreportable — bd init is the repair, but doctor is what tells the
+		// user what is wrong. Everywhere else (no local database to diagnose, or
+		// a shared server whose target comes from the configuration doctor just
+		// failed to read) the refusal stands.
+		if _, ok := embeddeddolt.SoleRepository(beadsDir); !ok || doltserver.IsSharedServerMode() {
+			return fmt.Errorf("failed to load %s: %w; no storage database was opened or modified; fix or restore metadata.json and retry", configfile.ConfigPath(beadsDir), err)
+		}
+		fmt.Fprintf(os.Stderr, "warning: %s: %v\n", configfile.ConfigPath(beadsDir), err)
+		fmt.Fprintln(os.Stderr, "  Repair: run 'bd init' to rewrite metadata.json, or restore it from git.")
+		return nil
 	}
 	return validateConfiguredBackend(cfg)
 }
