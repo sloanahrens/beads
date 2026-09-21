@@ -28,7 +28,27 @@ func guardLegacyUpgradeWorkspace(beadsDir string) error {
 	}
 	cfg, err := configfile.LoadForDiscovery(beadsDir)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		// Every refusal below rests on what metadata.json says, and a file that
+		// exists but cannot be parsed says nothing — a load failure is not
+		// evidence of a legacy layout. It is also not evidence of a current one,
+		// so this guard makes no classification at all and returns, leaving the
+		// answer to the callers that can give an accurate one.
+		//
+		// Guessing here is what made a corrupt metadata.json unrecoverable in
+		// two directions. Refusing as legacy points the user at cross-era
+		// migration when the fix is to rewrite the file, and it misfires on a
+		// modern server workspace: its .beads/dolt root is the same directory a
+		// pre-1.0 workspace used, so only the mode this file held tells them
+		// apart. Admitting instead would be worse — but neither happens, because
+		// the guard is not the last line: this runs ahead of bd doctor and
+		// bd init (the two commands a user reaches for to diagnose and rewrite
+		// the file), checkExistingBeadsDataAt still fails closed on the same
+		// load error, and store selection refuses rather than fall back to the
+		// embedded store.
+		//
+		// An absent metadata.json is unaffected: LoadForDiscovery reports that
+		// as (nil, nil), so the on-disk legacy shapes below still classify.
+		return nil
 	}
 	if isHistoricalSQLiteWorkspace(beadsDir, cfg) {
 		return legacyUpgradeRefusal("historical SQLite workspace")
