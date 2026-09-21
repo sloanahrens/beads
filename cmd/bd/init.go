@@ -748,6 +748,32 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
+		// A metadata.json that exists but cannot be parsed is the one broken
+		// workspace init can repair without going near the database. Everything
+		// below refuses to reinitialize precisely so init cannot repoint a
+		// workspace whose metadata.json is the only pointer to a database
+		// elsewhere; rewriting the file from disk evidence is what lets a user
+		// back in without init having to guess.
+		//
+		// Only a plain embedded init repairs in place. Every other intent is a
+		// request this repair would swallow by exiting right after the rewrite:
+		// --reinit-local/--force/--discard-remote replace the workspace,
+		// --from-jsonl/--remote bring data in, and an explicit server mode names
+		// a database the rewritten file would not describe. Those keep the
+		// guards' refusal.
+		plainEmbeddedInit := !initServerMode && !initProxiedServer && !initTeamServer &&
+			!initModeExplicitlyRequested(cmd)
+		if plainEmbeddedInit && !reinitLocal && !force && !fromJSONL && !discardRemote &&
+			destroyToken == "" && initRemote == "" {
+			repaired, repairErr := repairUnreadableMetadata(rootCtx, resolveInitBeadsDir())
+			if repairErr != nil {
+				return repairErr
+			}
+			if repaired {
+				return nil
+			}
+		}
+
 		// Historical workspaces need an explicit sealed-copy bridge. This runs
 		// before init's existing-workspace checks so even --force cannot create
 		// or rewrite state beside a source that has not been preserved.
@@ -2435,6 +2461,98 @@ func (e *workspaceExistsError) Is(target error) bool {
 // alreadyInitialized builds a workspaceExistsError from a formatted message.
 func alreadyInitialized(format string, args ...any) error {
 	return &workspaceExistsError{msg: fmt.Sprintf(format, args...)}
+}
+
+// repairUnreadableMetadata rewrites a metadata.json that exists but cannot be
+// parsed, using only evidence left on disk, and reports whether it did.
+//
+// A metadata.json is the only record of where a workspace's database lives, so
+// init refuses to reinitialize over one it cannot read (checkExistingBeadsDataAt
+// and the legacy-upgrade guard both fail closed). That refusal is wrong for the
+// one deployment shape that does not depend on the file: an embedded database
+// under .beads/embeddeddolt, whose directory name carries both the storage mode
+// and the database name. Rebuilding the file from that directory restores the
+// workspace without init guessing at anything, and without init opening, moving,
+// or rewriting a database. Every other shape keeps the fail-closed refusal —
+// a server-mode or proxied-server pointer is not recoverable from disk (host,
+// port, and credentials live only in the file being replaced), and a workspace
+// with several embedded databases has no unambiguous database name to record.
+//
+// The caller checks the invocation's intent before calling; see the gate at the
+// call site.
+func repairUnreadableMetadata(ctx context.Context, beadsDir string) (bool, error) {
+	if beadsDir == "" {
+		return false, nil
+	}
+	configPath := configfile.ConfigPath(beadsDir)
+	if _, err := os.Stat(configPath); err != nil {
+		return false, nil // absent metadata.json is the fresh-workspace default
+	}
+	if _, err := configfile.LoadForDiscovery(beadsDir); err == nil {
+		return false, nil // readable: nothing to repair
+	}
+	database, ok := soleEmbeddedDatabase(beadsDir)
+	if !ok {
+		return false, nil
+	}
+
+	cfg := configfile.DefaultConfig()
+	cfg.Backend = configfile.BackendDolt
+	cfg.Database = "dolt"
+	cfg.DoltMode = configfile.DoltModeEmbedded
+	cfg.DoltDatabase = database
+	if err := cfg.Save(beadsDir); err != nil {
+		return false, fmt.Errorf("repairing %s: %w", configPath, err)
+	}
+
+	// The identity the lost file carried still lives in the database. Adopt it
+	// rather than leaving metadata.json without one: a project_id-less file is
+	// usable but disables the identity check that catches a server answering
+	// for a different project. The file above is already valid, so a failure
+	// here costs the identity, not the repair.
+	if store, err := newReadOnlyStoreFromConfig(ctx, beadsDir); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read the project identity from %s: %v\n", database, err)
+	} else {
+		if projectID, err := store.GetMetadata(ctx, "_project_id"); err == nil && projectID != "" {
+			cfg.ProjectID = projectID
+			if err := cfg.Save(beadsDir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not record the project identity in %s: %v\n", configPath, err)
+			}
+		}
+		_ = store.Close()
+	}
+
+	fmt.Fprintf(os.Stderr, "warning: %s is not readable; rewrote it for the embedded database %s (dolt_mode=embedded, dolt_database=%s)\n",
+		configPath, filepath.Join(beadsDir, "embeddeddolt", database), database)
+	fmt.Fprintln(os.Stderr, "  If that is not the workspace you expected, restore the file from git or run 'bd doctor'.")
+	return true, nil
+}
+
+// soleEmbeddedDatabase returns the name of the single embedded Dolt database
+// beneath beadsDir. Two candidates leave the recorded database name ambiguous —
+// the unreadable file was the only record of which one this workspace used — so
+// it reports none and the caller keeps its refusal. Mirrors the embeddeddolt
+// adapter's marker probe: a symlinked candidate is not a database it owns.
+func soleEmbeddedDatabase(beadsDir string) (string, bool) {
+	root := filepath.Join(beadsDir, "embeddeddolt")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", false
+	}
+	name := ""
+	for _, entry := range entries {
+		if !entry.IsDir() { // also excludes symlinks, which os.ReadDir does not follow
+			continue
+		}
+		if info, err := os.Lstat(filepath.Join(root, entry.Name(), ".dolt")); err != nil || !info.IsDir() {
+			continue
+		}
+		if name != "" {
+			return "", false
+		}
+		name = entry.Name()
+	}
+	return name, name != ""
 }
 
 // checkExistingBeadsDataAt checks for existing database at a specific beadsDir path.
