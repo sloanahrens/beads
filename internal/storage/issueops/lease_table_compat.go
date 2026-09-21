@@ -8,22 +8,25 @@ import (
 	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 )
 
-// ErrLeasesTableMissing is returned by a write that requires the leases
-// table (bd-lrgn1: claim/heartbeat/reclaim state) instead of the raw MySQL
-// "table not found: leases" it wraps. It means this database predates
+// ErrLeasesTableMissing is returned by a path that requires the leases table
+// instead of the raw MySQL "table not found: leases" it wraps — a write that
+// reads or writes claim state (bd-lrgn1: claim/heartbeat/reclaim), and the
+// single-row hydration read that renders and acts on the lease overlay
+// (issueops.getIssueFromTableInTx, be-bz4). It means this database predates
 // migration 0055 (move claim leases to their own table) and has not had it
 // applied yet — every rig's DB is remote-backed on the shared Dolt server,
 // so in-place migration cannot be run from here (#4259); the coordinated
 // migration is the only remedy (be-cm3, split from be-qah).
 var ErrLeasesTableMissing = errors.New(
-	"leases table missing: migration 0055 (move claim leases to their own table) has not been applied to this database — run `bd migrate` (or wait for the coordinated migration) before claiming, heartbeating, or reclaiming issues")
+	"leases table missing: migration 0055 (move claim leases to their own table) has not been applied to this database — run `bd migrate` (or wait for the coordinated migration); commands that need the lease overlay (show, update, claim, heartbeat, reclaim) are refused until it is applied")
 
 // leasesTableMissing reports whether err is specifically the leases-table-
 // not-found error, as opposed to some other broken-database error that must
-// still fail loudly. Both the read-degrade path (this file's
-// degradeLeaseSQL retry) and the write-error path (wrapLeaseTableMissing)
-// key off this single classifier so they can never disagree about what
-// "the leases table is absent" means.
+// still fail loudly. The read-degrade paths (this file's degradeLeaseSQL
+// retry), the write-error paths (wrapLeaseTableMissing), and the hydration
+// read that refuses outright (getIssueFromTableInTx, be-bz4) all key off this
+// single classifier so they can never disagree about what "the leases table
+// is absent" means.
 func leasesTableMissing(err error) bool {
 	return dberrors.IsMissingTable(err, "leases")
 }
@@ -54,11 +57,12 @@ func wrapLeaseTableMissing(err error) error {
 // string replace is precise rather than a pattern match that could misfire
 // on user data.
 //
-// Read paths call this to retry once after a query fails with
+// Listing reads call this to retry once after a query fails with
 // leasesTableMissing: a database that predates migration 0055 has no leases
-// table at all, so every read that would have joined it degrades to
+// table at all, so every listing that would have joined it degrades to
 // reporting no live lease for every row instead of failing outright
-// (be-cm3 deliverable 1).
+// (be-cm3 deliverable 1). The single-row hydration read refuses instead of
+// retrying — see getIssueFromTableInTx (be-bz4).
 func degradeLeaseSQL(query, joinFragment string) string {
 	query = strings.ReplaceAll(query, sqlbuild.LeaseSelectColumns, "NULL, NULL, NULL")
 	if joinFragment != "" {

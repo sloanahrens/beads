@@ -4,61 +4,29 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"regexp"
 	"testing"
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 
-	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 )
 
-// These tests exercise the be-cm3 degrade paths against a fixture DB that
-// has no leases table at all — the steady state of every rig DB in this
-// town until the coordinated migration 0055 runs (#4259 forbids in-place
-// remote migration, so this cannot be fixed by running `bd migrate` here).
+// These tests exercise the be-cm3 degrade paths against a fixture DB that has
+// no leases table at all (a pre-0055 database; #4259 forbids in-place remote
+// migration, so this cannot be fixed by running `bd migrate` from the rig).
 
-// TestGetIssueInTxDegradesOnMissingLeases covers `bd show`: the classic
-// single-row hydration query joins leases unconditionally, so on a
-// pre-0055 database it must retry with the overlay stripped instead of
-// failing the whole lookup.
-func TestGetIssueInTxDegradesOnMissingLeases(t *testing.T) {
-	_, mock, tx := beginMockTx(t)
+// Not covered here: issueops.GetIssueInTx. be-cm3 degraded that hydration too,
+// but it is not a listing read — it is the single row `bd show` renders the
+// lease line from and the pre-image every mutation verb reads, so a stripped
+// overlay there is an answer the caller acts on. It refuses with
+// ErrLeasesTableMissing instead; the pins for that are beside it in
+// get_issue_test.go (TestGetIssueInTxMissingLeasesTableIsAnError,
+// TestUpdateIssueInTxMissingLeasesTableIsAnError). See be-bz4.
 
-	primary := "SELECT " + IssueSelectColumns + " FROM issues " + sqlbuild.LeaseJoin("issues") + " WHERE id = ?"
-	mock.ExpectQuery(regexp.QuoteMeta(primary)).
-		WithArgs("bd-1").
-		WillReturnError(tableNotFound("leases"))
-
-	degraded := degradeLeaseSQL(primary, sqlbuild.LeaseJoin("issues"))
-	rows := issueRows()
-	rows.AddRow(issueRowValues("bd-1", "Title")...)
-	mock.ExpectQuery(regexp.QuoteMeta(degraded)).
-		WithArgs("bd-1").
-		WillReturnRows(rows)
-
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT label FROM labels WHERE issue_id = ? ORDER BY label")).
-		WithArgs("bd-1").
-		WillReturnRows(sqlmock.NewRows([]string{"label"}))
-
-	issue, err := GetIssueInTx(context.Background(), tx, "bd-1")
-	if err != nil {
-		t.Fatalf("GetIssueInTx on a database with no leases table: %v", err)
-	}
-	if issue == nil || issue.ID != "bd-1" {
-		t.Fatalf("GetIssueInTx returned %+v, want issue bd-1", issue)
-	}
-	if issue.LeaseExpiresAt != nil || issue.HeartbeatAt != nil || issue.LeaseGrantedNode != "" {
-		t.Fatalf("degraded issue carries lease data: %+v", issue)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sql expectations: %v", err)
-	}
-}
-
-// TestGetIssueInTxUnrelatedErrorPropagates is the control: the degrade retry
-// must be specific to the leases table, not a blanket retry-on-any-error.
+// TestGetIssueInTxUnrelatedErrorPropagates is the control: this path keeps the
+// sqlbuild.LeaseJoin in its FROM clause and does not retry around it, so
+// nothing here may swallow a non-ErrNotFound failure.
 func TestGetIssueInTxUnrelatedErrorPropagates(t *testing.T) {
 	_, mock, tx := beginMockTx(t)
 

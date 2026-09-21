@@ -42,6 +42,12 @@ func expectHydrationQuery(mock sqlmock.Sqlmock, table, id string, err error) {
 // table-not-exist tolerance exists for the optional wisps plane only; folding
 // a missing leases table into "row absent" hands the caller a 404 it cannot
 // tell apart from a deletion.
+//
+// The failure is also classified, not raw: the caller gets
+// ErrLeasesTableMissing, the same sentinel the write paths raise for this
+// database, so no one has to pattern-match a MySQL 1146 to learn the database
+// needs migration 0055 (be-bz4). This hydration does not retry the query with
+// the overlay stripped — see getIssueFromTableInTx.
 func TestGetIssueInTxMissingLeasesTableIsAnError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -68,6 +74,14 @@ func TestGetIssueInTxMissingLeasesTableIsAnError(t *testing.T) {
 			}
 			if errors.Is(err, storage.ErrNotFound) {
 				t.Fatalf("GetIssueInTx reported the row absent for a broken lease join: %v", err)
+			}
+			// Identity, not a substring of the message: the query text names
+			// the joined tables, so a substring check also passes on any error
+			// that merely echoes the query — including a degraded retry whose
+			// expectation was never primed, which is how this pin passed
+			// vacuously while the path was degrading.
+			if !errors.Is(err, ErrLeasesTableMissing) {
+				t.Fatalf("error is not classified as ErrLeasesTableMissing: %v", err)
 			}
 			if !strings.Contains(err.Error(), "leases") {
 				t.Fatalf("error does not name the missing table: %v", err)
@@ -113,7 +127,10 @@ func TestGetIssueInTxAbsentRowIsNotFound(t *testing.T) {
 
 // TestUpdateIssueInTxMissingLeasesTableIsAnError covers the mutation path.
 // updateIssueInTx reads the pre-update row through the same hydration query,
-// so the same swallowed error told a writer its live issue did not exist.
+// so the same swallowed error told a writer its live issue did not exist. A
+// title-only update never touches the leases table itself, which is the point:
+// the pre-image read is what must refuse, since it is the row the writer goes
+// on to act from.
 func TestUpdateIssueInTxMissingLeasesTableIsAnError(t *testing.T) {
 	_, mock, tx := beginMockTx(t)
 
@@ -129,6 +146,9 @@ func TestUpdateIssueInTxMissingLeasesTableIsAnError(t *testing.T) {
 	}
 	if errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("UpdateIssueInTx reported the row absent for a broken lease join: %v", err)
+	}
+	if !errors.Is(err, ErrLeasesTableMissing) {
+		t.Fatalf("error is not classified as ErrLeasesTableMissing: %v", err)
 	}
 	if !strings.Contains(err.Error(), "leases") {
 		t.Fatalf("error does not name the missing table: %v", err)

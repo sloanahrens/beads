@@ -49,17 +49,30 @@ func getIssueFromTableInTx(ctx context.Context, tx DBTX, issueTable, labelTable,
 	querySQL := fmt.Sprintf(`SELECT %s FROM %s %s WHERE id = ?`, IssueSelectColumns, issueTable, join)
 	row := tx.QueryRowContext(ctx, querySQL, id)
 	issue, err := ScanIssueFrom(row)
-	if err != nil && leasesTableMissing(err) {
-		// Un-migrated database (pre-0055, be-cm3): the leases table this join
-		// read does not exist at all. Retry with the lease overlay stripped
-		// to NULLs instead of failing `bd show` outright.
-		row = tx.QueryRowContext(ctx, degradeLeaseSQL(querySQL, join), id)
-		issue, err = ScanIssueFrom(row)
-	}
+	// No degradeLeaseSQL retry here, unlike the listing reads that use it
+	// (search.go, search_counts.go, dependencies.go, stale.go). Those read
+	// many rows into a list, where one row's lease overlay is a display
+	// detail. This query hydrates a single row into the caller's model of
+	// that issue: `bd show` renders the lease line from it, and the mutation
+	// verbs read their pre-update row through it (update.go, claim.go,
+	// unclaim.go, promote.go, release_role.go, execution.go), so a stripped
+	// overlay is an answer they act on — "no live lease" for a row on a
+	// database whose leases table is gone, indistinguishable from a healthy
+	// unleased issue, with nothing telling the caller the table is missing.
+	//
+	// The missing table is refused instead, classified the way the write
+	// paths classify it so a caller never has to pattern-match a raw MySQL
+	// 1146 to learn the database needs migration 0055.
+	// Pins: TestGetIssueInTxMissingLeasesTableIsAnError and
+	// TestUpdateIssueInTxMissingLeasesTableIsAnError here, and (through the
+	// store) TestGetIssue/missing_leases_table_is_an_error_not_absent (be-bz4).
 	if err == sql.ErrNoRows || missingOptionalIssueTable(err, issueTable) {
 		return nil, storage.ErrNotFound
 	}
 	if err != nil {
+		if leasesTableMissing(err) {
+			return nil, fmt.Errorf("get issue %s: %w", id, ErrLeasesTableMissing)
+		}
 		return nil, fmt.Errorf("get issue: %w", err)
 	}
 
