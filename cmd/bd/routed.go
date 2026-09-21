@@ -166,14 +166,16 @@ func resolveViaPrefixRoutingWithAccess(ctx context.Context, id string, writable 
 		return nil, fmt.Errorf("no prefix in ID %q", id)
 	}
 
-	// Find the resolved beads directory (where routes.jsonl lives)
+	// Find the resolved beads directory. Inside a rig this is the rig's
+	// (redirected) .beads, which carries no routes.jsonl of its own: the
+	// prefix table lives in the town's .beads above it (be-v1o).
 	currentBeadsDir := resolveCommandBeadsDir(dbPath)
 	if currentBeadsDir == "" {
 		return nil, fmt.Errorf("no beads directory available")
 	}
 
-	// Load routes from routes.jsonl
-	routes, err := loadPrefixRoutes(currentBeadsDir)
+	// Load routes from the nearest routes.jsonl at or above the resolved dir.
+	routes, routesBeadsDir, err := locatePrefixRoutes(currentBeadsDir)
 	if err != nil || len(routes) == 0 {
 		return nil, fmt.Errorf("no routes available")
 	}
@@ -190,18 +192,13 @@ func resolveViaPrefixRoutingWithAccess(ctx context.Context, id string, writable 
 		return nil, fmt.Errorf("no route for prefix %q", prefix)
 	}
 
-	// Skip if the route points to current directory (town-level, already checked)
-	if matchedRoute.Path == "." {
+	// Resolve the target's .beads directory. A route back to the database we
+	// already searched is skipped; the town's own "." route is a real target
+	// when the command runs inside a rig.
+	targetBeadsDir, sameStore := prefixRouteTarget(*matchedRoute, routesBeadsDir, currentBeadsDir)
+	if sameStore {
 		return nil, fmt.Errorf("route points to current database")
 	}
-
-	// Derive the town root from the current beads dir.
-	// currentBeadsDir is typically <town_root>/.beads
-	townRoot := filepath.Dir(currentBeadsDir)
-
-	// Resolve the target rig's .beads directory
-	rigDir := filepath.Join(townRoot, matchedRoute.Path)
-	targetBeadsDir := beads.FollowRedirect(filepath.Join(rigDir, ".beads"))
 
 	// Check that the target has a different dolt_database
 	targetDB := readDoltDatabase(targetBeadsDir)
@@ -257,6 +254,51 @@ func extractBeadPrefix(beadID string) string {
 		return ""
 	}
 	return beadID[:idx+1]
+}
+
+// locatePrefixRoutes returns the prefix routes that govern beadsDir and the
+// .beads directory whose routes.jsonl they came from (route paths are
+// relative to that directory's parent, the town root).
+//
+// It looks in beadsDir first, then in the .beads of each ancestor directory:
+// a rig's resolved beads dir (<rig>/mayor/rig/.beads) has no table of its
+// own, the town's .beads above it does. Without the walk, every rig-scoped
+// agent's `bd show <hq-id>` answered "not found" (be-v1o).
+func locatePrefixRoutes(beadsDir string) ([]prefixRoute, string, error) {
+	if routes, err := loadPrefixRoutes(beadsDir); err == nil && len(routes) > 0 {
+		return routes, beadsDir, nil
+	}
+	for dir := filepath.Dir(filepath.Dir(beadsDir)); dir != "" && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		candidate := filepath.Join(dir, ".beads")
+		if candidate == beadsDir {
+			continue
+		}
+		if routes, err := loadPrefixRoutes(candidate); err == nil && len(routes) > 0 {
+			return routes, candidate, nil
+		}
+	}
+	return nil, "", fmt.Errorf("no routes.jsonl at or above %s", beadsDir)
+}
+
+// prefixRouteTarget resolves route's .beads directory relative to the town
+// root implied by routesBeadsDir (following any redirect) and reports whether
+// it is the store the caller already searched, in which case there is nothing
+// to route to. The town's own "." route is a genuine target from inside a rig.
+func prefixRouteTarget(route prefixRoute, routesBeadsDir, currentBeadsDir string) (string, bool) {
+	townRoot := filepath.Dir(routesBeadsDir)
+	target := beads.FollowRedirect(filepath.Join(townRoot, route.Path, ".beads"))
+	return target, samePath(target, currentBeadsDir)
+}
+
+// samePath compares two directories after cleaning and, where possible,
+// symlink resolution (macOS reports /var and /private/var for one directory).
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }
 
 // loadPrefixRoutes loads prefix-to-path routes from routes.jsonl in the beads directory.
