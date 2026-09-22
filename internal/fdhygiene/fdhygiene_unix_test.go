@@ -13,17 +13,33 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// leakedFDFloor is the lowest number openLeakedFD hands out: well clear of
+// the handful of descriptors a `sh -c "ls /dev/fd"` child opens for itself.
+const leakedFDFloor = 64
+
 // openLeakedFD opens a file the way a caller outside Go would leave one: no
-// O_CLOEXEC, so it survives an exec. Returns the raw descriptor.
+// O_CLOEXEC, so it survives an exec. Returns the raw descriptor, numbered at
+// or above leakedFDFloor.
 func openLeakedFD(t *testing.T) int {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "leak.lock")
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatalf("seeding %s: %v", path, err)
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY, 0)
+	low, err := unix.Open(path, unix.O_RDONLY, 0)
 	if err != nil {
 		t.Fatalf("open %s without O_CLOEXEC: %v", path, err)
+	}
+	// Move the descriptor above the numbers a child's own opens can take.
+	// childSeesFD looks for the NUMBER in `sh -c "ls /dev/fd"`, and that child
+	// opens its cwd (fd 3) and /dev/fd itself (fd 4) before listing; in a
+	// process with few inherited descriptors the leak lands on 4 and the
+	// listing "sees" it whether or not it was inherited. F_DUPFD (not
+	// F_DUPFD_CLOEXEC) keeps the copy inheritable, which is the point.
+	fd, err := unix.FcntlInt(uintptr(low), unix.F_DUPFD, leakedFDFloor)
+	_ = unix.Close(low)
+	if err != nil {
+		t.Fatalf("F_DUPFD %d above %d: %v", low, leakedFDFloor, err)
 	}
 	t.Cleanup(func() { _ = unix.Close(fd) })
 
