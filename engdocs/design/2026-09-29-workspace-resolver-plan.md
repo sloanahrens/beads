@@ -1,14 +1,12 @@
 # Workspace Resolver Implementation Plan (be-h0k)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** One workspace resolver, `workspace.Resolve(cwd, env)`, that config loading, database discovery and gate-path lookup share, so a git worktree whose `.beads/redirect` points at a rig reads the rig's `config.yaml` and not an unrelated ancestor's.
 
 **Architecture:** A new leaf package `internal/workspace` owns redirect semantics, the workspace-marker predicates, explicit-directory discovery (moved from `beads.FindBeadsDirFrom`) and the single interpretation of `BEADS_DIR`. `internal/config` cannot import `internal/beads` (beads -> configfile -> config), which is why the resolver lives below both. `internal/beads` keeps its exported API as thin wrappers.
 
 **Tech Stack:** Go, viper, git CLI (for worktree fallback), `internal/workspacegate` for gate paths.
 
-**Spec:** bead be-h0k; deep review B3-07 and "Refactor candidates" (`~/.claude/docs/research/deep-review/beads-domain-core.md`); B5-10 (`beads-cross-cutting-contract.md`).
+**Spec:** bead be-h0k; deep review finding B3-07 and its "one workspace resolver" refactor candidate (domain-core slice); finding B5-10 (cross-cutting contract slice).
 
 ## Findings that shape the plan
 
