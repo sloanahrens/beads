@@ -43,13 +43,22 @@ var versionCmd = &cobra.Command{
 		schemaVer := schema.LatestVersion()
 
 		if jsonOutput {
+			// The handshake fields: commit (the build id make stamps with
+			// -X main.Commit, always present, empty only for an unstamped
+			// build with no VCS info), the schema level this binary
+			// migrates a database to, the migration ceilings, and the JSON
+			// contract version.
 			result := map[string]interface{}{
 				"version":           Version,
 				"build":             Build,
 				"db_schema_version": schemaVer,
-			}
-			if commit != "" {
-				result["commit"] = commit
+				"commit":            commit,
+				"build_id":          commit,
+				"schema_ceiling": map[string]int{
+					"main":    schemaVer,
+					"ignored": schema.LatestIgnoredVersion(),
+				},
+				"contract_version": JSONContractVersion,
 			}
 			if branch != "" {
 				result["branch"] = branch

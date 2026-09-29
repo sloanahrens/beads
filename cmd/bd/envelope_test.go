@@ -34,6 +34,7 @@ type decodedEnvError struct {
 func runMachine(t *testing.T, fn func() error) (decodedEnvelope, string, string, int) {
 	t.Helper()
 	withMachineMode(t, true)
+	applyMachineCommandSetup() // what the root pre-run does: JSON on
 	oldOut := machineOut
 	machineOut = &machineOutput{done: make(chan struct{})}
 	close(machineOut.done)
