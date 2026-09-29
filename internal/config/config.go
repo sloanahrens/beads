@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/steveyegge/beads/internal/debug"
+	"github.com/steveyegge/beads/internal/utils"
+	"github.com/steveyegge/beads/internal/workspace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -96,12 +99,17 @@ func Initialize() error {
 	appendExistingUserConfig(userConfigPaths.native)
 	appendExistingUserConfig(userConfigPaths.documented)
 
-	// 1. Project: walk up from CWD to find .beads/config.yaml
-	beadsDirEnv := strings.TrimSpace(os.Getenv("BEADS_DIR"))
-	beadsEnvConfigPath := ""
-	if beadsDirEnv != "" {
-		beadsEnvConfigPath = filepath.Clean(filepath.Join(beadsDirEnv, "config.yaml"))
-	}
+	// 1. Project: the config.yaml of the workspace this command runs against,
+	// selected by workspace.Resolve: BEADS_DIR when set, else discovery from
+	// cwd that follows .beads/redirect. Database discovery and the workspace
+	// gate use the same resolver, so config can no longer come from a
+	// different directory than the database. The former ancestor walk ignored
+	// redirects: in a git worktree whose .beads only redirects to its rig it
+	// reached an unrelated ancestor's config.yaml (be-h0k, deep review
+	// B3-07). BEADS_DIR selecting a workspace also means the caller repo's
+	// config is never merged underneath it (that leaked readonly/json/actor
+	// into explicit-target commands).
+	//
 	// A beads checkout usually has its own `.beads/config.yaml` (untracked developer
 	// state) that sets non-default values. In `go test` — especially for `cmd/bd` —
 	// we want to avoid unintentionally picking up that repo-local config, while still
@@ -109,98 +117,67 @@ func Initialize() error {
 	//
 	// If BEADS_TEST_IGNORE_REPO_CONFIG is set, we ignore the config at
 	// <module-root>/.beads/config.yaml (where module-root is the nearest parent
-	// containing go.mod) and at the worktree fallback location.
+	// containing go.mod) and at the worktree fallback location, and we ignore
+	// any workspace discovered outside the module root: anything further up is
+	// outside this repo entirely (e.g. an outer orchestration project's own
+	// unrelated .beads/config.yaml) and must never leak into a
+	// beads-under-test process (be-yjp4z).
 	//
 	// The ignore set applies to every source that can name those paths, including
-	// BEADS_DIR below. BEADS_DIR used to bypass the flag, and because in-process CLI
+	// BEADS_DIR. BEADS_DIR used to bypass the flag, and because in-process CLI
 	// dispatch sets BEADS_DIR at the checkout's own .beads via a raw os.Setenv with no
 	// restore, that bypass re-imported the repo config into every later Initialize in
 	// the same test binary (ga-e6h6i). A test that genuinely wants the repo config
-	// unsets the flag.
+	// unsets the flag. The fence covers the read and merge path only:
+	// SaveConfigValue falls back to the caller-supplied beadsDir when
+	// ConfigFileUsed is empty, so where a write lands is still the caller's
+	// choice, not this flag's.
 	ignoreRepoConfig := os.Getenv("BEADS_TEST_IGNORE_REPO_CONFIG") != ""
 	ignoredRepoConfigPaths := map[string]bool{}
-
-	cwd, err := os.Getwd()
-	if err == nil {
-		var moduleRoot string
-		if ignoreRepoConfig {
-			// Find module root by walking up to go.mod.
-			for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-				if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-					moduleRoot = dir
-					break
-				}
-			}
-			if moduleRoot != "" {
-				ignoredRepoConfigPaths[ignoredConfigKey(filepath.Join(moduleRoot, ".beads", "config.yaml"))] = true
-			}
-			if fallbackPath := worktreeFallbackConfigPath(cwd); fallbackPath != "" {
-				ignoredRepoConfigPaths[ignoredConfigKey(fallbackPath)] = true
-			}
-		}
-
-		tryProjectConfig := func(path string) bool {
-			if path == "" {
-				return false
-			}
-			if _, err := os.Stat(path); err != nil {
-				return false
-			}
-			if ignoreRepoConfig && ignoredRepoConfigPaths[ignoredConfigKey(path)] {
-				return false
-			}
-			configPaths = append(configPaths, path)
-			primaryConfigPath = path
-			return true
-		}
-
-		// Walk up parent directories to find .beads/config.yaml.
+	var moduleRoot string
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		cwd = ""
+	}
+	if ignoreRepoConfig && cwd != "" {
+		// Find module root by walking up to go.mod.
 		for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-			p := filepath.Join(dir, ".beads", "config.yaml")
-			if _, err := os.Stat(p); err == nil {
-				// When BEADS_DIR points at a different runtime workspace, do not
-				// merge the caller repo's config underneath it. That leaks caller
-				// settings like readonly/json/actor into explicit-target commands.
-				if beadsEnvConfigPath != "" && filepath.Clean(p) != beadsEnvConfigPath {
-					break
-				}
-				if tryProjectConfig(p) {
-					break
-				}
-			}
-			if ignoreRepoConfig && moduleRoot != "" && dir == moduleRoot {
-				// Don't walk above the test module root: anything further up is
-				// outside this repo entirely (e.g. an outer orchestration
-				// project's own unrelated .beads/config.yaml) and must never
-				// leak into a beads-under-test process (be-yjp4z).
+			if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+				moduleRoot = dir
 				break
 			}
 		}
-
-		// Worktree/shared fallback: the active workspace may live outside the
-		// worktree tree, so the parent walk above won't find it.
-		if primaryConfigPath == "" && beadsEnvConfigPath == "" {
-			p := worktreeFallbackConfigPath(cwd)
-			_ = tryProjectConfig(p)
+		if moduleRoot != "" {
+			ignoredRepoConfigPaths[ignoredConfigKey(filepath.Join(moduleRoot, ".beads", "config.yaml"))] = true
+		}
+		if fallbackPath := worktreeFallbackConfigPath(cwd); fallbackPath != "" {
+			ignoredRepoConfigPaths[ignoredConfigKey(fallbackPath)] = true
 		}
 	}
 
-	// 0. BEADS_DIR: highest priority
-	if beadsDir := os.Getenv("BEADS_DIR"); beadsDir != "" {
-		p := filepath.Join(beadsDir, "config.yaml")
-		// Honor the test ignore set here too, and skip primaryConfigPath along with
-		// the merge so ConfigFileUsed does not name the ignored repo config. This
-		// fences the read and merge path only: SaveConfigValue falls back to the
-		// caller-supplied beadsDir when ConfigFileUsed is empty, so where a write
-		// lands is still the caller's choice, not this flag's.
+	var resolveErr error
+	ws, wsErr := workspace.Resolve(cwd, os.Getenv)
+	switch {
+	case wsErr == nil:
+		p := configPathAsSpelled(ws, cwd)
+		_, statErr := os.Stat(p)
 		ignored := ignoreRepoConfig && ignoredRepoConfigPaths[ignoredConfigKey(p)]
-		if _, err := os.Stat(p); err == nil && !ignored {
-			// Avoid duplicate if BEADS_DIR points to same config as CWD walk
-			if primaryConfigPath == "" || filepath.Clean(p) != filepath.Clean(primaryConfigPath) {
-				configPaths = append(configPaths, p)
-			}
+		if ignoreRepoConfig && moduleRoot != "" && !ws.FromEnv && !pathWithin(filepath.Dir(ws.SourceDir), moduleRoot) {
+			ignored = true
+		}
+		if statErr == nil && !ignored {
+			configPaths = append(configPaths, p)
 			primaryConfigPath = p
 		}
+	case errors.Is(wsErr, workspace.ErrNoWorkspace):
+		// No workspace: defaults, user config and environment only.
+	case ignoreRepoConfig && moduleRoot != "":
+		// A broken redirect in the checkout under test is the repo's own
+		// state, which this flag exists to fence out.
+	default:
+		// Load no project config rather than substitute an ancestor's, and
+		// tell the caller why (callers print this and continue).
+		resolveErr = fmt.Errorf("project config not loaded: %w", wsErr)
 	}
 
 	// Automatic environment variable binding
@@ -391,7 +368,53 @@ func Initialize() error {
 		debug.Logf("Debug: no config.yaml found; using defaults and environment variables\n")
 	}
 
-	return nil
+	return resolveErr
+}
+
+// configPathAsSpelled returns ws.ConfigPath in the spelling the caller used
+// (BEADS_DIR's value, or cwd's ancestors) when no redirect was followed. The
+// resolver's paths are canonical (symlinks resolved, e.g. /private/var on
+// macOS); ConfigFileUsed and paths derived from it (external_projects) have
+// always kept the caller's spelling. A redirect target has no caller
+// spelling, so its canonical path is used.
+func configPathAsSpelled(ws workspace.Workspace, cwd string) string {
+	if ws.Redirected {
+		return ws.ConfigPath
+	}
+	if ws.FromEnv {
+		if raw := strings.TrimSpace(os.Getenv(workspace.EnvBeadsDir)); raw != "" {
+			if abs, err := filepath.Abs(raw); err == nil && utils.PathsEqual(workspace.CanonicalizeBeadsDir(abs), ws.BeadsDir) {
+				return filepath.Join(abs, "config.yaml")
+			}
+		}
+		return ws.ConfigPath
+	}
+	if cwd == "" {
+		return ws.ConfigPath
+	}
+	// Discovery found <ancestor>/.beads; walk the same number of levels up
+	// from the caller's cwd and keep that spelling if it is the same place.
+	rel, err := filepath.Rel(filepath.Dir(ws.SourceDir), utils.CanonicalizePath(cwd))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ws.ConfigPath
+	}
+	ancestor := filepath.Clean(cwd)
+	if rel != "." {
+		for range strings.Split(rel, string(filepath.Separator)) {
+			ancestor = filepath.Dir(ancestor)
+		}
+	}
+	spelled := filepath.Join(ancestor, ".beads")
+	if !utils.PathsEqual(utils.CanonicalizePath(spelled), ws.BeadsDir) {
+		return ws.ConfigPath
+	}
+	return filepath.Join(spelled, "config.yaml")
+}
+
+// pathWithin reports whether path is root or lies beneath it.
+func pathWithin(path, root string) bool {
+	rel, err := filepath.Rel(ignoredConfigKey(root), ignoredConfigKey(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // ResetForTesting clears the config state, allowing Initialize() to be called again.
