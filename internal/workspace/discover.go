@@ -58,7 +58,7 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 
 	// Git facts are needed only when a candidate .beads has no local
 	// database (a worktree root carrying tracked metadata) or the walk comes
-	// up empty. Resolve them lazily with one git exec: config loading runs
+	// up empty. Resolve them lazily (two git execs, only then): config loading runs
 	// discovery on every bd invocation, and a normal workspace owns its
 	// database, so the common path spawns no git at all.
 	var (
@@ -72,9 +72,12 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 			return
 		}
 		gitLoaded = true
-		var gitDir, commonDir string
-		repoRoot, gitDir, commonDir = gitRevParse(startDir)
-		fallbackBeadsDir = worktreeFallbackFromDirs(gitDir, commonDir)
+		if out, err := gitOutput(startDir, "rev-parse", "--show-toplevel"); err == nil {
+			repoRoot = utils.CanonicalizePath(out)
+		}
+		if repoRoot != "" {
+			fallbackBeadsDir = worktreeFallbackBeadsDirForRepo(repoRoot)
+		}
 		if fallbackBeadsDir != "" && isDir(fallbackBeadsDir) {
 			fallbackHasDB = HasDatabase(probe(fallbackBeadsDir))
 		}
@@ -290,30 +293,19 @@ func WorktreeFallbackBeadsDir(repoPath string) string {
 }
 
 func worktreeFallbackBeadsDirForRepo(repoPath string) string {
-	_, gitDir, commonDir := gitRevParse(repoPath)
-	return worktreeFallbackFromDirs(gitDir, commonDir)
-}
-
-// gitRevParse returns the worktree top level, git dir and common dir for
-// dir in one git exec, all canonical; empty strings outside a git repo.
-func gitRevParse(dir string) (topLevel, gitDir, commonDir string) {
-	out, err := gitOutput(dir, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir")
+	// --show-toplevel is deliberately not folded into this call: it fails
+	// in contexts --git-dir answers (a bare repository), which would lose
+	// the fallback entirely.
+	out, err := gitOutput(repoPath, "rev-parse", "--git-dir", "--git-common-dir")
 	if err != nil {
-		return "", "", ""
+		return ""
 	}
 	lines := strings.Split(out, "\n")
-	if len(lines) < 3 {
-		return "", "", ""
+	if len(lines) < 2 {
+		return ""
 	}
-	topLevel = utils.CanonicalizePath(strings.TrimSpace(lines[0]))
-	gitDir = gitPathForRepo(dir, strings.TrimSpace(lines[1]))
-	commonDir = gitPathForRepo(dir, strings.TrimSpace(lines[2]))
-	return topLevel, gitDir, commonDir
-}
-
-// worktreeFallbackFromDirs maps a linked worktree's git dirs to the main
-// checkout's .beads; "" when gitDir is the common dir (not a linked worktree).
-func worktreeFallbackFromDirs(gitDir, commonDir string) string {
+	gitDir := gitPathForRepo(repoPath, strings.TrimSpace(lines[0]))
+	commonDir := gitPathForRepo(repoPath, strings.TrimSpace(lines[1]))
 	if gitDir == "" || commonDir == "" || utils.PathsEqual(gitDir, commonDir) {
 		return ""
 	}
