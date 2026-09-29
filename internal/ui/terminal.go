@@ -9,8 +9,24 @@ import (
 	"golang.org/x/term"
 )
 
+// MachineEnvVar is the environment switch for bd's machine mode. It is read
+// here, at package init time, so a machine caller never pays for terminal
+// probing (color detection, the OSC 11 background query) before main runs.
+const MachineEnvVar = "BD_MACHINE"
+
+// MachineModeFromEnv reports whether BD_MACHINE asks for machine mode. Any
+// value other than empty, "0" or "false" (case-insensitive) turns it on.
+func MachineModeFromEnv() bool {
+	v := strings.ToLower(os.Getenv(MachineEnvVar))
+	return v != "" && v != "0" && v != "false"
+}
+
 // IsTerminal returns true if stdout is connected to a terminal (TTY).
+// Always false in machine mode: a program is on the other end.
 func IsTerminal() bool {
+	if MachineModeFromEnv() {
+		return false
+	}
 	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
@@ -18,6 +34,9 @@ func IsTerminal() bool {
 // Used to suppress advisory messages (e.g. deprecation notices) when stderr
 // is captured by test harnesses or piped to another process.
 func IsStderrTerminal() bool {
+	if MachineModeFromEnv() {
+		return false
+	}
 	return term.IsTerminal(int(os.Stderr.Fd()))
 }
 
@@ -30,6 +49,9 @@ func IsStderrTerminal() bool {
 //   - TERM=dumb: disables color unless explicitly forced
 //   - Falls back to TTY detection
 func ShouldUseColor() bool {
+	if MachineModeFromEnv() {
+		return false
+	}
 	// Git hook context - disable color to prevent termenv OSC 11 terminal
 	// background queries that leak escape sequences to the terminal (GH#1303).
 	// Set by bd hook shim templates before calling 'bd hooks run'.

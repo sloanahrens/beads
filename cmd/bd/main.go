@@ -634,7 +634,7 @@ func refreshBoundCommandConfig(cmd *cobra.Command) {
 		root = cmd
 	}
 	if !root.PersistentFlags().Changed("json") && !root.PersistentFlags().Changed("format") {
-		jsonOutput = config.GetBool("json")
+		jsonOutput = jsonFromConfig(config.GetBool("json"))
 	}
 	if !root.PersistentFlags().Changed("readonly") {
 		readonlyMode = config.GetBool("readonly")
@@ -772,6 +772,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&quietFlag, "quiet", "q", false, "Suppress non-essential output (errors only)")
 	rootCmd.PersistentFlags().BoolVar(&ignoreSchemaSkew, "ignore-schema-skew", false, "Proceed despite forward schema drift (some queries may fail)")
 	rootCmd.PersistentFlags().BoolVar(&noColorFlag, "no-color", false, "Disable color output (also: NO_COLOR=1 or CLICOLOR=0)")
+	rootCmd.PersistentFlags().BoolVar(&machineFlag, "machine", false, "Machine mode for programs (also: BD_MACHINE=1): implies --json, never prompts, never reads stdin unless an argument is '-', no colors, metrics or tips")
 
 	// Add --version flag to root command (same behavior as version subcommand)
 	rootCmd.Flags().BoolP("version", "V", false, "Print version information")
@@ -885,6 +886,7 @@ var rootCmd = &cobra.Command{
 	},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) (retErr error) {
 		applyNoColorFlag()
+		applyMachineCommandSetup()
 
 		// Initialize CommandContext to hold runtime state (replaces scattered globals)
 		initCommandContext()
@@ -975,7 +977,7 @@ var rootCmd = &cobra.Command{
 		}
 		// If flag wasn't explicitly set, use viper value
 		if !cmd.Root().PersistentFlags().Changed("json") && !cmd.Root().PersistentFlags().Changed("format") {
-			jsonOutput = config.GetBool("json")
+			jsonOutput = jsonFromConfig(config.GetBool("json"))
 		} else {
 			flagOverrides["json"] = struct {
 				Value  interface{}
@@ -1775,7 +1777,7 @@ var rootCmd = &cobra.Command{
 		// Load molecule templates from hierarchical catalog locations
 		// Templates are loaded after auto-import to ensure the database is up-to-date.
 		// Skip for import command to avoid conflicts during import operations.
-		if cmd.Name() != "import" && store != nil {
+		if shouldLoadMolecules(cmd) && store != nil {
 			// Reuse the resolved .beads directory (see the hook runner note
 			// above) so a registered WorkspaceIsBeadsDir workspace loads
 			// .beads/molecules.jsonl rather than <repo>/molecules.jsonl.
@@ -2233,6 +2235,11 @@ func main() {
 	rootCmd.InitDefaultHelpCmd()
 	registerHelpAllFlag()
 
+	machineMode = machineRequested(os.Args[1:], os.Getenv)
+	if machineMode {
+		applyMachineProcessSetup(os.Args[1:])
+	}
+
 	executedCmd, err := rootCmd.ExecuteC()
 
 	// Let this command's fire-and-forget hooks finish, for the same
@@ -2260,6 +2267,11 @@ func main() {
 }
 
 func resolveMetricsEnabled() bool {
+	// Machine mode never queues or uploads anything: a program calling bd
+	// hundreds of times an hour must not pay for, or leak, telemetry.
+	if machineModeActive() {
+		return false
+	}
 	if v, ok := os.LookupEnv(metrics.EnvDisableMetrics); ok {
 		return !envTruthyValue(v)
 	}

@@ -225,3 +225,28 @@ func setEnv(key, value string) {
 		os.Setenv(key, value)
 	}
 }
+
+// TestMachineModeSuppressesTerminalProbes pins that BD_MACHINE turns every
+// terminal-dependent decision off, so a machine caller never pays for TTY or
+// color detection even when a terminal is attached.
+func TestMachineModeSuppressesTerminalProbes(t *testing.T) {
+	t.Setenv("CLICOLOR_FORCE", "1")
+	for _, v := range []string{"1", "true", "TRUE", "yes"} {
+		t.Setenv(MachineEnvVar, v)
+		if !MachineModeFromEnv() {
+			t.Fatalf("BD_MACHINE=%q: MachineModeFromEnv() = false, want true", v)
+		}
+		if ShouldUseColor() {
+			t.Errorf("BD_MACHINE=%q: ShouldUseColor() = true even with CLICOLOR_FORCE", v)
+		}
+		if IsTerminal() || IsStderrTerminal() || ShouldUseEmoji() {
+			t.Errorf("BD_MACHINE=%q: a terminal probe answered true", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "FALSE"} {
+		t.Setenv(MachineEnvVar, v)
+		if MachineModeFromEnv() {
+			t.Errorf("BD_MACHINE=%q: MachineModeFromEnv() = true, want false", v)
+		}
+	}
+}

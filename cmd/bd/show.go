@@ -93,6 +93,9 @@ var showCmd = &cobra.Command{
 		}
 
 		if watchMode {
+			if err := machineRefusesInteractive("bd show --watch"); err != nil {
+				return err
+			}
 			if err := ensureDirectMode("watch mode requires direct database access"); err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}

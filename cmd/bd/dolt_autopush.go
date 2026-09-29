@@ -103,6 +103,10 @@ func pushWithContext(ctx context.Context, target autoPushTarget) error {
 // maybeAutoPush pushes to the Dolt remote if enabled and the debounce interval has passed.
 // Called from PersistentPostRun after auto-commit and auto-backup.
 func maybeAutoPush(ctx context.Context) {
+	if !autoPushAllowedByMode() {
+		debug.Logf("dolt auto-push: skipped (machine mode)\n")
+		return
+	}
 	if isSandboxMode() {
 		debug.Logf("dolt auto-push: skipped (sandbox mode)\n")
 		return
@@ -203,4 +207,10 @@ func maybeAutoPush(ctx context.Context) {
 	}
 
 	debug.Logf("dolt auto-push: pushed successfully\n")
+}
+
+// autoPushAllowedByMode reports whether the process mode permits a network
+// push after a write. Machine mode never touches the network on its own.
+func autoPushAllowedByMode() bool {
+	return !machineModeActive()
 }

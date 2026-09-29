@@ -30,6 +30,9 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := machineRefusesInteractive("bd edit (opens $EDITOR)"); err != nil {
+			return err
+		}
 		CheckReadonly("edit")
 
 		evt := metrics.NewCommandEvent("edit")

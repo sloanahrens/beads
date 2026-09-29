@@ -126,6 +126,11 @@ to continue with a known gap, or rebuild from a full export.`,
 		since, _ := cmd.Flags().GetInt64("since")
 		limit, _ := cmd.Flags().GetInt("limit")
 		follow, _ := cmd.Flags().GetBool("follow")
+		if follow {
+			if err := machineRefusesInteractive("bd events tail --follow"); err != nil {
+				return err
+			}
+		}
 		// A negative checkpoint is a caller bug — most likely arithmetic on an
 		// empty cursor. `seq > -5` would quietly serve the whole journal as if
 		// it were a legitimate resume, so say so instead.
