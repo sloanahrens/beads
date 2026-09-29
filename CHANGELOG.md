@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Machine mode (`BD_MACHINE=1` or `--machine`) for programs that drive bd.**
+  It implies `--json`, never prompts or reads stdin unless an argument is `-`,
+  skips colors, metrics, tips, the molecules scan and Dolt auto-push, and
+  answers every call with one JSON envelope
+  `{schema_version, contract_version, data, pagination, error}`. Errors carry a
+  typed kind with its own exit code (`not_found` 20, `refused` 21, `partial` 22,
+  `truncated` 23, `route_unreachable` 24, `store_unavailable` 25,
+  `schema_skew` 26, `invalid_args` 27, `guard_not_held` 13). Plain `--json`
+  output is unchanged. `bd capabilities` lists commands, flags and error kinds;
+  `bd version --json` adds `commit`, `build_id`, `schema_ceiling` and
+  `contract_version`; `bd ready --after <cursor>` pages ready work by keyset.
+  See engdocs/design/d1-machine-surface.md.
+
 - **`bd count` supports repeatable `--metadata-field key=value` filters**
   ([#6023](https://github.com/gastownhall/beads/issues/6023)), so callers can
   count the same metadata-scoped set `bd list` returns without fetching every
@@ -57,6 +70,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   say it.
 
 ### Changed
+
+- **Breaking for scripts: `bd close`, `bd defer` and `bd undefer` exit non-zero
+  when any id in the batch fails.** `bd close A B` used to exit 0 when A closed
+  and B was refused; `bd defer` and `bd undefer` exited 0 even when every id
+  failed. They now exit 1 (the rule `bd update` already had), still apply every
+  id that could be applied, and still print the successes on stdout. A caller
+  that treated exit 0 as "some of it happened" must now read stdout or use
+  machine mode, whose `error.ids` names each failed id. `bd show` of several
+  ids keeps exiting 0 when some are missing outside machine mode.
+
+- **A prefix route whose database cannot be reached is no longer reported as
+  "not found".** `bd show hq-x` from a rig whose `hq-` route has no
+  `dolt_database` or fails to open now says which database could not be asked.
 
 - **`bd gate check` resolves bead gates whose target lives in a prefix-routed
   rig** ([#5859](https://github.com/gastownhall/beads/pull/5859)). After a local

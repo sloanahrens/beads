@@ -309,6 +309,10 @@ func finishMachineMode(err error) int {
 		select {
 		case <-out.done:
 		case <-time.After(machineDrainTimeout):
+			// Something still holds stdout (a detached child). Anything it
+			// writes from here on is dropped; say so rather than lose it
+			// silently.
+			fmt.Fprintf(os.Stderr, "bd: warning: stdout still held open %s after the command finished; later output is dropped\n", machineDrainTimeout)
 		}
 	}
 	out.mu.Lock()

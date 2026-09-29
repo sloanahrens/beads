@@ -52,6 +52,8 @@ func TestMachineStdinAllowed(t *testing.T) {
 		{[]string{"import", "--stdin"}, true},
 		{[]string{"create", "--", "-"}, false},
 		{[]string{"update", "x", "--notes=a-b"}, false},
+		{[]string{"update", "x", "--notes=a=-"}, false},
+		{[]string{"create", "x=-"}, false},
 	}
 	for _, tc := range cases {
 		if got := machineStdinAllowed(tc.args); got != tc.want {

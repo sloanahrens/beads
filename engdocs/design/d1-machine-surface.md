@@ -89,6 +89,8 @@ What changes outside machine mode (legacy `--json` shapes are untouched):
   `bd defer`/`bd undefer` exit 1 when any id fails (were always 0). `bd undefer`
   of an id whose lookup returns no row now reports it instead of panicking.
   `TestProtocol_ClosePartialFailureExitsZero` is inverted to pin this.
+  `bd show` of several ids keeps exiting 0 when some are missing: it is a
+  read, and only machine mode reports that as `partial`.
 - `routed.go` returns a typed `routeUnreachableError` instead of dropping the
   prefix-route failure, so `bd show hq-x` says "could not reach ..." instead
   of "not found". Exit stays 1.
@@ -133,8 +135,7 @@ shorthand, type, default, persistent}]}], error_kinds: {kind: exit}}`.
 ## Not in this change
 
 - Legacy `--json` shapes and `BD_JSON_ENVELOPE=1` behavior are unchanged.
-- The proxied-server twins of close/defer/undefer follow the same batch rule,
-  but proxied close keeps only refusal text per id, so every failure there is
-  reported as `refused`.
+- The proxied-server twins of close/defer/undefer follow the same batch rule
+  and carry typed per-id kinds.
 - `os.Exit` calls inside commands other than CheckReadonly and
   CheckMigrationFreeze bypass the envelope.

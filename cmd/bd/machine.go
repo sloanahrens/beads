@@ -58,8 +58,13 @@ func machineStdinAllowed(args []string) bool {
 		if a == "--" {
 			break
 		}
-		if a == "-" || a == "--stdin" || strings.HasSuffix(a, "=-") {
+		if a == "-" || a == "--stdin" {
 			return true
+		}
+		if strings.HasPrefix(a, "-") {
+			if _, v, ok := strings.Cut(a, "="); ok && v == "-" {
+				return true
+			}
 		}
 	}
 	return false

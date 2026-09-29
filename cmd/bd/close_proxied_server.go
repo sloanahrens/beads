@@ -44,6 +44,8 @@ type closeProxiedPreflight struct {
 	itemArgs []int
 	before   map[string]*types.Issue
 	errors   []string
+	// kinds is the machine-mode error kind of each errors entry, same index.
+	kinds []errorKind
 }
 
 type closeProxiedOutcome struct {
@@ -122,17 +124,20 @@ func runCloseProxiedServer(cmd *cobra.Command, ctx context.Context, args []strin
 	outcomes, closeReasons := closeProxiedOutcomes(&pre, result)
 	post := closeProxiedRunPostClose(ctx, args, in, outcomes)
 
-	// Every argument this route did not close. The refusal text is all this
-	// route keeps per id, so each is reported as refused.
+	// Every argument this route did not close. pre.errors and pre.kinds are
+	// indexed by argument position (see closeProxiedPreflight).
 	var failures []idOutcome
 	for i, e := range pre.errors {
 		if e != "" {
 			fmt.Fprintln(os.Stderr, e)
-			id := ""
-			if i < len(args) {
-				id = args[i]
+			var kind errorKind
+			if i < len(pre.kinds) {
+				kind = pre.kinds[i]
 			}
-			failures = append(failures, idOutcome{ID: id, Kind: kindRefused, Message: e})
+			if kind == "" {
+				kind = kindRefused
+			}
+			failures = append(failures, idOutcome{ID: args[i], Kind: kind, Message: e})
 		}
 	}
 	for _, w := range post.warnings {
@@ -232,13 +237,15 @@ func proxiedBatchCloser() (issueops.BatchCloser, error) {
 func closeProxiedRunPreflight(ctx context.Context, args, reasons []string, in closeProxiedInput) (closeProxiedPreflight, error) {
 	pre := closeProxiedPreflight{
 		errors: make([]string, len(args)),
+		kinds:  make([]errorKind, len(args)),
 		before: make(map[string]*types.Issue, len(args)),
 	}
 	_, err := uow.RunTxRead(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (struct{}, error) {
 		for i, id := range args {
-			refusal, current := closeProxiedCheckOne(ctx, uw, id, in)
+			refusal, kind, current := closeProxiedCheckOne(ctx, uw, id, in)
 			if refusal != "" {
 				pre.errors[i] = refusal
+				pre.kinds[i] = kind
 				continue
 			}
 			pre.before[id] = current
@@ -250,15 +257,15 @@ func closeProxiedRunPreflight(ctx context.Context, args, reasons []string, in cl
 	return pre, err
 }
 
-// closeProxiedCheckOne returns one id's refusal, or "" and the resolved
-// pre-close issue.
-func closeProxiedCheckOne(ctx context.Context, uw uow.UnitOfWork, id string, in closeProxiedInput) (string, *types.Issue) {
+// closeProxiedCheckOne returns one id's refusal and its error kind, or "" and
+// the resolved pre-close issue.
+func closeProxiedCheckOne(ctx context.Context, uw uow.UnitOfWork, id string, in closeProxiedInput) (string, errorKind, *types.Issue) {
 	current, _, err := workapi.GetIssueOrWisp(ctx, workapi.NewUOWDetailSource(uw), id)
 	if errors.Is(err, storage.ErrNotFound) {
-		return fmt.Sprintf("Issue %s not found", id), nil
+		return fmt.Sprintf("Issue %s not found", id), kindNotFound, nil
 	}
 	if err != nil {
-		return fmt.Sprintf("Error resolving %s: %v", id, err), nil
+		return fmt.Sprintf("Error resolving %s: %v", id, err), errorKindOf(err), nil
 	}
 
 	// Mirrors the ordering in closeDirectCheckOne (ga-ktn9pe.4.8): a row already at
@@ -268,7 +275,7 @@ func closeProxiedCheckOne(ctx context.Context, uw uow.UnitOfWork, id string, in 
 	// class #5217 closed.
 	if current.Status != types.StatusClosed {
 		if err := validateIssueClosable(id, current, actor, in.force); err != nil {
-			return err.Error(), nil
+			return err.Error(), kindRefused, nil
 		}
 	}
 
@@ -282,11 +289,11 @@ func closeProxiedCheckOne(ctx context.Context, uw uow.UnitOfWork, id string, in 
 
 	if !in.force {
 		if err := checkGateSatisfaction(current); err != nil {
-			return fmt.Sprintf("cannot close %s: %s", id, err), nil
+			return fmt.Sprintf("cannot close %s: %s", id, err), kindRefused, nil
 		}
 	}
 
-	return "", current
+	return "", "", current
 }
 
 // closeProxiedOutcomes folds the batch's per-item outcomes back onto the
@@ -300,6 +307,9 @@ func closeProxiedOutcomes(pre *closeProxiedPreflight, result issueops.CloseBatch
 		item := pre.items[j]
 		if outcome.Err != nil {
 			pre.errors[pre.itemArgs[j]] = closeProxiedRefusal(item.IssueID, outcome.Err)
+			if pre.kinds != nil {
+				pre.kinds[pre.itemArgs[j]] = errorKindOf(outcome.Err)
+			}
 			continue
 		}
 		before := pre.before[item.IssueID]
