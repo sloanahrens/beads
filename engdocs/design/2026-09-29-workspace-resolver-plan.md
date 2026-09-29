@@ -44,7 +44,9 @@ type Workspace struct {
 func Resolve(cwd string, env Env) (Workspace, error)
 func FromEnv(env Env) (beadsDir string, set bool, err error)
 func FollowRedirect(beadsDir string) (target string, redirected bool, err error)
-func Discover(startDir string) (string, error)
+type FollowFunc func(beadsDir string) (target string, redirected bool, err error)
+func Discover(startDir string, follow FollowFunc) (source, resolved string, err error)
+func CanonicalizeBeadsDir(dir string) string; func WorktreeFallbackBeadsDir(repoPath string) string
 func HasProjectFiles(dir string) bool; func HasWorkspaceMarker(dir string) bool; func HasDatabase(dir string) bool
 ```
 
@@ -72,7 +74,7 @@ Precedence: `BEADS_DIR` (canonicalized, redirect-followed) > discovery from cwd 
 **Files:** Modify `internal/config/config.go`; test `internal/config/config_redirect_test.go`.
 
 - [ ] Failing test first: chdir into the redirected worktree, unset BEADS_DIR, `Initialize()`, expect `GetString("issue-prefix") == "zz"` and `ConfigFileUsed()` under the rig. Fails on main with "hq".
-- [ ] Replace the cwd walk, the worktree fallback and the separate BEADS_DIR block with one `workspace.Resolve`. Keep the `BEADS_TEST_IGNORE_REPO_CONFIG` ignore set and the module-root boundary (be-yjp4z): a resolved workspace outside the module root is ignored under that flag. A resolve error is returned from Initialize after defaults are set, so callers print it and continue without project config.
+- [ ] Replace the cwd walk, the worktree fallback and the separate BEADS_DIR block with one `workspace.Resolve`. Keep the `BEADS_TEST_IGNORE_REPO_CONFIG` ignore set and the module-root boundary (be-yjp4z): a resolved workspace outside the module root is ignored under that flag. A resolve error is returned from Initialize after defaults are set; every caller prints it and continues. A discovered workspace with a broken redirect loads no project config; a BEADS_DIR with a broken redirect loads BEADS_DIR's own config.yaml, where internal/beads also falls back for the database. Config keeps the caller's path spelling when no redirect was followed (ConfigFileUsed and external_projects have always used it).
 - [ ] `go test ./internal/config/` passes. Commit.
 
 ## Task 4: `bd config get issue-prefix` reports the effective prefix
@@ -92,5 +94,5 @@ Precedence: `BEADS_DIR` (canonicalized, redirect-followed) > discovery from cwd 
 
 ## Out of scope
 
-- Converging `FindBeadsDir`'s process-cwd walk (stops at the git root) with `Discover`'s explicit-dir walk (walks to `/`). Both now share redirect rules, markers and env handling; their walk bounds still differ and are covered by existing tests. Follow-up bead.
+- Converging `FindBeadsDir`'s process-cwd walk (stops at the git root) with `Discover`'s explicit-dir walk (walks to `/`). Both now share redirect rules, markers and env handling; their walk bounds still differ and are covered by existing tests. Follow-up: be-8ff.
 - Gastown's own redirect reader (B5-10) and its skip-worktree workaround (gt-y3pgh.8).
