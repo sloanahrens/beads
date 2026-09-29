@@ -188,3 +188,32 @@ func TestReadyKeysetRefusals(t *testing.T) {
 		t.Errorf("cursor round trip = %+v, %v", c, err)
 	}
 }
+
+// TestReadyAfterRefusedWhereItWouldBeIgnored pins that --after is refused on
+// every ready path that would otherwise ignore it and hand a paging caller
+// page one forever.
+func TestReadyAfterRefusedWhereItWouldBeIgnored(t *testing.T) {
+	for _, flag := range []string{"claim", "gated", "explain"} {
+		t.Run(flag, func(t *testing.T) {
+			reset := func() {
+				for _, f := range []string{"after", flag} {
+					fl := readyCmd.Flags().Lookup(f)
+					_ = fl.Value.Set(fl.DefValue)
+					fl.Changed = false
+				}
+			}
+			reset()
+			t.Cleanup(reset)
+			if err := readyCmd.Flags().Set("after", "abc"); err != nil {
+				t.Fatal(err)
+			}
+			if err := readyCmd.Flags().Set(flag, "true"); err != nil {
+				t.Fatal(err)
+			}
+			env, _, _, code := runMachine(t, func() error { return readyCmd.RunE(readyCmd, nil) })
+			if code != 27 || env.Error == nil || env.Error.Kind != "invalid_args" {
+				t.Fatalf("--after with --%s: exit %d error %+v", flag, code, env.Error)
+			}
+		})
+	}
+}
