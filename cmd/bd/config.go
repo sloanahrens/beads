@@ -405,6 +405,9 @@ var configGetCmd = &cobra.Command{
 func runConfigGetIssuePrefix() error {
 	const key = "issue-prefix"
 	value := strings.TrimSpace(config.GetString(key))
+	// A non-empty value that is not from the environment came from a
+	// config.yaml (project, config.local.yaml or user-level): the default is
+	// empty, and an empty value falls through to the database below.
 	location := "config.yaml"
 	if config.GetValueSource(key) == config.SourceEnvVar {
 		location = "env var"

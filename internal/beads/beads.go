@@ -172,7 +172,9 @@ func beadsDirFromEnv() (string, bool) {
 		return "", false
 	}
 	if err != nil {
-		// Re-run the lenient follower for its established warning text.
+		// FromEnv refused BEADS_DIR's redirect and returned BEADS_DIR itself.
+		// Re-run the lenient follower on it only to emit this package's
+		// established warning for that refusal; it returns BEADS_DIR again.
 		return followRedirectLenient(dir), true
 	}
 	return dir, true

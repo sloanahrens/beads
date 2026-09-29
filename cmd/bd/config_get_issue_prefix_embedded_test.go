@@ -104,6 +104,24 @@ func TestEmbeddedConfigGetIssuePrefixThroughRedirect(t *testing.T) {
 	}
 	env = env[:len(env)-1]
 
+	// A worktree whose redirect is broken must not abort bd: config loading
+	// reports the redirect and carries on (every config.Initialize caller
+	// prints its error and continues).
+	broken := filepath.Join(town, "rig", "polecats", "opal", "rig")
+	mustWrite(filepath.Join(broken, ".beads", "redirect"), "../../../gone/.beads\n")
+	{
+		cmd := exec.Command(bd, "version")
+		cmd.Dir = broken
+		cmd.Env = env
+		stdout, stderr, err := runCommandBuffers(t, cmd)
+		if err != nil {
+			t.Fatalf("bd version with a broken redirect failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stderr.String(), filepath.Join(broken, ".beads", "redirect")) {
+			t.Errorf("stderr does not name the broken redirect file:\n%s", stderr.String())
+		}
+	}
+
 	// config.yaml wins over the database, as in bd create. Set it in the rig
 	// only: the worktree must read it through the redirect, never the town's.
 	rigConfig := filepath.Join(rig, ".beads", "config.yaml")

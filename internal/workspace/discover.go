@@ -23,8 +23,12 @@ type FollowFunc func(beadsDir string) (target string, redirected bool, err error
 // It returns the .beads directory it found (source) and the directory in use
 // after following that directory's redirect (resolved). Both are "" when no
 // workspace is found. A redirect error on a directory that would be returned
-// is returned as err; redirect errors on directories only probed for a
-// fallback database are treated as "no database there".
+// is returned as err and ends the walk: a broken redirect never lets an
+// ancestor workspace stand in for the one it names. Redirect errors on
+// directories only probed for a fallback database are treated as "no
+// database there". Callers that pass a follower which never errors (as
+// internal/beads does, to keep its warn-and-fall-back contract) get the old
+// behavior of skipping such a directory and walking on.
 //
 // Order: walk up from startDir, at each .beads following its redirect and
 // accepting it when the resolved directory holds workspace files, except that
