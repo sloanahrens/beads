@@ -128,9 +128,12 @@ type queryInput struct {
 	expression string
 	request    issueops.QueryRequest
 	limit      int
-	offset     int
-	longFormat bool
-	parseOnly  bool
+	// limitExplicit: the caller passed --limit, so a cut page is what they
+	// asked for rather than a silently truncated answer.
+	limitExplicit bool
+	offset        int
+	longFormat    bool
+	parseOnly     bool
 }
 
 // gatherQueryInput turns the flags into the role's request. It is flag parsing
@@ -151,6 +154,7 @@ func gatherQueryInput(cmd *cobra.Command, args []string) (queryInput, error) {
 
 	in := queryInput{expression: strings.Join(args, " ")}
 	in.limit, _ = cmd.Flags().GetInt("limit")
+	in.limitExplicit = cmd.Flags().Changed("limit")
 	in.longFormat, _ = cmd.Flags().GetBool("long")
 	in.parseOnly, _ = cmd.Flags().GetBool("parse-only")
 	in.offset, _ = cmd.Flags().GetInt("offset")
@@ -192,11 +196,15 @@ func printParsedQuery(expression string) error {
 func runQuery(ctx context.Context, querier issueops.Querier, in queryInput) error {
 	page, err := querier.Query(ctx, in.request)
 	if err != nil {
-		return HandleErrorRespectJSON("%v", err)
+		return handleClassifiedRespectJSON(err)
 	}
 	if jsonOutput {
-		pag := paginationMetaFor(page.HasMore, len(page.Items))
-		if err := outputJSONWithPagination(page.Items, pag); err != nil {
+		if err := outputJSONPage(page.Items, pageResult{
+			HasMore:       page.HasMore,
+			Returned:      len(page.Items),
+			Limit:         in.limit,
+			LimitExplicit: in.limitExplicit,
+		}); err != nil {
 			return err
 		}
 	} else {

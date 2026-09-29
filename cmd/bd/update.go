@@ -428,8 +428,8 @@ pointless).`,
 		updatedIssues := []*types.Issue{}
 		var firstUpdatedID string // Track first successful update for last-touched
 		var failures []updateIDFailure
-		recordFailure := func(id, reason string) {
-			failures = append(failures, updateIDFailure{ID: id, Error: reason})
+		recordFailure := func(id string, kind errorKind, reason string) {
+			failures = append(failures, updateIDFailure{ID: id, Error: reason, Kind: kind})
 		}
 		mutatedStores := map[storage.DoltStorage][]string{}
 		notesOverwriteWarnings := map[storage.DoltStorage][]string{}
@@ -468,7 +468,7 @@ pointless).`,
 					result.Close()
 				}
 				fmt.Fprintf(os.Stderr, "Error resolving %s: %v\n", id, err)
-				recordFailure(id, fmt.Sprintf("resolving issue: %v", err))
+				recordFailure(id, errorKindOf(err), fmt.Sprintf("resolving issue: %v", err))
 				continue
 			}
 			if result == nil || result.Issue == nil {
@@ -476,7 +476,7 @@ pointless).`,
 					result.Close()
 				}
 				fmt.Fprintf(os.Stderr, "Issue %s not found\n", id)
-				recordFailure(id, "issue not found")
+				recordFailure(id, kindNotFound, "issue not found")
 				continue
 			}
 			issue := result.Issue
@@ -484,7 +484,7 @@ pointless).`,
 
 			if err := validateIssueUpdatable(id, issue); err != nil {
 				fmt.Fprintf(os.Stderr, "%s\n", err)
-				recordFailure(id, err.Error())
+				recordFailure(id, kindRefused, err.Error())
 				closeIfUnmutated(result)
 				continue
 			}
@@ -503,7 +503,7 @@ pointless).`,
 				if err := validateIssueReassignable(id, issue, actor, newAssignee,
 					storeClaimPoolAliases(ctx, issueStore), forceFlag); err != nil {
 					fmt.Fprintf(os.Stderr, "%s\n", err)
-					recordFailure(id, err.Error())
+					recordFailure(id, kindRefused, err.Error())
 					closeIfUnmutated(result)
 					continue
 				}
@@ -528,7 +528,7 @@ pointless).`,
 			ops, err := writeOps(issueStore)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", id, err)
-				recordFailure(id, fmt.Sprintf("updating issue: %v", err))
+				recordFailure(id, errorKindOf(err), fmt.Sprintf("updating issue: %v", err))
 				closeIfUnmutated(result)
 				continue
 			}
@@ -555,6 +555,7 @@ pointless).`,
 					ID:            id,
 					Error:         fmt.Sprintf("updating issue: %v", updateErr),
 					GuardMismatch: isGuardMismatch(updateErr),
+					Kind:          errorKindOf(updateErr),
 				})
 				closeIfUnmutated(result)
 				continue
@@ -636,7 +637,7 @@ pointless).`,
 		// a nonzero exit so callers can detect a partial batch (GH audit:
 		// multi-ID update used to exit 0 after mid-batch failures).
 		if len(failures) > 0 {
-			return reportUpdateFailures(failures, len(args))
+			return reportUpdateFailures(failures, len(updatedIssues), len(args))
 		}
 		return nil
 	},
@@ -836,6 +837,8 @@ type updateIDFailure struct {
 	ID            string `json:"id"`
 	Error         string `json:"error"`
 	GuardMismatch bool   `json:"guard_mismatch,omitempty"`
+	// Kind is the machine-mode error kind. Not part of the legacy JSON line.
+	Kind errorKind `json:"-"`
 }
 
 // errStrayFlagValuePositional refuses, before any write, a positional argument
@@ -860,8 +863,26 @@ func errStrayFlagValuePositional(args []string) error {
 // callers can parse which IDs failed while stdout keeps the plain
 // array-of-updated-issues success shape. In text mode the individual errors
 // were already printed inline; this adds a summary naming every failed ID.
-func reportUpdateFailures(failures []updateIDFailure, total int) error {
+func reportUpdateFailures(failures []updateIDFailure, succeeded, total int) error {
 	msg := fmt.Sprintf("%d of %d issues failed to update", len(failures), total)
+	if machineModeActive() {
+		outcomes := make([]idOutcome, 0, len(failures))
+		for _, f := range failures {
+			kind := f.Kind
+			if f.GuardMismatch {
+				kind = kindGuardNotHeld
+			} else if kind == "" {
+				kind = kindInternal
+			}
+			outcomes = append(outcomes, idOutcome{ID: f.ID, Kind: kind, Message: f.Error})
+		}
+		err := batchError(succeeded, outcomes)
+		var ce *cliError
+		if errors.As(err, &ce) {
+			ce.Message = msg
+		}
+		return err
+	}
 	if jsonOutput {
 		inner := map[string]interface{}{
 			"error":  msg,

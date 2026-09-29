@@ -30,6 +30,23 @@ func isNotFoundErr(err error) bool {
 	return false
 }
 
+// routeUnreachableError says an id's prefix matched a route in routes.jsonl
+// but the routed database could not be asked: its metadata names no
+// dolt_database, or its store failed to open. That is UNKNOWN, not "not
+// found", and must never be reported as a definite negative (B1-05).
+type routeUnreachableError struct {
+	ID     string
+	Prefix string
+	Target string // the route's path, relative to the town root
+	Cause  error
+}
+
+func (e *routeUnreachableError) Error() string {
+	return fmt.Sprintf("could not reach the database for %s (prefix %q routes to %s): %v", e.ID, e.Prefix, e.Target, e.Cause)
+}
+
+func (e *routeUnreachableError) Unwrap() error { return e.Cause }
+
 // RoutedResult contains the result of a routed issue lookup
 type RoutedResult struct {
 	Issue      *types.Issue
@@ -78,8 +95,15 @@ func resolveAndGetIssueWithRoutingAccess(ctx context.Context, localStore storage
 	// This handles cross-rig lookups where the ID's prefix maps to a different
 	// database (e.g., hr-8wn.1 routes to the herald rig's database).
 	if isNotFoundErr(err) {
-		if prefixResult, prefixErr := resolveViaPrefixRoutingWithAccess(ctx, id, writablePrefixRoute); prefixErr == nil {
+		prefixResult, prefixErr := resolveViaPrefixRoutingWithAccess(ctx, id, writablePrefixRoute)
+		if prefixErr == nil {
 			return prefixResult, nil
+		}
+		// A matched route whose database could not be asked is an answer
+		// of its own: report it rather than the local "not found".
+		var unreachable *routeUnreachableError
+		if errors.As(prefixErr, &unreachable) {
+			return nil, prefixErr
 		}
 	}
 
@@ -203,7 +227,8 @@ func resolveViaPrefixRoutingWithAccess(ctx context.Context, id string, writable 
 	// Check that the target has a different dolt_database
 	targetDB := readDoltDatabase(targetBeadsDir)
 	if targetDB == "" {
-		return nil, fmt.Errorf("target rig has no dolt_database configured")
+		return nil, &routeUnreachableError{ID: id, Prefix: prefix, Target: matchedRoute.Path,
+			Cause: fmt.Errorf("%s has no dolt_database in metadata.json", targetBeadsDir)}
 	}
 
 	debug.Logf("[routing] Prefix %q matched route to %s (database: %s)\n", prefix, matchedRoute.Path, targetDB)
@@ -226,7 +251,8 @@ func resolveViaPrefixRoutingWithAccess(ctx context.Context, id string, writable 
 		_ = os.Unsetenv("BEADS_DOLT_SERVER_DATABASE")
 	}
 	if openErr != nil {
-		return nil, fmt.Errorf("opening routed store for %s: %w", matchedRoute.Path, openErr)
+		return nil, &routeUnreachableError{ID: id, Prefix: prefix, Target: matchedRoute.Path,
+			Cause: fmt.Errorf("opening routed store: %w", openErr)}
 	}
 
 	result, err := resolveAndGetFromStore(ctx, targetStore, id, true)

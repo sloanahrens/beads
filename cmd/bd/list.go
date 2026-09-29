@@ -273,15 +273,20 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 			}
 			return HandleError("%v", err)
 		}
-		pag := paginationMetaFor(page.HasMore, len(page.Items))
+		pr := pageResult{
+			HasMore:       page.HasMore,
+			Returned:      len(page.Items),
+			Limit:         in.effectiveLimit,
+			LimitExplicit: in.limitChanged || in.AllFlag,
+		}
 		if in.SkipLabels {
-			if err := outputJSONWithPagination(newSkipLabelsListJSONResponse(page.Items), pag); err != nil {
+			if err := outputJSONPage(newSkipLabelsListJSONResponse(page.Items), pr); err != nil {
 				return err
 			}
 			printTruncationHint(page.HasMore, in.effectiveLimit)
 			return nil
 		}
-		if err := outputJSONWithPagination(page.Items, pag); err != nil {
+		if err := outputJSONPage(page.Items, pr); err != nil {
 			return err
 		}
 		printTruncationHint(page.HasMore, in.effectiveLimit)

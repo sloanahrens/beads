@@ -110,7 +110,7 @@ the flags appear in the command line.`,
 		results, cleanup, resolveErr := resolveCloseTargets(ctx, store, args)
 		defer cleanup()
 		if resolveErr != nil {
-			return HandleErrorRespectJSON("%v", resolveErr)
+			return handleClassifiedRespectJSON(resolveErr)
 		}
 		resolvedIDs := make([]string, 0, len(results))
 		for _, r := range results {
@@ -146,6 +146,10 @@ the flags appear in the command line.`,
 		closedCount := 0
 		alreadyClosed := 0
 		firstSettledID := ""
+		// Every id the batch did not close, with why. Any entry makes the
+		// command exit non-zero (partial when something else closed): a
+		// success code that means "some of it" strands work (B1-02).
+		var closeFailures []idOutcome
 
 		for i, id := range resolvedIDs {
 			res := outcomes[i]
@@ -153,10 +157,13 @@ the flags appear in the command line.`,
 				// The CLI's own close policy refused this argument, so the
 				// batch never saw it.
 				fmt.Fprintln(os.Stderr, plan.refusals[i])
+				closeFailures = append(closeFailures, idOutcome{ID: id, Kind: kindRefused, Message: plan.refusals[i]})
 				continue
 			}
 			if res.Err != nil {
-				fmt.Fprintln(os.Stderr, closeDirectRefusal(id, res.Err))
+				msg := closeDirectRefusal(id, res.Err)
+				fmt.Fprintln(os.Stderr, msg)
+				closeFailures = append(closeFailures, idOutcome{ID: id, Kind: closeFailureKind(res.Err), Message: msg})
 				continue
 			}
 
@@ -369,12 +376,16 @@ the flags appear in the command line.`,
 			}
 		}
 
-		totalAttempted := len(resolvedIDs)
-		if totalAttempted > 0 && closedCount == 0 && alreadyClosed == 0 {
-			return SilentExit()
-		}
-		return nil
+		return batchError(closedCount+alreadyClosed, closeFailures)
 	},
+}
+
+// closeFailureKind classifies one id's close failure: a policy refusal
+// (open blockers, open children) is refused; anything else keeps its own
+// kind. Preflight refusals (gates, pinned) never reach here: the caller marks
+// those refused directly.
+func closeFailureKind(err error) errorKind {
+	return errorKindOf(err)
 }
 
 func init() {

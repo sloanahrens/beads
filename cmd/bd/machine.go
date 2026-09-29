@@ -100,7 +100,7 @@ func machineRefusesInteractive(what string) error {
 	if !machineModeActive() {
 		return nil
 	}
-	return HandleError("%s is interactive or streaming and is refused in machine mode (%s / --machine)", what, machineEnvVar)
+	return newCLIError(kindInvalidArgs, "%s is interactive or streaming and is refused in machine mode (%s / --machine)", what, machineEnvVar)
 }
 
 // shouldLoadMolecules reports whether the root pre-run scans molecule
@@ -108,4 +108,32 @@ func machineRefusesInteractive(what string) error {
 // machine caller asks for depends on it, so machine mode skips it.
 func shouldLoadMolecules(cmd *cobra.Command) bool {
 	return cmd.Name() != "import" && !machineModeActive()
+}
+
+// configureMachineCobra makes cobra's own argument and flag failures typed
+// invalid_args errors, and keeps its "Error:" and usage text off the streams:
+// the envelope carries the message.
+func configureMachineCobra(root *cobra.Command) {
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return newCLIError(kindInvalidArgs, "%s", err.Error())
+	})
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		c.SilenceUsage = true
+		c.SilenceErrors = true
+		if orig := c.Args; orig != nil {
+			c.Args = func(cmd *cobra.Command, args []string) error {
+				if err := orig(cmd, args); err != nil {
+					return newCLIError(kindInvalidArgs, "%s", err.Error())
+				}
+				return nil
+			}
+		}
+		for _, child := range c.Commands() {
+			walk(child)
+		}
+	}
+	walk(root)
 }

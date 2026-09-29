@@ -70,6 +70,11 @@ func handleRemoteMigrateGateJSON(e *schema.RemoteMigrateGateError) {
 			}
 		}
 		m["remote_migrate_gate"] = gate
+		if machineModeActive() {
+			recordMachineError(&cliError{Kind: kindRefused, Message: e.Error(),
+				Detail: map[string]any{"remote_migrate_gate": gate, "hint": e.AgentDirective()}})
+			return
+		}
 	}
 	encoder := json.NewEncoder(os.Stderr)
 	encoder.SetIndent("", "  ")

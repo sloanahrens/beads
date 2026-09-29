@@ -19,11 +19,25 @@ func (e *exitError) Error() string {
 }
 
 func exitCodeFromError(err error) (int, bool) {
+	var ce *cliError
+	if errors.As(err, &ce) {
+		return ce.ExitCode(), true
+	}
 	var ee *exitError
 	if errors.As(err, &ee) {
 		return ee.Code, true
 	}
 	return 0, false
+}
+
+// recordHelperError notes a helper-reported failure for the machine-mode
+// envelope. The helpers below keep their legacy output outside machine mode.
+func recordHelperError(message, hint string) {
+	e := newCLIError(kindInternal, "%s", message)
+	if hint != "" {
+		e.Detail = map[string]any{"hint": hint}
+	}
+	recordMachineError(e)
 }
 
 func activeWorkspaceNotFoundError() string {
@@ -73,12 +87,20 @@ func buildJSONError(message, hint string) interface{} {
 }
 
 func jsonStderrError(message, hint string) {
+	if machineModeActive() {
+		recordHelperError(message, hint)
+		return
+	}
 	encoder := json.NewEncoder(os.Stderr)
 	encoder.SetIndent("", "  ")
 	_ = encoder.Encode(buildJSONError(message, hint))
 }
 
 func jsonStdoutError(message, hint string) {
+	if machineModeActive() {
+		recordHelperError(message, hint)
+		return
+	}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	_ = encoder.Encode(buildJSONError(message, hint))
@@ -86,6 +108,9 @@ func jsonStdoutError(message, hint string) {
 
 func HandleError(format string, args ...interface{}) error {
 	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
+	if machineModeActive() {
+		recordHelperError(fmt.Sprintf(format, args...), "")
+	}
 	return &exitError{Code: 1}
 }
 
@@ -144,7 +169,7 @@ func CheckReadonly(operation string) {
 	if readonlyMode {
 		fmt.Fprintf(os.Stderr, "Error: operation '%s' is not allowed in read-only mode\n", operation)
 		metrics.CloseAndFlush()
-		os.Exit(1)
+		exitRefused(1, "operation '%s' is not allowed in read-only mode", operation)
 	}
 	CheckMigrationFreeze(operation)
 }
@@ -193,5 +218,16 @@ func CheckMigrationFreeze(operation string) {
 	}
 	fmt.Fprintf(os.Stderr, "   bd %s is blocked. Clear the freeze: gt migrate thaw\n", operation)
 	metrics.CloseAndFlush()
-	os.Exit(1)
+	exitRefused(1, "town is frozen for migration (by %s); bd %s is blocked", operator, operation)
+}
+
+// exitRefused ends the process for a refusal raised outside cobra's error
+// path. In machine mode the refusal is written as the envelope first, so the
+// caller still gets exactly one JSON document and exit 21.
+func exitRefused(legacyCode int, format string, args ...any) {
+	if machineModeActive() {
+		recordMachineError(newCLIError(kindRefused, format, args...))
+		os.Exit(finishMachineMode(nil))
+	}
+	os.Exit(legacyCode)
 }

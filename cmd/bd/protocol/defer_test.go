@@ -44,3 +44,26 @@ func TestProtocol_DeferRejectsEmptyReason(t *testing.T) {
 		t.Error("bd defer --reason with whitespace-only text should fail but exited 0")
 	}
 }
+
+// TestProtocol_UndeferPartialFailureExitsNonZero pins the batch rule for
+// defer/undefer: any id that fails makes the command exit non-zero, while
+// the ids that could be undeferred still are. It used to exit 0 even when
+// every id failed (B1-02).
+func TestProtocol_UndeferPartialFailureExitsNonZero(t *testing.T) {
+	t.Parallel()
+	w := newWorkspace(t)
+	deferred := w.create("--title", "Deferred", "--type", "task")
+	open := w.create("--title", "Still open", "--type", "task")
+	w.run("defer", deferred)
+
+	_, code := w.runExpectError("undefer", deferred, open)
+	if code != 1 {
+		t.Errorf("undefer with a not-deferred id: exit %d, want 1", code)
+	}
+	assertField(t, w.showJSON(deferred), "status", "open")
+
+	// Every id failing is a failure too.
+	if _, code := w.runExpectError("undefer", open); code != 1 {
+		t.Errorf("undefer of only not-deferred ids: exit %d, want 1", code)
+	}
+}

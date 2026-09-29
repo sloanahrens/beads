@@ -43,7 +43,7 @@ Examples:
 
 		_, err := utils.ResolvePartialIDs(ctx, store, args)
 		if err != nil {
-			return HandleError("%v", err)
+			return handleClassified(err)
 		}
 
 		undeferredIssues := []*types.Issue{}
@@ -52,20 +52,33 @@ Examples:
 			return HandleErrorWithHint("database not initialized", diagHint())
 		}
 
+		// Per-id failures make the command exit non-zero; it used to return 0
+		// even when every id failed (B1-02).
+		var failures []idOutcome
+		fail := func(id string, kind errorKind, msg string) {
+			fmt.Fprintln(os.Stderr, msg)
+			failures = append(failures, idOutcome{ID: id, Kind: kind, Message: msg})
+		}
+		undeferred := 0
+
 		for _, id := range args {
 			fullID, err := utils.ResolvePartialID(ctx, store, id)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error resolving %s: %v\n", id, err)
+				fail(id, errorKindOf(err), fmt.Sprintf("Error resolving %s: %v", id, err))
 				continue
 			}
 
 			issue, err := store.GetIssue(ctx, fullID)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error getting %s: %v\n", fullID, err)
+				fail(fullID, errorKindOf(err), fmt.Sprintf("Error getting %s: %v", fullID, err))
+				continue
+			}
+			if issue == nil {
+				fail(fullID, kindNotFound, fmt.Sprintf("Issue %s not found", fullID))
 				continue
 			}
 			if issue.Status != types.StatusDeferred {
-				fmt.Fprintf(os.Stderr, "%s is not deferred (status: %s)\n", fullID, string(issue.Status))
+				fail(fullID, kindRefused, fmt.Sprintf("%s is not deferred (status: %s)", fullID, string(issue.Status)))
 				continue
 			}
 
@@ -75,9 +88,10 @@ Examples:
 			}
 
 			if err := store.UpdateIssue(ctx, fullID, updates, actor); err != nil {
-				fmt.Fprintf(os.Stderr, "Error undeferring %s: %v\n", fullID, err)
+				fail(fullID, errorKindOf(err), fmt.Sprintf("Error undeferring %s: %v", fullID, err))
 				continue
 			}
+			undeferred++
 
 			if jsonOutput {
 				issue, _ := store.GetIssue(ctx, fullID)
@@ -94,10 +108,12 @@ Examples:
 		}
 
 		if jsonOutput && len(undeferredIssues) > 0 {
-			return outputJSON(undeferredIssues)
+			if err := outputJSON(undeferredIssues); err != nil {
+				return err
+			}
 		}
 
-		return nil
+		return batchError(undeferred, failures)
 	},
 }
 

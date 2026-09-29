@@ -1336,6 +1336,9 @@ var rootCmd = &cobra.Command{
 					fmt.Fprintf(os.Stderr, "Error: no beads database found\n")
 					fmt.Fprintf(os.Stderr, "Hint: %s\n", diagHint())
 					fmt.Fprintf(os.Stderr, "      or set BEADS_DIR to point to your .beads directory\n")
+					if machineModeActive() {
+						return newCLIError(kindStoreUnavailable, "no beads database found (%s)", diagHint())
+					}
 					return SilentExit()
 				}
 
@@ -1724,7 +1727,7 @@ var rootCmd = &cobra.Command{
 				}
 				return SilentExit()
 			}
-			return HandleError("failed to open database: %v", err)
+			return failKind(kindStoreUnavailable, "failed to open database: %v", err)
 		}
 
 		// Mark store as active for flush goroutine safety
@@ -2238,6 +2241,8 @@ func main() {
 	machineMode = machineRequested(os.Args[1:], os.Getenv)
 	if machineMode {
 		applyMachineProcessSetup(os.Args[1:])
+		configureMachineCobra(rootCmd)
+		beginMachineCapture()
 	}
 
 	executedCmd, err := rootCmd.ExecuteC()
@@ -2254,6 +2259,10 @@ func main() {
 	// guards (CheckReadonly and the pre-run gates) so every exit path flushes the
 	// same way instead of only the clean RunE/ExecuteC return.
 	metrics.CloseAndFlush()
+
+	if machineMode {
+		os.Exit(finishMachineMode(err))
+	}
 
 	if err != nil {
 		if code, ok := exitCodeFromError(err); ok {

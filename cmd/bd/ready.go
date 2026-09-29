@@ -200,15 +200,16 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			if results == nil {
 				results = []*types.IssueWithCounts{}
 			}
-			var pag *PaginationMeta
-			if truncated {
-				pag = &PaginationMeta{
-					Returned:  len(results),
-					Total:     totalReady,
-					Truncated: true,
-				}
+			pr := pageResult{
+				HasMore:       truncated,
+				Returned:      len(results),
+				Limit:         filter.Limit,
+				LimitExplicit: cmd.Flags().Changed("limit"),
 			}
-			if jerr := outputJSONWithPagination(results, pag); jerr != nil {
+			if truncated {
+				pr.Total = totalReady
+			}
+			if jerr := outputJSONPage(results, pr); jerr != nil {
 				return jerr
 			}
 			if truncated {

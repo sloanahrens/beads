@@ -41,11 +41,12 @@ func TestProtocol_UpdateNonexistentExitsNonZero(t *testing.T) {
 	}
 }
 
-// TestProtocol_ClosePartialFailureExitsZero verifies that when closing
-// multiple issues where some succeed and some fail (e.g., blocked), the
-// command exits zero (partial success counts as success) and still closes
-// the closeable ones.
-func TestProtocol_ClosePartialFailureExitsZero(t *testing.T) {
+// TestProtocol_ClosePartialFailureExitsNonZero verifies that when closing
+// multiple issues where some succeed and some are refused (e.g., blocked),
+// the command exits non-zero, because a success code that means "some of it"
+// strands a caller that can only branch on the exit status (B1-02), and
+// still closes the closeable ones: the batch is per-id, not atomic.
+func TestProtocol_ClosePartialFailureExitsNonZero(t *testing.T) {
 	t.Parallel()
 	w := newWorkspace(t)
 
@@ -54,9 +55,11 @@ func TestProtocol_ClosePartialFailureExitsZero(t *testing.T) {
 	blocked := w.create("Blocked issue")
 	w.run("dep", "add", blocked, blocker, "--type=blocks")
 
-	// Close both: closeable should succeed, blocked should fail.
-	// Partial success (closedCount > 0) exits 0.
-	w.run("close", closeable, blocked)
+	// Close both: closeable should succeed, blocked is refused.
+	_, code := w.runExpectError("close", closeable, blocked)
+	if code != 1 {
+		t.Errorf("partial close: expected exit code 1, got %d", code)
+	}
 
 	// Verify the closeable one was actually closed despite partial failure
 	out := w.run("show", closeable, "--json")

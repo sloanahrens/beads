@@ -122,9 +122,17 @@ func runCloseProxiedServer(cmd *cobra.Command, ctx context.Context, args []strin
 	outcomes, closeReasons := closeProxiedOutcomes(&pre, result)
 	post := closeProxiedRunPostClose(ctx, args, in, outcomes)
 
-	for _, e := range pre.errors {
+	// Every argument this route did not close. The refusal text is all this
+	// route keeps per id, so each is reported as refused.
+	var failures []idOutcome
+	for i, e := range pre.errors {
 		if e != "" {
 			fmt.Fprintln(os.Stderr, e)
+			id := ""
+			if i < len(args) {
+				id = args[i]
+			}
+			failures = append(failures, idOutcome{ID: id, Kind: kindRefused, Message: e})
 		}
 	}
 	for _, w := range post.warnings {
@@ -182,10 +190,10 @@ func runCloseProxiedServer(cmd *cobra.Command, ctx context.Context, args []strin
 		}
 	}
 
-	if len(args) > 0 && len(outcomes) == 0 {
+	if len(args) > 0 && len(outcomes) == 0 && len(failures) == 0 {
 		return SilentExit()
 	}
-	return nil
+	return batchError(len(outcomes), failures)
 }
 
 func gatherCloseProxiedInput(cmd *cobra.Command) closeProxiedInput {

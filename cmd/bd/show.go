@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -129,6 +130,9 @@ var showCmd = &cobra.Command{
 		// Direct mode - use routed resolution for cross-repo lookups
 		allDetails := []interface{}{}
 		foundCount := 0
+		// Ids that could not be shown, with why. Machine mode reports them
+		// in error.ids (not_found, route_unreachable, ...).
+		var showFailures []idOutcome
 		for idx, id := range args {
 			// Resolve and get issue with routing (e.g., gt-xyz routes to another rig)
 			result, err := resolveAndGetIssueWithRouting(ctx, store, id)
@@ -136,12 +140,19 @@ var showCmd = &cobra.Command{
 				if result != nil {
 					result.Close()
 				}
-				if isNotFoundErr(err) {
+				var unreachable *routeUnreachableError
+				switch {
+				case errors.As(err, &unreachable):
+					// UNKNOWN, not a definite negative: say which database
+					// could not be asked (B1-05).
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				case isNotFoundErr(err):
 					fmt.Fprintf(os.Stderr, "Issue %s not found\n", id)
 					fmt.Fprintf(os.Stderr, "Hint: %s\n", showNotFoundHint(id))
-				} else {
+				default:
 					fmt.Fprintf(os.Stderr, "Error fetching %s: %v\n", id, err)
 				}
+				showFailures = append(showFailures, idOutcome{ID: id, Kind: errorKindOf(err), Message: err.Error()})
 				continue
 			}
 			if result == nil || result.Issue == nil {
@@ -150,6 +161,7 @@ var showCmd = &cobra.Command{
 				}
 				fmt.Fprintf(os.Stderr, "Issue %s not found\n", id)
 				fmt.Fprintf(os.Stderr, "Hint: %s\n", showNotFoundHint(id))
+				showFailures = append(showFailures, idOutcome{ID: id, Kind: kindNotFound, Message: fmt.Sprintf("issue %s not found", id)})
 				continue
 			}
 			issue := result.Issue
@@ -279,6 +291,9 @@ var showCmd = &cobra.Command{
 					return jerr
 				}
 			} else {
+				if machineModeActive() {
+					return batchError(0, showFailures)
+				}
 				return HandleErrorWithHintRespectJSON("no issues found matching the provided IDs",
 					"some IDs may reference deleted/purged records with no trace left in the live database — try 'bd history <id>' to check")
 			}
@@ -293,6 +308,10 @@ var showCmd = &cobra.Command{
 
 		if len(args) > 0 {
 			SetLastTouchedID(args[0])
+		}
+		if machineModeActive() {
+			// Some ids shown, some not: partial, with the misses named.
+			return batchError(foundCount, showFailures)
 		}
 		return nil
 	},

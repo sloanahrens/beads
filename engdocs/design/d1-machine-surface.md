@@ -86,7 +86,8 @@ kind. A page cut by an explicit `--limit` is not an error:
 What changes outside machine mode (legacy `--json` shapes are untouched):
 
 - `bd close A B` exits 1 when any id is refused (was 0 on partial success);
-  `bd defer`/`bd undefer` exit 1 when any id fails (were always 0).
+  `bd defer`/`bd undefer` exit 1 when any id fails (were always 0). `bd undefer`
+  of an id whose lookup returns no row now reports it instead of panicking.
   `TestProtocol_ClosePartialFailureExitsZero` is inverted to pin this.
 - `routed.go` returns a typed `routeUnreachableError` instead of dropping the
   prefix-route failure, so `bd show hq-x` says "could not reach ..." instead
@@ -128,7 +129,8 @@ shorthand, type, default, persistent}]}], error_kinds: {kind: exit}}`.
 ## Not in this change
 
 - Legacy `--json` shapes and `BD_JSON_ENVELOPE=1` behavior are unchanged.
-- The proxied-server command twins get the envelope through staging but keep
-  their own exit semantics for partial batches.
+- The proxied-server twins of close/defer/undefer follow the same batch rule,
+  but proxied close keeps only refusal text per id, so every failure there is
+  reported as `refused`.
 - `os.Exit` calls inside commands other than CheckReadonly and
   CheckMigrationFreeze bypass the envelope.

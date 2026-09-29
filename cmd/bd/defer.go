@@ -77,7 +77,7 @@ Examples:
 
 		_, err := utils.ResolvePartialIDs(ctx, store, args)
 		if err != nil {
-			return HandleError("%v", err)
+			return handleClassified(err)
 		}
 
 		deferredIssues := []*types.Issue{}
@@ -86,10 +86,19 @@ Examples:
 			return HandleErrorWithHint("database not initialized", diagHint())
 		}
 
+		// Per-id failures make the command exit non-zero; it used to return 0
+		// even when every id failed (B1-02).
+		var failures []idOutcome
+		fail := func(id string, kind errorKind, msg string) {
+			fmt.Fprintln(os.Stderr, msg)
+			failures = append(failures, idOutcome{ID: id, Kind: kind, Message: msg})
+		}
+		deferred := 0
+
 		for _, id := range args {
 			fullID, err := utils.ResolvePartialID(ctx, store, id)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error resolving %s: %v\n", id, err)
+				fail(id, errorKindOf(err), fmt.Sprintf("Error resolving %s: %v", id, err))
 				continue
 			}
 
@@ -102,11 +111,11 @@ Examples:
 			if reason != "" {
 				issue, err := store.GetIssue(ctx, fullID)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error loading %s: %v\n", fullID, err)
+					fail(fullID, errorKindOf(err), fmt.Sprintf("Error loading %s: %v", fullID, err))
 					continue
 				}
 				if issue == nil {
-					fmt.Fprintf(os.Stderr, "Issue %s not found\n", fullID)
+					fail(fullID, kindNotFound, fmt.Sprintf("Issue %s not found", fullID))
 					continue
 				}
 				notes := issue.Notes
@@ -117,9 +126,10 @@ Examples:
 			}
 
 			if err := store.UpdateIssue(ctx, fullID, updates, actor); err != nil {
-				fmt.Fprintf(os.Stderr, "Error deferring %s: %v\n", fullID, err)
+				fail(fullID, errorKindOf(err), fmt.Sprintf("Error deferring %s: %v", fullID, err))
 				continue
 			}
+			deferred++
 
 			if jsonOutput {
 				issue, _ := store.GetIssue(ctx, fullID)
@@ -140,7 +150,7 @@ Examples:
 		if len(args) > 0 {
 			commandDidWrite.Store(true)
 		}
-		return nil
+		return batchError(deferred, failures)
 	},
 }
 

@@ -62,7 +62,7 @@ func runUpdateProxiedServer(cmd *cobra.Command, ctx context.Context, args []stri
 		_ = outputJSON(updated)
 	}
 	if len(failures) > 0 {
-		return reportUpdateFailures(failures, len(args))
+		return reportUpdateFailures(failures, len(args)-len(failures), len(args))
 	}
 	return nil
 }

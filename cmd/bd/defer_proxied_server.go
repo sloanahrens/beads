@@ -16,7 +16,7 @@ import (
 
 type deferProxiedResult struct {
 	issues []*types.Issue
-	errs   []string
+	errs   []idOutcome
 }
 
 func proxiedUpdateByID(ctx context.Context, uw uow.UnitOfWork, id string, isWisp bool, updates map[string]any) error {
@@ -45,11 +45,11 @@ func runDeferProxiedServer(ctx context.Context, args []string, deferUntil *time.
 		for _, id := range args {
 			issue, isWisp, rerr := workapi.GetIssueOrWisp(ctx, workapi.NewUOWDetailSource(uw), id)
 			if errors.Is(rerr, storage.ErrNotFound) {
-				r.errs = append(r.errs, fmt.Sprintf("Error resolving %s: not found", id))
+				r.errs = append(r.errs, idOutcome{ID: id, Kind: kindNotFound, Message: fmt.Sprintf("Error resolving %s: not found", id)})
 				continue
 			}
 			if rerr != nil {
-				r.errs = append(r.errs, fmt.Sprintf("Error resolving %s: %v", id, rerr))
+				r.errs = append(r.errs, idOutcome{ID: id, Kind: errorKindOf(rerr), Message: fmt.Sprintf("Error resolving %s: %v", id, rerr)})
 				continue
 			}
 			fullID := issue.ID
@@ -69,7 +69,7 @@ func runDeferProxiedServer(ctx context.Context, args []string, deferUntil *time.
 			}
 
 			if uerr := proxiedUpdateByID(ctx, uw, fullID, isWisp, updates); uerr != nil {
-				r.errs = append(r.errs, fmt.Sprintf("Error deferring %s: %v", fullID, uerr))
+				r.errs = append(r.errs, idOutcome{ID: fullID, Kind: errorKindOf(uerr), Message: fmt.Sprintf("Error deferring %s: %v", fullID, uerr)})
 				continue
 			}
 			if updated := proxiedGetByID(ctx, uw, fullID, isWisp); updated != nil {
@@ -86,7 +86,7 @@ func runDeferProxiedServer(ctx context.Context, args []string, deferUntil *time.
 	}
 
 	for _, e := range res.errs {
-		fmt.Fprintln(os.Stderr, e)
+		fmt.Fprintln(os.Stderr, e.Message)
 	}
 
 	if jsonOutput {
@@ -104,7 +104,7 @@ func runDeferProxiedServer(ctx context.Context, args []string, deferUntil *time.
 	if len(args) > 0 {
 		commandDidWrite.Store(true)
 	}
-	return nil
+	return batchError(len(res.issues), res.errs)
 }
 
 func runUndeferProxiedServer(ctx context.Context, args []string) error {
@@ -117,16 +117,16 @@ func runUndeferProxiedServer(ctx context.Context, args []string) error {
 		for _, id := range args {
 			issue, isWisp, rerr := workapi.GetIssueOrWisp(ctx, workapi.NewUOWDetailSource(uw), id)
 			if errors.Is(rerr, storage.ErrNotFound) {
-				r.errs = append(r.errs, fmt.Sprintf("Error getting %s: not found", id))
+				r.errs = append(r.errs, idOutcome{ID: id, Kind: kindNotFound, Message: fmt.Sprintf("Error getting %s: not found", id)})
 				continue
 			}
 			if rerr != nil {
-				r.errs = append(r.errs, fmt.Sprintf("Error getting %s: %v", id, rerr))
+				r.errs = append(r.errs, idOutcome{ID: id, Kind: errorKindOf(rerr), Message: fmt.Sprintf("Error getting %s: %v", id, rerr)})
 				continue
 			}
 			fullID := issue.ID
 			if issue.Status != types.StatusDeferred {
-				r.errs = append(r.errs, fmt.Sprintf("%s is not deferred (status: %s)", fullID, string(issue.Status)))
+				r.errs = append(r.errs, idOutcome{ID: fullID, Kind: kindRefused, Message: fmt.Sprintf("%s is not deferred (status: %s)", fullID, string(issue.Status))})
 				continue
 			}
 
@@ -135,7 +135,7 @@ func runUndeferProxiedServer(ctx context.Context, args []string) error {
 				"defer_until": nil,
 			}
 			if uerr := proxiedUpdateByID(ctx, uw, fullID, isWisp, updates); uerr != nil {
-				r.errs = append(r.errs, fmt.Sprintf("Error undeferring %s: %v", fullID, uerr))
+				r.errs = append(r.errs, idOutcome{ID: fullID, Kind: errorKindOf(uerr), Message: fmt.Sprintf("Error undeferring %s: %v", fullID, uerr)})
 				continue
 			}
 			if updated := proxiedGetByID(ctx, uw, fullID, isWisp); updated != nil {
@@ -152,7 +152,7 @@ func runUndeferProxiedServer(ctx context.Context, args []string) error {
 	}
 
 	for _, e := range res.errs {
-		fmt.Fprintln(os.Stderr, e)
+		fmt.Fprintln(os.Stderr, e.Message)
 	}
 
 	if jsonOutput {
@@ -170,5 +170,5 @@ func runUndeferProxiedServer(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		commandDidWrite.Store(true)
 	}
-	return nil
+	return batchError(len(res.issues), res.errs)
 }
