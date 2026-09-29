@@ -56,9 +56,12 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 
 	startDir = utils.CanonicalizePath(startDir)
 
-	// Git facts are needed only when a candidate .beads has no local
-	// database (a worktree root carrying tracked metadata) or the walk comes
-	// up empty. Resolve them lazily (two git execs, only then): config loading runs
+	// Git facts are needed only when a candidate .beads without a local
+	// database sits at a linked worktree root (tracked metadata the shared
+	// checkout's database should win over), or when the walk comes up empty.
+	// Server-mode workspaces keep no local database, so gating on the
+	// worktree root (a .git FILE, checked with a stat) keeps the common
+	// path free of git execs. Resolve them lazily (two git execs, only then): config loading runs
 	// discovery on every bd invocation, and a normal workspace owns its
 	// database, so the common path spawns no git at all.
 	var (
@@ -109,7 +112,7 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 			}
 			hasDB := HasDatabase(target)
 			isWorktreeRoot := false
-			if !hasDB {
+			if !hasDB && isLinkedWorktreeRoot(dir) {
 				loadGit()
 				isWorktreeRoot = repoRoot != "" && utils.PathsEqual(dir, repoRoot)
 			}
@@ -147,6 +150,14 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 		return jjPrimarySource, jjPrimaryResolved, nil
 	}
 	return "", "", nil
+}
+
+// isLinkedWorktreeRoot reports whether dir is the root of a linked git
+// worktree (or submodule): its .git is a file pointing at the real git dir,
+// not a directory.
+func isLinkedWorktreeRoot(dir string) bool {
+	info, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 func isDir(path string) bool {

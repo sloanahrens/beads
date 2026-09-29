@@ -273,3 +273,41 @@ func TestFollowRedirect(t *testing.T) {
 		}
 	})
 }
+
+// Config loading runs discovery on every bd invocation. A main checkout whose
+// .beads holds no local database (server mode: metadata.json and config.yaml
+// only) must resolve without spawning git.
+func TestResolve_ServerModeMainCheckoutSpawnsNoGit(t *testing.T) {
+	root := realTempDir(t)
+	proj := filepath.Join(root, "proj")
+	writeFile(t, filepath.Join(proj, ".beads", "config.yaml"), "issue-prefix: sv\n")
+	writeFile(t, filepath.Join(proj, ".beads", "metadata.json"), `{"backend":"dolt","dolt_mode":"server"}`)
+	if err := os.MkdirAll(filepath.Join(proj, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(proj, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "git.log")
+	writeFile(t, filepath.Join(bin, "git"), "#!/bin/sh\necho called >> \"$FAKE_GIT_LOG\"\nexit 1\n")
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("FAKE_GIT_LOG", logPath)
+
+	for _, cwd := range []string{proj, sub} {
+		ws, err := Resolve(cwd, noEnv)
+		if err != nil {
+			t.Fatalf("Resolve(%s): %v", cwd, err)
+		}
+		if ws.BeadsDir != filepath.Join(proj, ".beads") {
+			t.Errorf("BeadsDir = %q", ws.BeadsDir)
+		}
+	}
+	if data, err := os.ReadFile(logPath); err == nil {
+		t.Errorf("discovery spawned git %d time(s); want none", strings.Count(string(data), "called"))
+	}
+}
