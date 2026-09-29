@@ -112,7 +112,7 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 			}
 			isJJSecondaryRoot := jjSecondaryRoot != "" && utils.PathsEqual(dir, jjSecondaryRoot)
 			switch {
-			case isWorktreeRoot && fallbackHasDB:
+			case isWorktreeRoot && fallbackHasDB && !hasDB:
 				// A worktree root can carry tracked .beads metadata without
 				// owning the ignored database directory: prefer the shared
 				// worktree database.

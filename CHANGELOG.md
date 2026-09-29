@@ -218,11 +218,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   town's `issue-prefix`) while writing the rig's database. Config, database
   discovery and the workspace gate now share one resolver
   (`internal/workspace`); a redirect that loops, or whose target is missing or
-  holds no workspace files, is reported instead of silently falling through.
-  `bd config get issue-prefix` now prints the prefix commands use
-  (`config.yaml` `issue-prefix`, else the database `issue_prefix`) and its
-  `--json` output gains `location`; it used to print "(not set)" in every
-  workspace. `bd config get issue_prefix` still reads the database value.
+  holds no workspace files, is reported instead of silently falling through:
+  bd prints the error as a warning and continues without that project config
+  (with `BEADS_DIR`, it keeps `BEADS_DIR`'s own `config.yaml`, where database
+  discovery also falls back). `bd config get issue-prefix` now prints the
+  prefix commands use (`config.yaml` `issue-prefix`, else the database
+  `issue_prefix`) and its `--json` output gains `location`: `env var`,
+  `config.yaml` (any loaded config file) or `database`. It used to print
+  "(not set)" in every workspace. `bd config get issue_prefix` still reads the database value.
 
 - **`bd mol wisp gc` no longer deletes a wisp that a live agent currently has
   hooked** (be-yqp). Hooking a wisp — recorded as `hook_bead` on the hooking
