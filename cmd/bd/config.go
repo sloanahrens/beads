@@ -301,6 +301,10 @@ var configGetCmd = &cobra.Command{
 			return runConfigGetBackupEnabled()
 		}
 
+		if key == "issue-prefix" {
+			return runConfigGetIssuePrefix()
+		}
+
 		if config.IsYamlOnlyKey(key) {
 			// User-global keys (e.g. metrics.*) must be read from the user-global
 			// config.yaml only — the same source the runtime uses for metrics
@@ -388,6 +392,47 @@ var configGetCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// runConfigGetIssuePrefix reports the prefix commands in this workspace
+// actually use for "issue-prefix", the name config.yaml spells it with.
+//
+// The prefix lives in two places: config.yaml "issue-prefix" (which wins, see
+// overlayYAMLPrefix) and the database's "issue_prefix". Looking the dash form
+// up in the database, as every other key is, always answered "(not set)",
+// even inside the rig that set it (be-h0k). The underscore form still reads
+// the raw database value.
+func runConfigGetIssuePrefix() error {
+	const key = "issue-prefix"
+	value := strings.TrimSpace(config.GetString(key))
+	location := "config.yaml"
+	if config.GetValueSource(key) == config.SourceEnvVar {
+		location = "env var"
+	}
+	if value == "" {
+		settings, err := openWorkspaceConfig("config get requires direct database access")
+		if err != nil {
+			return HandleError("%v", err)
+		}
+		result, err := settings.GetSetting(rootCtx, issueops.GetSettingRequest{Key: issueops.SettingKeyIssuePrefix})
+		if err != nil {
+			return HandleError("getting config: %v", err)
+		}
+		value, location = result.Value, "database"
+	}
+	if jsonOutput {
+		return outputJSON(map[string]interface{}{
+			"key":      key,
+			"value":    value,
+			"location": location,
+		})
+	}
+	if value == "" {
+		fmt.Printf("%s (not set)\n", key)
+	} else {
+		fmt.Printf("%s\n", value)
+	}
+	return nil
 }
 
 // runConfigGetBackupEnabled reports the EFFECTIVE value of
