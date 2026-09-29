@@ -51,9 +51,29 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 	}
 
 	startDir = utils.CanonicalizePath(startDir)
-	repoRoot := ""
-	if out, gErr := gitOutput(startDir, "rev-parse", "--show-toplevel"); gErr == nil {
-		repoRoot = utils.CanonicalizePath(out)
+
+	// Git facts are needed only when a candidate .beads has no local
+	// database (a worktree root carrying tracked metadata) or the walk comes
+	// up empty. Resolve them lazily with one git exec: config loading runs
+	// discovery on every bd invocation, and a normal workspace owns its
+	// database, so the common path spawns no git at all.
+	var (
+		gitLoaded        bool
+		repoRoot         string
+		fallbackBeadsDir string
+		fallbackHasDB    bool
+	)
+	loadGit := func() {
+		if gitLoaded {
+			return
+		}
+		gitLoaded = true
+		var gitDir, commonDir string
+		repoRoot, gitDir, commonDir = gitRevParse(startDir)
+		fallbackBeadsDir = worktreeFallbackFromDirs(gitDir, commonDir)
+		if fallbackBeadsDir != "" && isDir(fallbackBeadsDir) {
+			fallbackHasDB = HasDatabase(probe(fallbackBeadsDir))
+		}
 	}
 
 	jjSecondaryRoot := ""
@@ -73,15 +93,6 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 		}
 	}
 
-	fallbackBeadsDir := ""
-	fallbackHasDB := false
-	if repoRoot != "" {
-		fallbackBeadsDir = worktreeFallbackBeadsDirForRepo(repoRoot)
-		if fallbackBeadsDir != "" && isDir(fallbackBeadsDir) {
-			fallbackHasDB = HasDatabase(probe(fallbackBeadsDir))
-		}
-	}
-
 	for dir := startDir; dir != "/" && dir != "."; {
 		beadsDir := filepath.Join(dir, ".beads")
 		if isDir(beadsDir) {
@@ -89,14 +100,19 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 			if ferr != nil {
 				return beadsDir, "", ferr
 			}
-			isWorktreeRoot := repoRoot != "" && utils.PathsEqual(dir, repoRoot)
+			hasDB := HasDatabase(target)
+			isWorktreeRoot := false
+			if !hasDB {
+				loadGit()
+				isWorktreeRoot = repoRoot != "" && utils.PathsEqual(dir, repoRoot)
+			}
 			isJJSecondaryRoot := jjSecondaryRoot != "" && utils.PathsEqual(dir, jjSecondaryRoot)
 			switch {
-			case isWorktreeRoot && fallbackHasDB && !HasDatabase(target):
+			case isWorktreeRoot && fallbackHasDB:
 				// A worktree root can carry tracked .beads metadata without
 				// owning the ignored database directory: prefer the shared
 				// worktree database.
-			case isJJSecondaryRoot && jjPrimaryHasDB && !HasDatabase(target):
+			case isJJSecondaryRoot && jjPrimaryHasDB && !hasDB:
 				// Same for a jj secondary workspace: prefer the primary's DB.
 			case HasProjectFiles(target):
 				return beadsDir, target, nil
@@ -109,6 +125,7 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 		dir = parent
 	}
 
+	loadGit()
 	if fallbackBeadsDir != "" && isDir(fallbackBeadsDir) {
 		target, _, ferr := follow(fallbackBeadsDir)
 		if ferr != nil {
@@ -269,16 +286,30 @@ func WorktreeFallbackBeadsDir(repoPath string) string {
 }
 
 func worktreeFallbackBeadsDirForRepo(repoPath string) string {
-	out, err := gitOutput(repoPath, "rev-parse", "--git-dir", "--git-common-dir")
+	_, gitDir, commonDir := gitRevParse(repoPath)
+	return worktreeFallbackFromDirs(gitDir, commonDir)
+}
+
+// gitRevParse returns the worktree top level, git dir and common dir for
+// dir in one git exec, all canonical; empty strings outside a git repo.
+func gitRevParse(dir string) (topLevel, gitDir, commonDir string) {
+	out, err := gitOutput(dir, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir")
 	if err != nil {
-		return ""
+		return "", "", ""
 	}
 	lines := strings.Split(out, "\n")
-	if len(lines) < 2 {
-		return ""
+	if len(lines) < 3 {
+		return "", "", ""
 	}
-	gitDir := gitPathForRepo(repoPath, strings.TrimSpace(lines[0]))
-	commonDir := gitPathForRepo(repoPath, strings.TrimSpace(lines[1]))
+	topLevel = utils.CanonicalizePath(strings.TrimSpace(lines[0]))
+	gitDir = gitPathForRepo(dir, strings.TrimSpace(lines[1]))
+	commonDir = gitPathForRepo(dir, strings.TrimSpace(lines[2]))
+	return topLevel, gitDir, commonDir
+}
+
+// worktreeFallbackFromDirs maps a linked worktree's git dirs to the main
+// checkout's .beads; "" when gitDir is the common dir (not a linked worktree).
+func worktreeFallbackFromDirs(gitDir, commonDir string) string {
 	if gitDir == "" || commonDir == "" || utils.PathsEqual(gitDir, commonDir) {
 		return ""
 	}
