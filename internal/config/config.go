@@ -175,9 +175,20 @@ func Initialize() error {
 		// A broken redirect in the checkout under test is the repo's own
 		// state, which this flag exists to fence out.
 	default:
-		// Load no project config rather than substitute an ancestor's, and
-		// tell the caller why (callers print this and continue).
-		resolveErr = fmt.Errorf("project config not loaded: %w", wsErr)
+		// Tell the caller why (every caller prints this and continues).
+		// For BEADS_DIR, load that directory's own config.yaml, which is
+		// where internal/beads falls back for the database too, so config
+		// and database stay on one directory. For a discovered workspace,
+		// load no project config: substituting an ancestor's is the bug
+		// this resolver exists to prevent.
+		resolveErr = fmt.Errorf("resolving beads workspace: %w", wsErr)
+		if dir, set, _ := workspace.FromEnv(os.Getenv); set {
+			p := configPathAsSpelled(workspace.Workspace{BeadsDir: dir, SourceDir: dir, FromEnv: true, ConfigPath: filepath.Join(dir, "config.yaml")}, cwd)
+			if _, statErr := os.Stat(p); statErr == nil && !(ignoreRepoConfig && ignoredRepoConfigPaths[ignoredConfigKey(p)]) {
+				configPaths = append(configPaths, p)
+				primaryConfigPath = p
+			}
+		}
 	}
 
 	// Automatic environment variable binding

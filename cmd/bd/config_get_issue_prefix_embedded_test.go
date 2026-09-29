@@ -92,6 +92,18 @@ func TestEmbeddedConfigGetIssuePrefixThroughRedirect(t *testing.T) {
 		}
 	}
 
+	// BD_ISSUE_PREFIX overrides both, and --json says so.
+	env = append(env, "BD_ISSUE_PREFIX=ee")
+	out := run(worktree, bd, "config", "get", "issue-prefix", "--json")
+	var envRes map[string]any
+	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &envRes); err != nil {
+		t.Fatalf("parse --json output %q: %v", out, err)
+	}
+	if envRes["value"] != "ee" || envRes["location"] != "env var" {
+		t.Errorf("with BD_ISSUE_PREFIX=ee: got %v, want value ee from env var", envRes)
+	}
+	env = env[:len(env)-1]
+
 	// config.yaml wins over the database, as in bd create. Set it in the rig
 	// only: the worktree must read it through the redirect, never the town's.
 	rigConfig := filepath.Join(rig, ".beads", "config.yaml")

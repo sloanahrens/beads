@@ -211,6 +211,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A git worktree whose `.beads` only holds a `redirect` now loads the
+  redirect target's `config.yaml`** (be-h0k). Config loading walked up from
+  the working directory and ignored `.beads/redirect`, so such a worktree
+  (Gas Town polecats) read an unrelated ancestor's config (for example the
+  town's `issue-prefix`) while writing the rig's database. Config, database
+  discovery and the workspace gate now share one resolver
+  (`internal/workspace`); a redirect that loops, or whose target is missing or
+  holds no workspace files, is reported instead of silently falling through.
+  `bd config get issue-prefix` now prints the prefix commands use
+  (`config.yaml` `issue-prefix`, else the database `issue_prefix`) and its
+  `--json` output gains `location`; it used to print "(not set)" in every
+  workspace. `bd config get issue_prefix` still reads the database value.
+
 - **`bd mol wisp gc` no longer deletes a wisp that a live agent currently has
   hooked** (be-yqp). Hooking a wisp — recorded as `hook_bead` on the hooking
   agent's own identity bead — does not change the hooked wisp's own status or
