@@ -139,11 +139,14 @@ var proxiedLookupCommands = []struct {
 	// schema, anything at all.
 	wantHardErr string
 	// exitsZero marks the commands that report per id and keep going. --refs,
-	// --children, defer, undefer and todo done print the failure and move to
-	// the next id, so one bad id out of one still leaves the command at exit 0.
-	// That predates these slices; the branch under test is what they print, not
-	// what they return.
+	// --children and todo done print the failure and move to the next id, so
+	// one bad id out of one still leaves the command at exit 0. defer and
+	// undefer also report per id and keep going, but since be-3xa they return
+	// an error when any id was refused, so they exit non-zero (wantErr).
 	exitsZero bool
+	// wantErr, when set, is the error a non-zero command returns after
+	// reporting each id: the be-3xa per-id summary.
+	wantErr string
 }{
 	{
 		name: "comments",
@@ -259,7 +262,7 @@ var proxiedLookupCommands = []struct {
 		},
 		wantNotFound: "Error resolving bd-missing: not found",
 		wantHardErr:  "Error resolving bd-missing: connection reset by peer",
-		exitsZero:    true,
+		wantErr:      "1 of 1 ids failed",
 	},
 	{
 		name: "undefer",
@@ -268,7 +271,7 @@ var proxiedLookupCommands = []struct {
 		},
 		wantNotFound: "Error getting bd-missing: not found",
 		wantHardErr:  "Error getting bd-missing: connection reset by peer",
-		exitsZero:    true,
+		wantErr:      "1 of 1 ids failed",
 	},
 	{
 		// The two routes now share one body, so this reports the DIRECT route's
@@ -376,6 +379,9 @@ func TestProxiedLookupReportsMissingIssue(t *testing.T) {
 			if gotZero := err == nil; gotZero != tc.exitsZero {
 				t.Errorf("exit zero = %v, want %v (err = %v)", gotZero, tc.exitsZero, err)
 			}
+			if tc.wantErr != "" && (err == nil || err.Error() != tc.wantErr) {
+				t.Errorf("err = %v, want %q", err, tc.wantErr)
+			}
 			if got := strings.TrimSpace(stderr); got != tc.wantNotFound {
 				t.Errorf("stderr = %q, want %q", got, tc.wantNotFound)
 			}
@@ -403,6 +409,9 @@ func TestProxiedLookupReportsBackendFailure(t *testing.T) {
 
 			if gotZero := err == nil; gotZero != tc.exitsZero {
 				t.Errorf("exit zero = %v, want %v (err = %v)", gotZero, tc.exitsZero, err)
+			}
+			if tc.wantErr != "" && (err == nil || err.Error() != tc.wantErr) {
+				t.Errorf("err = %v, want %q", err, tc.wantErr)
 			}
 			if got := strings.TrimSpace(stderr); got != tc.wantHardErr {
 				t.Errorf("stderr = %q, want %q", got, tc.wantHardErr)
