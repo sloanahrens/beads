@@ -59,6 +59,10 @@ This is useful for agents executing molecules to see which steps can run next.`,
 		}
 
 		if usesProxiedServer() {
+			// Ignoring --after would hand a paging caller page one forever.
+			if after, _ := cmd.Flags().GetString("after"); after != "" {
+				return handleClassifiedRespectJSON(newCLIError(kindInvalidArgs, "--after is not supported under --proxied-server; use --offset"))
+			}
 			// --claim consumes exactly one row, same reasoning as the
 			// direct-path fix in issueops/claim.go: a rig-wide cap sized
 			// for bulk list/ready reads must not block a single-row claim.
@@ -84,6 +88,14 @@ This is useful for agents executing molecules to see which steps can run next.`,
 
 		if offset, _ := cmd.Flags().GetInt("offset"); offset > 0 {
 			return HandleErrorRespectJSON("--offset is only supported under --proxied-server")
+		}
+		if after, _ := cmd.Flags().GetString("after"); after != "" {
+			gatedFlag, _ := cmd.Flags().GetBool("gated")
+			molFlag, _ := cmd.Flags().GetString("mol")
+			explainFlag, _ := cmd.Flags().GetBool("explain")
+			if claimReady || gatedFlag || molFlag != "" || explainFlag {
+				return handleClassifiedRespectJSON(newCLIError(kindInvalidArgs, "--after pages the plain ready listing; it cannot be combined with --claim, --gated, --mol or --explain"))
+			}
 		}
 
 		gated, _ := cmd.Flags().GetBool("gated")
@@ -177,6 +189,14 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			return nil
 		}
 
+		after, _ := cmd.Flags().GetString("after")
+		if after != "" {
+			if !jsonOutput {
+				return HandleErrorRespectJSON("--after pages the JSON output; add --json")
+			}
+			return runReadyKeyset(ctx, activeStore, filter, after, cmd.Flags().Changed("limit"))
+		}
+
 		if jsonOutput {
 			results, err := activeStore.GetReadyWorkWithCounts(ctx, filter)
 			if err != nil {
@@ -208,6 +228,9 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			}
 			if truncated {
 				pr.Total = totalReady
+				if policy, perr := readyKeysetPolicy(filter.SortPolicy); perr == nil && len(results) > 0 {
+					pr.NextCursor = encodeReadyCursor(policy, results[len(results)-1].Issue)
+				}
 			}
 			if jerr := outputJSONPage(results, pr); jerr != nil {
 				return jerr
@@ -717,6 +740,7 @@ type MoleculeReadyOutput struct {
 
 func init() {
 	readyCmd.Flags().IntP("limit", "n", workapi.DefaultReadyLimit, "Maximum issues to show (use 0 for unlimited)")
+	readyCmd.Flags().String("after", "", "Keyset cursor: return the ready issues after this one (pass back pagination.next_cursor). Requires --json and --sort priority or oldest")
 	readyCmd.Flags().Int("offset", 0, "Skip the first N matching results (0-based). Only supported under --proxied-server.")
 	readyCmd.Flags().IntP("priority", "p", 0, "Filter by priority")
 	readyCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
@@ -759,4 +783,40 @@ func init() {
 	blockedCmd.Flags().StringSlice("label-any", []string{}, "Filter by labels (OR: must have AT LEAST ONE). Can combine with --label")
 	blockedCmd.Flags().StringSlice("exclude-label", []string{}, "Exclude issues that have ANY of these labels")
 	rootCmd.AddCommand(blockedCmd)
+}
+
+// runReadyKeyset serves one keyset page of ready work: the rows strictly
+// after the --after cursor in the sort policy's order. The keyset is applied
+// here over the full ready set rather than pushed into the query; the ready
+// set is small, and bd ready already reads it whole to count a full page.
+func runReadyKeyset(ctx context.Context, st storage.DoltStorage, filter types.WorkFilter, after string, limitExplicit bool) error {
+	policy, err := readyKeysetPolicy(filter.SortPolicy)
+	if err != nil {
+		return handleClassifiedRespectJSON(newCLIError(kindInvalidArgs, "%s", err.Error()))
+	}
+	cur, err := decodeReadyCursor(after)
+	if err != nil {
+		return handleClassifiedRespectJSON(newCLIError(kindInvalidArgs, "%s", err.Error()))
+	}
+	if cur.Policy != policy {
+		return handleClassifiedRespectJSON(newCLIError(kindInvalidArgs,
+			"--after cursor was taken under --sort %s; this call sorts by %s", cur.Policy, policy))
+	}
+	full := filter
+	full.Limit = 0
+	rows, err := st.GetReadyWorkWithCounts(ctx, full)
+	if err != nil {
+		if capErr := handleMaxRowsError(err); capErr != nil {
+			return capErr
+		}
+		return HandleErrorRespectJSON("%v", err)
+	}
+	page, hasMore, next := readyKeysetPage(rows, policy, &cur, filter.Limit)
+	return outputJSONPage(page, pageResult{
+		HasMore:       hasMore,
+		Returned:      len(page),
+		Limit:         filter.Limit,
+		LimitExplicit: limitExplicit,
+		NextCursor:    next,
+	})
 }

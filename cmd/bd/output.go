@@ -193,6 +193,7 @@ func outputJSONPage(v interface{}, page pageResult) error {
 		p := paginationMetaFor(page.HasMore, page.Returned)
 		if p != nil {
 			p.Total = page.Total
+			p.NextCursor = page.NextCursor
 		}
 		return outputJSONWithPagination(v, p)
 	}

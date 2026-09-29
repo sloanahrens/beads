@@ -121,10 +121,14 @@ shorthand, type, default, persistent}]}], error_kinds: {kind: exit}}`.
   `priority`) or `(created_at, id)` (sort `oldest`); hybrid is refused because its
   order moves with the clock. The keyset is applied in bd over the ready set, not
   pushed into SQL; pushing it down is a follow-up.
-- Contract test `cmd/bd/machine_contract_test.go`: one assertion table run
-  against an in-memory page source, and against a real embedded-Dolt workspace
-  through the built binary when `BEADS_TEST_EMBEDDED_DOLT=1`. Embedded Dolt
-  needs no server and no Docker.
+- `--after` is refused with `--claim`, `--gated`, `--mol`, `--explain` and under
+  `--proxied-server`, where it would be ignored and hand a paging caller page
+  one forever.
+- Contract test `runHotReadContract` (`cmd/bd/machine_contract_test.go`): one
+  assertion set run against an in-memory source that calls the same page
+  functions, and (`machine_contract_embedded_test.go`) against the built binary
+  on a throwaway embedded-Dolt workspace when `BEADS_TEST_EMBEDDED_DOLT=1`.
+  Embedded Dolt needs no server and no Docker.
 
 ## Not in this change
 

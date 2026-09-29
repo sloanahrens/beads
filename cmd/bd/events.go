@@ -228,6 +228,14 @@ func reportEventsTruncated(err error, streaming bool) error {
 	if !errors.As(err, &trunc) {
 		return HandleErrorRespectJSON("reading events journal: %v", err)
 	}
+	if machineModeActive() {
+		return &cliError{Kind: kindTruncated, Message: trunc.Error(), Detail: map[string]any{
+			"code":  storage.EventsJournalTruncatedCode,
+			"since": trunc.Since,
+			"floor": trunc.Floor,
+			"head":  trunc.Head,
+		}}
+	}
 	if jsonOutput {
 		payload := map[string]any{
 			"error": trunc.Error(),
@@ -252,6 +260,9 @@ func reportEventsTruncated(err error, streaming bool) error {
 }
 
 func runEventsTail(ctx context.Context, since int64, limit int, follow bool) error {
+	if machineModeActive() && !follow {
+		return runEventsTailMachine(ctx, since, limit)
+	}
 	enc := json.NewEncoder(os.Stdout)
 	emit := func(from int64) (int64, error) {
 		rows, err := readJournal(ctx, from, limit)
@@ -378,4 +389,21 @@ func pruneJournal(ctx context.Context, before int64, retainDays, retainRows int)
 		return 0, err
 	}
 	return acc.PruneEventsJournal(ctx, before, retainDays, retainRows)
+}
+
+// runEventsTailMachine is bd events tail under machine mode: one envelope
+// whose data is {records, next_since}. It reads limit+1 rows so a full page
+// can say whether more follow; pagination.next_cursor is then the --since
+// for the next call.
+func runEventsTailMachine(ctx context.Context, since int64, limit int) error {
+	fetch := limit
+	if limit > 0 {
+		fetch = limit + 1
+	}
+	rows, err := readJournal(ctx, since, fetch)
+	if err != nil {
+		return reportEventsTruncated(err, false)
+	}
+	data, page := journalPage(rows, since, limit)
+	return outputJSONPage(data, page)
 }
