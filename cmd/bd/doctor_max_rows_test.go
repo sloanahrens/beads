@@ -29,10 +29,10 @@ import (
 
 func TestDoctorConventionsMaxRows_EnvOnly_Exits2(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	bdBin := buildBDForInitTests(t)
@@ -70,10 +70,10 @@ func TestDoctorConventionsMaxRows_EnvOnly_Exits2(t *testing.T) {
 
 func TestDoctorPollutionMaxRows_EnvOnly_Exits2(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	bdBin := buildBDForInitTests(t)

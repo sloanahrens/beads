@@ -11,6 +11,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 // TestSchemaInitRecoversFromPartialNonlocalMigration reproduces, against a real
@@ -40,7 +41,7 @@ func TestSchemaInitRecoversFromPartialNonlocalMigration(t *testing.T) {
 	t.Cleanup(releaseTestSlot)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -118,7 +119,7 @@ func TestSchemaInitRecoversFromPartial0041NonlocalDelete(t *testing.T) {
 	t.Cleanup(releaseTestSlot)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

@@ -20,10 +20,10 @@ import (
 
 func TestExportToFile(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -128,10 +128,10 @@ func TestExportToFile(t *testing.T) {
 
 func TestExportToStdout(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -215,10 +215,10 @@ func TestExportToStdout(t *testing.T) {
 
 func TestExportScrub(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -299,10 +299,10 @@ func TestExportScrub(t *testing.T) {
 
 func TestExportImportRoundTrip(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -444,10 +444,10 @@ func TestExportNoHistoryBeadRoundTrip(t *testing.T) {
 	// must include them with no_history=true, and import must preserve the flag.
 	// If no_history is dropped during import, the bead becomes GC-eligible.
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -577,10 +577,10 @@ func TestExportMemoryDeterminism(t *testing.T) {
 	// Seeds multiple memories, exports twice to separate files, and asserts
 	// byte-for-byte identical output.
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -684,10 +684,10 @@ func TestExportByteStabilityAllRecordTypes(t *testing.T) {
 	// source of phantom diffs, so any collection serialized without a total
 	// order (a sort key that ends in a unique tiebreaker) would surface here.
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -867,10 +867,10 @@ func TestExportNoDuplicateWisps(t *testing.T) {
 	// This regression test ensures no duplicate IDs appear in the export and
 	// the wisp count matches what was created.
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -999,10 +999,10 @@ func TestExportExcludesMemoriesByDefault(t *testing.T) {
 	// contain sensitive agent context. Only --include-memories or --all
 	// should include them.
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -1126,10 +1126,10 @@ func TestExportExcludesWispsByDefault(t *testing.T) {
 	// Wisps are private/transient and must not reach git history.
 	// Only --all should include them.
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)

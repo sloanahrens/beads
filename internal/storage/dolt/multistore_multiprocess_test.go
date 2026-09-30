@@ -17,6 +17,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/testutil/integration"
 	"golang.org/x/sync/errgroup"
 )
@@ -123,7 +124,7 @@ func TestMultiStoreConcurrent_InProcess(t *testing.T) {
 	t.Cleanup(releaseTestSlot)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -264,7 +265,7 @@ func TestMultiStoreConcurrent_Subprocess(t *testing.T) {
 	skipIfNoDolt(t)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	modRoot := integration.ModuleRoot(t)
@@ -375,7 +376,7 @@ func TestMultiStoreConcurrent_CloseIsolation(t *testing.T) {
 	t.Cleanup(releaseTestSlot)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

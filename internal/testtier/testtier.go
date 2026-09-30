@@ -33,6 +33,12 @@ func Unit() bool {
 	return strings.TrimSpace(os.Getenv(EnvVar)) == "unit"
 }
 
+// Integration reports whether the process runs in the integration test tier,
+// where infra-unavailable skips become failures (require-mode).
+func Integration() bool {
+	return strings.TrimSpace(os.Getenv(EnvVar)) == "integration"
+}
+
 // Refuse returns an error wrapping ErrUnitTier when running in the unit tier,
 // and nil otherwise. op names what was refused, for the failure message.
 func Refuse(op string) error {

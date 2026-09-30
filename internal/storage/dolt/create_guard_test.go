@@ -11,6 +11,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 // Tests for the CreateIfMissing guard on CREATE DATABASE.
@@ -119,7 +120,7 @@ func containsAny(s string, substrs ...string) bool {
 func skipIfNoServer(t *testing.T) {
 	t.Helper()
 	if testServerPort == 0 {
-		t.Skip("no test Dolt server running")
+		testutil.SkipOrFailUnavailable(t, "no test Dolt server running")
 	}
 	acquireTestSlot()
 	t.Cleanup(releaseTestSlot)

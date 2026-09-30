@@ -70,7 +70,7 @@ func skipIfNoDolt(t *testing.T) {
 	t.Helper()
 	testutil.RequireDoltBinary(t)
 	if testServerPort == 0 {
-		t.Skip("Test Dolt server not running, skipping test")
+		testutil.SkipOrFailUnavailable(t, "Test Dolt server not running, skipping test")
 	}
 }
 

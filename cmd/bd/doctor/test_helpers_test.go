@@ -31,12 +31,12 @@ func newTestDoltStore(t *testing.T, prefix string) *dolt.DoltStore {
 	ctx := context.Background()
 
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	port := doctorTestServerPort()
 	if port == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 
 	// Open store with MaxOpenConns=1 (required for DOLT_CHECKOUT session affinity)

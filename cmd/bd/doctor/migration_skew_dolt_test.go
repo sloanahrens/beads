@@ -26,11 +26,11 @@ import (
 // locally tampered hash (skew warning).
 func TestCheckMigrationContentSkew_RealDolt(t *testing.T) {
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 	port := doctorTestServerPort()
 	if port == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

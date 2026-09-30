@@ -48,3 +48,14 @@ func TestUnitReportsTier(t *testing.T) {
 		t.Fatal("Unit() = true with BD_TEST_TIER=integration")
 	}
 }
+
+func TestIntegrationReportsTier(t *testing.T) {
+	t.Setenv(EnvVar, "integration")
+	if !Integration() {
+		t.Fatal("Integration() = false with BD_TEST_TIER=integration")
+	}
+	t.Setenv(EnvVar, "unit")
+	if Integration() {
+		t.Fatal("Integration() = true with BD_TEST_TIER=unit")
+	}
+}

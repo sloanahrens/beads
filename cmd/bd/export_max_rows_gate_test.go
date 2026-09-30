@@ -46,10 +46,10 @@ import (
 // export_test.go:1).
 func TestExport_FilterHasZeroMaxRows(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)
@@ -132,10 +132,10 @@ func TestExport_FilterHasZeroMaxRows(t *testing.T) {
 // the test; it does NOT bleed into other tests in the suite.
 func TestExport_BypassesBeadsMaxRows(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	t.Setenv("BEADS_MAX_ROWS", "1")

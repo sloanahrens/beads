@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage/doltutil"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 // TestShouldPurgeDroppedDatabasesGatesOnFlagAlone pins the --purge-dropped
@@ -69,7 +70,7 @@ func TestShouldPurgeDroppedDatabasesGatesOnFlagAlone(t *testing.T) {
 // name is never interleaved with another test's purge.
 func TestPurgeDroppedDatabasesRemovesUndropRecovery(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("no test Dolt server running")
+		testutil.SkipOrFailUnavailable(t, "no test Dolt server running")
 	}
 
 	dsn := doltutil.ServerDSN{Host: "127.0.0.1", Port: testDoltServerPort, User: "root"}.String()
@@ -157,7 +158,7 @@ func TestPurgeDroppedDatabasesRemovesUndropRecovery(t *testing.T) {
 // against this package's shared test Dolt server the same way.
 func TestCleanDatabasesPurgeDroppedReclaimsResidue(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("no test Dolt server running")
+		testutil.SkipOrFailUnavailable(t, "no test Dolt server running")
 	}
 
 	binPath := buildBDUnderTest(t)
