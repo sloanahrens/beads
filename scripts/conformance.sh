@@ -42,7 +42,7 @@ assert_conformance_passed "$dolt_log" "Dolt server"
 
 # Tier 2 (test/conformance, the real-binary CLI corpus) used embedded Dolt as its
 # only reference profile. Embedded Dolt was removed, so the corpus has no
-# reference to diff against until it gains a server-mode profile.
+# reference to diff against until it gains a server-mode profile (be-xu2.7).
 echo "==> Tier 2: skipped (test/conformance has no server-mode reference profile yet)"
 
 echo "==> conformance OK"

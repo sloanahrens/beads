@@ -209,6 +209,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoding changes equivalence class silently, with no error to notice. Longer
   or mixed runs, `__` and `---` included, are unaffected and still collapse.
 
+### Removed
+
+- **Embedded Dolt, proxied-server mode, and the backend registry (be-xu2.2).**
+  bd now runs only against a dolt sql-server, in cgo and nocgo builds alike.
+  - Bare `bd init` selects server mode; `--server` is still accepted.
+  - A workspace whose metadata.json records `dolt_mode: embedded` (or has no
+    metadata and no server host) fails closed with "embedded Dolt was removed".
+  - A `dolt_mode: proxied-server` workspace fails closed and names beads commit
+    92d15f7 as the last bd that ships `bd migrate from-proxied-server-to-server`.
+    The four proxied migrate commands and the `--proxied-server-*` init flags
+    are gone; `--database` works only with `bd init`, as it already did in
+    server mode.
+  - Auto-backup no longer defaults on when a git remote exists; that default
+    only ever applied to embedded workspaces. Set `backup.enabled` to opt in.
+  - `bd dolt show --json` keeps `embedded` (always `false`) and drops
+    `data_dir`; `bd context --json` drops `proxied_dir`.
+  - The public `backend` package loses `Register`, `Deregister`, `Lookup`,
+    `Registered`, `WorkspaceIsBeadsDir` and the `Backend` alias; the storage
+    interface loses `VersionControl.Checkout`/`DeleteBranch` and seven unused
+    `Iter*` methods (IterEvents, IterDependentsWithMetadata and
+    IterIssueComments remain).
+  - `--offset` on `bd list`, `bd ready` and `bd query` only worked in proxied
+    mode; it stays registered and rejects values above 0.
+- **Tracker integrations and `bd federation` (be-xu2.1).** `bd linear`,
+  `bd jira`, `bd github`, `bd gitlab`, `bd ado`, `bd notion` and
+  `bd federation` are removed with the tracker engine. Tracker config keys
+  (`jira.*`, `linear.*`, ...) are no longer recognized; `federation.*` keys
+  still configure Dolt remote sync.
+
 ### Fixed
 
 - **A git worktree whose `.beads` only holds a `redirect` now loads the

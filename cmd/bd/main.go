@@ -1793,7 +1793,8 @@ var rootCmd = &cobra.Command{
 					return HandleError("dolt tip auto-commit failed: %v", err)
 				} else if mode == doltAutoCommitOn {
 					// Apply tip metadata writes now (deferred in recordTipShown for Dolt).
-					// In server mode each write commits inside the storage layer.
+					// local_metadata is dolt-ignored, so these writes need no version
+					// commit; the SQL transaction is the whole write.
 					for tipID := range commandTipIDsShown {
 						key := fmt.Sprintf("tip_%s_last_shown", tipID)
 						value := time.Now().Format(time.RFC3339)
