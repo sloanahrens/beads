@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
 
@@ -13,9 +11,6 @@ import (
 // after main.go's PersistentPreRun completes (cobra runs child PreRunE before
 // parent PreRun, so the check fires too early if placed on adminCmd itself).
 func requireServerMode(cmdName string) error {
-	if !usesSQLServer() {
-		return fmt.Errorf("'bd admin %s' is not yet supported in embedded mode", cmdName)
-	}
 	return nil
 }
 

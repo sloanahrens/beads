@@ -559,9 +559,6 @@ func serveDatabaseSource(beadsDir string) (serveDatabase, error) {
 	if backend := normalizeLoadedConfig(cfg).GetBackend(); backends.Registered(backend) {
 		return serveDatabase{source: serveSourceStore, backend: backend}, nil
 	}
-	if isEmbeddedMode() {
-		return serveDatabase{}, errServeEmbedded()
-	}
 	return serveDatabase{source: serveSourceProvider}, nil
 }
 

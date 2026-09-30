@@ -221,13 +221,6 @@ Examples:
 				warnIfCyclesExist(fromStore)
 			}
 
-			if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-				Command:  "dep add",
-				IssueIDs: []string{fromID, toID},
-			}); err != nil {
-				return HandleErrorRespectJSON("failed to commit: %v", err)
-			}
-
 			if jsonOutput {
 				return outputJSON(map[string]interface{}{
 					"status":     "added",
@@ -408,13 +401,6 @@ Examples:
 		noCycleCheck, _ := cmd.Flags().GetBool("no-cycle-check")
 		if !noCycleCheck {
 			warnIfCyclesExist(fromStore)
-		}
-
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "dep add",
-			IssueIDs: []string{fromID, toID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		explicit := cmd.Flags().Changed("type") || cmd.Flags().Changed("blocked-by") || cmd.Flags().Changed("depends-on")
@@ -1157,13 +1143,6 @@ var depRemoveCmd = &cobra.Command{
 		})
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
-		}
-
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "dep remove",
-			IssueIDs: []string{fullFromID, fullToID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		if jsonOutput {

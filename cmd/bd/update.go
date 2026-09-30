@@ -599,16 +599,9 @@ pointless).`,
 		}
 
 		if len(mutatedStores) > 0 {
-			for s, ids := range mutatedStores {
+			for s := range mutatedStores {
 				if s == nil {
 					continue
-				}
-				if err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
-					Command:  "update",
-					IssueIDs: ids,
-				}); err != nil {
-					closePendingResults()
-					return HandleErrorRespectJSON("failed to commit: %v", err)
 				}
 				for _, id := range notesOverwriteWarnings[s] {
 					warnNotesReplacement(id)

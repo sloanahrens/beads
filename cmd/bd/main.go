@@ -37,7 +37,6 @@ import (
 	"github.com/steveyegge/beads/internal/storage/backends"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	dbidentifier "github.com/steveyegge/beads/internal/storage/domain/db"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/telemetry"
 	"github.com/steveyegge/beads/internal/ui"
@@ -269,7 +268,6 @@ func resolveDoltServerConnection(ctx context.Context, beadsDir string, fileCfg *
 }
 
 var (
-	runPostRunAutoCommit = maybeAutoCommit
 	runPostRunAutoBackup = maybeAutoBackup
 	runPostRunAutoExport = maybeAutoExport
 	runPostRunAutoPush   = maybeAutoPush
@@ -1785,14 +1783,6 @@ var rootCmd = &cobra.Command{
 		}()
 
 		if runsPostCommandMaintenance(cmd.Name(), readonlyMode) {
-			// Dolt auto-commit: after a successful write command (and after final flush),
-			// create a Dolt commit so changes don't remain only in the working set.
-			if commandDidWrite.Load() && !commandDidExplicitDoltCommit {
-				if err := runPostRunAutoCommit(rootCtx, doltAutoCommitParams{Command: cmd.Name()}); err != nil {
-					return HandleError("dolt auto-commit failed: %v", err)
-				}
-			}
-
 			// Tip metadata auto-commit: if a tip was shown, create a separate Dolt commit for the
 			// tip_*_last_shown metadata updates. This may happen even for otherwise read-only commands.
 			if commandDidWriteTipMetadata && len(commandTipIDsShown) > 0 {
@@ -1801,38 +1791,11 @@ var rootCmd = &cobra.Command{
 					return HandleError("dolt tip auto-commit failed: %v", err)
 				} else if mode == doltAutoCommitOn {
 					// Apply tip metadata writes now (deferred in recordTipShown for Dolt).
-					//
-					// A store that refuses writes by construction — the
-					// preview open, and strict --readonly — must not turn
-					// an otherwise successful command into a non-zero exit
-					// here. This block is deliberately not gated by the
-					// read-only classification, and that has been fine
-					// because OpenForReadOnlyCommand is "otherwise a normal
-					// writable store"; the write-refusing opens break that
-					// assumption. Tip bookkeeping is incidental and
-					// recordTipShown's own contract is that it may fail
-					// silently, so skip it and carry on.
-					tipWritesRefused := false
+					// In server mode each write commits inside the storage layer.
 					for tipID := range commandTipIDsShown {
 						key := fmt.Sprintf("tip_%s_last_shown", tipID)
 						value := time.Now().Format(time.RFC3339)
 						if err := store.SetLocalMetadata(rootCtx, key, value); err != nil {
-							if errors.Is(err, embeddeddolt.ErrReadOnly) {
-								debug.Logf("tip auto-commit: store is read-only, skipping tip metadata: %v", err)
-								tipWritesRefused = true
-								break
-							}
-							return HandleError("dolt tip auto-commit failed: %v", err)
-						}
-					}
-
-					if !tipWritesRefused {
-						ids := make([]string, 0, len(commandTipIDsShown))
-						for tipID := range commandTipIDsShown {
-							ids = append(ids, tipID)
-						}
-						msg := formatDoltAutoCommitMessage("tip", getActor(), ids)
-						if err := runPostRunAutoCommit(rootCtx, doltAutoCommitParams{Command: "tip", MessageOverride: msg}); err != nil {
 							return HandleError("dolt tip auto-commit failed: %v", err)
 						}
 					}

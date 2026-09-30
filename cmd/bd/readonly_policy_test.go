@@ -84,90 +84,6 @@ func (s *strictReadonlyPostRunStore) Close() error {
 	return nil
 }
 
-func TestPersistentPostRunStrictReadonlySuppressesMaintenance(t *testing.T) {
-	originalStore := store
-	originalReadonly := readonlyMode
-	originalRootCtx := rootCtx
-	originalRootCancel := rootCancel
-	originalCommandSpan := commandSpan
-	originalProfileFile := profileFile
-	originalTraceFile := traceFile
-	storeMutex.Lock()
-	originalStoreActive := storeActive
-	storeMutex.Unlock()
-	originalDoltAutoCommit := doltAutoCommit
-	originalDidWrite := commandDidWrite.Load()
-	originalDidExplicitCommit := commandDidExplicitDoltCommit
-	originalDidWriteTipMetadata := commandDidWriteTipMetadata
-	originalTipIDsWereNil := commandTipIDsShown == nil
-	originalTipIDsShown := make(map[string]struct{}, len(commandTipIDsShown))
-	for id := range commandTipIDsShown {
-		originalTipIDsShown[id] = struct{}{}
-	}
-	originalCommit := runPostRunAutoCommit
-	originalBackup := runPostRunAutoBackup
-	originalExport := runPostRunAutoExport
-	originalPush := runPostRunAutoPush
-	t.Cleanup(func() {
-		store = originalStore
-		readonlyMode = originalReadonly
-		rootCtx = originalRootCtx
-		rootCancel = originalRootCancel
-		commandSpan = originalCommandSpan
-		profileFile = originalProfileFile
-		traceFile = originalTraceFile
-		storeMutex.Lock()
-		storeActive = originalStoreActive
-		storeMutex.Unlock()
-		doltAutoCommit = originalDoltAutoCommit
-		commandDidWrite.Store(originalDidWrite)
-		commandDidExplicitDoltCommit = originalDidExplicitCommit
-		commandDidWriteTipMetadata = originalDidWriteTipMetadata
-		if originalTipIDsWereNil {
-			commandTipIDsShown = nil
-		} else {
-			commandTipIDsShown = originalTipIDsShown
-		}
-		runPostRunAutoCommit = originalCommit
-		runPostRunAutoBackup = originalBackup
-		runPostRunAutoExport = originalExport
-		runPostRunAutoPush = originalPush
-	})
-
-	maintenanceCalls := 0
-	runPostRunAutoCommit = func(context.Context, doltAutoCommitParams) error { maintenanceCalls++; return nil }
-	runPostRunAutoBackup = func(context.Context) { maintenanceCalls++ }
-	runPostRunAutoExport = func(context.Context, bool) error { maintenanceCalls++; return nil }
-	runPostRunAutoPush = func(context.Context) { maintenanceCalls++ }
-
-	fake := &strictReadonlyPostRunStore{}
-	store = fake
-	readonlyMode = true
-	rootCtx = context.Background()
-	rootCancel = nil
-	commandSpan = nil
-	profileFile = nil
-	traceFile = nil
-	commandDidWrite.Store(true)
-	commandDidExplicitDoltCommit = false
-	commandDidWriteTipMetadata = true
-	commandTipIDsShown = map[string]struct{}{"strict-readonly": {}}
-	doltAutoCommit = string(doltAutoCommitOn)
-
-	if err := rootCmd.PersistentPostRunE(&cobra.Command{Use: "create"}, nil); err != nil {
-		t.Fatalf("PersistentPostRunE: %v", err)
-	}
-	if maintenanceCalls != 0 {
-		t.Fatalf("strict readonly ran %d automatic commit/backup/export/push operation(s)", maintenanceCalls)
-	}
-	if fake.metadataWrites != 0 {
-		t.Fatalf("strict readonly wrote %d tip metadata value(s)", fake.metadataWrites)
-	}
-	if fake.closeCalls != 1 {
-		t.Fatalf("store close calls = %d, want 1", fake.closeCalls)
-	}
-}
-
 type readonlyTreeEntry struct {
 	Mode   fs.FileMode
 	SHA256 string
@@ -345,5 +261,86 @@ func TestConfigValidateReadOnlyIsHermetic(t *testing.T) {
 		if _, err := os.Lstat(filepath.Join(beadsDir, artifact)); !os.IsNotExist(err) {
 			t.Fatalf("strict readonly created server/version artifact %s (stat error: %v)", artifact, err)
 		}
+	}
+}
+
+func TestPersistentPostRunStrictReadonlySuppressesMaintenance(t *testing.T) {
+	originalStore := store
+	originalReadonly := readonlyMode
+	originalRootCtx := rootCtx
+	originalRootCancel := rootCancel
+	originalCommandSpan := commandSpan
+	originalProfileFile := profileFile
+	originalTraceFile := traceFile
+	storeMutex.Lock()
+	originalStoreActive := storeActive
+	storeMutex.Unlock()
+	originalDoltAutoCommit := doltAutoCommit
+	originalDidWrite := commandDidWrite.Load()
+	originalDidExplicitCommit := commandDidExplicitDoltCommit
+	originalDidWriteTipMetadata := commandDidWriteTipMetadata
+	originalTipIDsWereNil := commandTipIDsShown == nil
+	originalTipIDsShown := make(map[string]struct{}, len(commandTipIDsShown))
+	for id := range commandTipIDsShown {
+		originalTipIDsShown[id] = struct{}{}
+	}
+	originalBackup := runPostRunAutoBackup
+	originalExport := runPostRunAutoExport
+	originalPush := runPostRunAutoPush
+	t.Cleanup(func() {
+		store = originalStore
+		readonlyMode = originalReadonly
+		rootCtx = originalRootCtx
+		rootCancel = originalRootCancel
+		commandSpan = originalCommandSpan
+		profileFile = originalProfileFile
+		traceFile = originalTraceFile
+		storeMutex.Lock()
+		storeActive = originalStoreActive
+		storeMutex.Unlock()
+		doltAutoCommit = originalDoltAutoCommit
+		commandDidWrite.Store(originalDidWrite)
+		commandDidExplicitDoltCommit = originalDidExplicitCommit
+		commandDidWriteTipMetadata = originalDidWriteTipMetadata
+		if originalTipIDsWereNil {
+			commandTipIDsShown = nil
+		} else {
+			commandTipIDsShown = originalTipIDsShown
+		}
+		runPostRunAutoBackup = originalBackup
+		runPostRunAutoExport = originalExport
+		runPostRunAutoPush = originalPush
+	})
+
+	maintenanceCalls := 0
+	runPostRunAutoBackup = func(context.Context) { maintenanceCalls++ }
+	runPostRunAutoExport = func(context.Context, bool) error { maintenanceCalls++; return nil }
+	runPostRunAutoPush = func(context.Context) { maintenanceCalls++ }
+
+	fake := &strictReadonlyPostRunStore{}
+	store = fake
+	readonlyMode = true
+	rootCtx = context.Background()
+	rootCancel = nil
+	commandSpan = nil
+	profileFile = nil
+	traceFile = nil
+	commandDidWrite.Store(true)
+	commandDidExplicitDoltCommit = false
+	commandDidWriteTipMetadata = true
+	commandTipIDsShown = map[string]struct{}{"strict-readonly": {}}
+	doltAutoCommit = string(doltAutoCommitOn)
+
+	if err := rootCmd.PersistentPostRunE(&cobra.Command{Use: "create"}, nil); err != nil {
+		t.Fatalf("PersistentPostRunE: %v", err)
+	}
+	if maintenanceCalls != 0 {
+		t.Fatalf("strict readonly ran %d automatic backup/export/push operation(s)", maintenanceCalls)
+	}
+	if fake.metadataWrites != 0 {
+		t.Fatalf("strict readonly wrote %d tip metadata value(s)", fake.metadataWrites)
+	}
+	if fake.closeCalls != 1 {
+		t.Fatalf("store close calls = %d, want 1", fake.closeCalls)
 	}
 }

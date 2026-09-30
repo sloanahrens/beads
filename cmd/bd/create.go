@@ -619,31 +619,6 @@ var createCmd = &cobra.Command{
 		created.Dependencies = nil
 		created.Comments = nil
 
-		edges := createDepEdges{parentID: parentID, specs: depSpecs, waitsFor: waitsForSpec}
-		if edges.empty() {
-			// Bare create: preserve the embedded-mode follow-up Dolt commit.
-			// The deps path commits inside its transaction instead.
-			shouldCommit, err := shouldCommitCreatePostWrites(created, false)
-			if err != nil {
-				return HandleError("dolt auto-commit failed: %v", err)
-			}
-			if shouldCommit {
-				commitMsg := fmt.Sprintf("bd: create %s", created.ID)
-				if err := store.Commit(ctx, commitMsg); err != nil && !isDoltNothingToCommit(err) {
-					WarnError("failed to commit: %v", err)
-				}
-			}
-		}
-
-		if repoPath != "." && targetStore != nil {
-			if err := commitPendingIfEmbedded(ctx, targetStore, actor, doltAutoCommitParams{
-				Command:  "create",
-				IssueIDs: []string{created.ID},
-			}); err != nil {
-				debug.Logf("warning: failed to commit routed repo: %v", err)
-			}
-		}
-
 		if remoteCache != nil {
 			if pushErr := remoteCache.Push(rootCtx, repoPath); pushErr != nil {
 				return HandleError("failed to push to %s: %v\nThe issue was created locally but not synced to the remote.", repoPath, pushErr)
@@ -872,10 +847,6 @@ func renderCreateDryRunPreview(issue *types.Issue, labels, deps []string) {
 	if issue.EventKind != "" {
 		fmt.Printf("  Event category: %s\n", issue.EventKind)
 	}
-}
-
-func shouldCommitCreatePostWrites(_ *types.Issue, _ bool) (bool, error) {
-	return embeddedWritesCommitNow()
 }
 
 func createDepsAcceptedTypeList() string {

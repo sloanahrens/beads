@@ -226,12 +226,6 @@ Examples:
 		if err != nil {
 			return HandleErrorRespectJSON("adding comment: %v", err)
 		}
-		if err := commitPendingIfEmbedded(ctx, result.Store, actor, doltAutoCommitParams{
-			Command:  "comments add",
-			IssueIDs: []string{issueID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
-		}
 
 		if jsonOutput {
 			return outputJSON(comment)

@@ -68,13 +68,6 @@ Examples:
 			return HandleErrorRespectJSON("heartbeat %s: %v", result.ResolvedID, err)
 		}
 
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "heartbeat",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
-		}
-
 		SetLastTouchedID(result.ResolvedID)
 
 		return renderHeartbeatSuccess(result.ResolvedID, result.Issue.Title)

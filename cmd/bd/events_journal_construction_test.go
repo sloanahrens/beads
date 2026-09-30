@@ -52,13 +52,6 @@ var storeConstructors = map[string]map[string]bool{
 		"NewFromConfigWithOptions":    true,
 		"NewFromConfigWithCLIOptions": true,
 	},
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt": {
-		"Open":                       true,
-		"OpenReadOnly":               true,
-		"OpenForReadOnlyCommand":     true,
-		"OpenForPreviewCommand":      true,
-		"OpenForWorkingSetReconcile": true,
-	},
 	"github.com/steveyegge/beads/internal/storage/uow": {
 		"NewDoltServerUOWProvider":         true,
 		"NewExternalDoltServerUOWProvider": true,
@@ -87,14 +80,12 @@ var qualifiedActivationCalls = map[string]map[string]bool{
 }
 
 // scannedPackages are the directories searched for construction sites: every
-// package that builds a store or provider for the bd binary, plus the standalone
-// embedded-Dolt utility so it is accounted for rather than merely unnoticed.
-// Each maps to the prefix its sites are keyed under.
+// package that builds a store or provider for the bd binary. Each maps to the
+// prefix its sites are keyed under.
 var scannedPackages = map[string]string{
 	".":          "",
 	"doctor":     "doctor/",
 	"doctor/fix": "doctor/fix/",
-	"../../internal/storage/embeddeddolt/cmd": "embeddeddolt-cmd/",
 }
 
 // constructionExemptions are construction sites that legitimately do NOT
@@ -165,10 +156,6 @@ var constructionExemptions = map[string]string{
 	// construction" heuristic over-reports, because Lookup here decides a
 	// branch rather than opening anything.
 	"main.go:var rootCmd": "probes backends.Lookup to select a factory; the store is constructed by newRegisteredBackendStore, which activates",
-
-	// A standalone developer utility binary, not bd. It has no workspace config
-	// to read and never runs as part of a bd command.
-	"embeddeddolt-cmd/main.go:main": "standalone embeddeddolt debug utility, not the bd binary; no workspace config and no bd command context",
 }
 
 func TestEveryStoreConstructionActivatesTheEventsJournal(t *testing.T) {

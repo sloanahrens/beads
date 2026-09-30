@@ -2001,7 +2001,7 @@ func TestResolveDoltShowRemotesFromPersistedState(t *testing.T) {
 
 	beadsDir := t.TempDir()
 	dbName := "beads"
-	dbPath := filepath.Join(beadsDir, "embeddeddolt", dbName)
+	dbPath := filepath.Join(beadsDir, "dolt", dbName)
 	if err := os.MkdirAll(filepath.Join(dbPath, ".dolt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2016,7 +2016,7 @@ func TestResolveDoltShowRemotesFromPersistedState(t *testing.T) {
 		t.Fatalf("default dolt database = %q, want %q for fixture layout", cfg.GetDoltDatabase(), dbName)
 	}
 
-	remotes := resolveDoltShowRemotes(beadsDir, cfg, filepath.Join(beadsDir, "embeddeddolt"), true)
+	remotes := resolveDoltShowRemotes(beadsDir, cfg)
 	if len(remotes) != 1 || remotes[0].Name != "origin" {
 		t.Fatalf("resolveDoltShowRemotes = %+v, want origin", remotes)
 	}
@@ -2028,7 +2028,7 @@ func TestResolveDoltShowRemotesFromPersistedState(t *testing.T) {
 func TestResolveDoltShowRemotesNoneWhenNoState(t *testing.T) {
 	withNilStoreForShow(t)
 
-	remotes := resolveDoltShowRemotes(t.TempDir(), configfile.DefaultConfig(), filepath.Join(t.TempDir(), "embeddeddolt"), true)
+	remotes := resolveDoltShowRemotes(t.TempDir(), configfile.DefaultConfig())
 	if len(remotes) != 0 {
 		t.Fatalf("want no remotes, got %+v", remotes)
 	}
@@ -2055,11 +2055,10 @@ func TestResolveDoltShowRemotesModeAppropriate(t *testing.T) {
 	}
 
 	cfg := configfile.DefaultConfig()
-	embeddedDataDir := filepath.Join(beadsDir, "embeddeddolt")
 
 	// Active mode is server (embedded=false): the embedded-only remotes
 	// must not leak through.
-	remotes := resolveDoltShowRemotes(beadsDir, cfg, embeddedDataDir, false)
+	remotes := resolveDoltShowRemotes(beadsDir, cfg)
 	if len(remotes) != 0 {
 		t.Fatalf("server-mode resolve leaked embedded remotes: %+v", remotes)
 	}
@@ -2078,7 +2077,7 @@ func TestResolveDoltShowRemotesAuthoritativeEmpty(t *testing.T) {
 	// The bare embedded data dir (checked first) is present but has no
 	// remotes — this must be treated as authoritative, not skipped in
 	// favor of the dbName-suffixed candidate below.
-	barePath := filepath.Join(beadsDir, "embeddeddolt")
+	barePath := filepath.Join(beadsDir, "dolt")
 	if err := os.MkdirAll(filepath.Join(barePath, ".dolt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2097,7 +2096,7 @@ func TestResolveDoltShowRemotesAuthoritativeEmpty(t *testing.T) {
 	}
 
 	cfg := configfile.DefaultConfig()
-	remotes := resolveDoltShowRemotes(beadsDir, cfg, barePath, true)
+	remotes := resolveDoltShowRemotes(beadsDir, cfg)
 	if len(remotes) != 0 {
 		t.Fatalf("authoritative empty result was overridden by stale candidate: %+v", remotes)
 	}
@@ -2111,7 +2110,7 @@ func TestResolveDoltShowRemotesCorruptStateWarns(t *testing.T) {
 
 	beadsDir := t.TempDir()
 	dbName := "beads"
-	dbPath := filepath.Join(beadsDir, "embeddeddolt", dbName)
+	dbPath := filepath.Join(beadsDir, "dolt", dbName)
 	if err := os.MkdirAll(filepath.Join(dbPath, ".dolt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2128,7 +2127,7 @@ func TestResolveDoltShowRemotesCorruptStateWarns(t *testing.T) {
 	os.Stderr = w
 	defer func() { os.Stderr = origStderr }()
 
-	remotes := resolveDoltShowRemotes(beadsDir, cfg, filepath.Join(beadsDir, "embeddeddolt"), true)
+	remotes := resolveDoltShowRemotes(beadsDir, cfg)
 
 	_ = w.Close()
 	os.Stderr = origStderr

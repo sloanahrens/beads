@@ -201,23 +201,6 @@ func TestServeRefusalsPromiseNothing(t *testing.T) {
 		}
 	})
 
-	t.Run("embedded is still gated", func(t *testing.T) {
-		useStorageModeGlobals(t)
-		if !isEmbeddedMode() {
-			// The !cgo build has no embedded backend to refuse: isEmbeddedMode
-			// is a constant false there, so there is no case to make.
-			t.Skip("this build cannot open an embedded workspace")
-		}
-		beadsDir := writeContractBackendConfig(t, configfile.BackendDolt)
-		_, err := serveDatabaseSource(beadsDir)
-		var unsupported *storage.ErrUnsupported
-		if !errors.As(err, &unsupported) {
-			t.Fatalf("serveDatabaseSource() = %v, want the typed embedded refusal", err)
-		}
-		if unsupported.Backend != "embedded-dolt" {
-			t.Errorf("Backend = %q, want embedded-dolt", unsupported.Backend)
-		}
-	})
 }
 
 // useStorageModeGlobals points the storage-mode accessors at the package

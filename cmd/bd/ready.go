@@ -147,12 +147,6 @@ This is useful for agents executing molecules to see which steps can run next.`,
 				return nil
 			}
 			claimed := res.Claimed
-			if err := commitPendingIfEmbedded(ctx, activeStore, actor, doltAutoCommitParams{
-				Command:  "ready",
-				IssueIDs: []string{claimed.ID},
-			}); err != nil {
-				return HandleErrorRespectJSON("failed to commit: %v", err)
-			}
 			SetLastTouchedID(claimed.ID)
 			if jsonOutput {
 				return outputJSON([]*types.IssueWithCounts{claimed})

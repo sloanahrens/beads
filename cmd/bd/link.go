@@ -79,13 +79,6 @@ Examples:
 
 		warnIfCyclesExist(fromStore)
 
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "link",
-			IssueIDs: []string{fromID, toID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
-		}
-
 		SetLastTouchedID(fromID)
 
 		if jsonOutput {

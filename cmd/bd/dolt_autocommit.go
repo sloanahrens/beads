@@ -63,17 +63,6 @@ func writesCommitNow() (bool, error) {
 	return mode == doltAutoCommitOn, nil
 }
 
-// embeddedWritesCommitNow is writesCommitNow for the embedded-only commit
-// points (the PersistentPostRun working-set flush and create's post-write
-// flush). In SQL-server mode those flushes never run — mode "on" writes
-// version themselves inside the storage layer.
-func embeddedWritesCommitNow() (bool, error) {
-	if !isEmbeddedMode() {
-		return false, nil
-	}
-	return writesCommitNow()
-}
-
 // issueOpsContext applies command auto-commit policy to the context a write verb
 // hands the issue-operations facade. The facade creates its Dolt version commit
 // inside the storage layer, so batch mode cannot blank a commit message the way
@@ -89,73 +78,6 @@ func issueOpsContext(ctx context.Context) (context.Context, error) {
 		return ctx, nil
 	}
 	return issueops.WithDeferredVersionCommit(ctx), nil
-}
-
-type doltAutoCommitParams struct {
-	// Command is the top-level bd command name (e.g., "create", "update").
-	Command string
-	// IssueIDs are the primary issue IDs affected by the command (optional).
-	IssueIDs []string
-	// MessageOverride, if non-empty, is used verbatim.
-	MessageOverride string
-}
-
-// maybeAutoCommit creates a Dolt commit after a successful write command when enabled.
-//
-// Semantics:
-//   - Only applies when dolt auto-commit is "on" AND the active store is versioned (Dolt).
-//   - Skips SQL server modes; the server owns transaction commit lifecycle there.
-//   - In "batch" mode, commits are deferred — changes accumulate in the working set
-//     until an explicit commit point (bd dolt commit).
-//   - Uses Dolt's "commit all" behavior under the hood (DOLT_COMMIT -Am).
-//   - Treats "nothing to commit" as a no-op.
-func maybeAutoCommit(ctx context.Context, p doltAutoCommitParams) error {
-	if !isEmbeddedMode() {
-		return nil
-	}
-	return maybeAutoCommitStore(ctx, getStore(), p)
-}
-
-func commitPendingIfEmbedded(ctx context.Context, st storage.DoltStorage, actor string, p doltAutoCommitParams) error {
-	if !isEmbeddedMode() || st == nil {
-		return nil
-	}
-	if strings.TrimSpace(p.MessageOverride) == "" {
-		p.MessageOverride = formatDoltAutoCommitMessage(p.Command, actor, p.IssueIDs)
-	}
-	return maybeAutoCommitStore(ctx, st, p)
-}
-
-func maybeAutoCommitStore(ctx context.Context, st storage.DoltStorage, p doltAutoCommitParams) error {
-	mode, err := getDoltAutoCommitMode()
-	if err != nil {
-		return err
-	}
-	// In batch mode, skip per-command commits. Changes stay in the working set
-	// and are committed at logical boundaries (bd dolt commit).
-	if mode != doltAutoCommitOn {
-		return nil
-	}
-
-	if st == nil {
-		return nil
-	}
-	if lm, ok := storage.UnwrapStore(st).(storage.LifecycleManager); ok && lm.IsClosed() {
-		return nil
-	}
-
-	msg := p.MessageOverride
-	if strings.TrimSpace(msg) == "" {
-		msg = formatDoltAutoCommitMessage(p.Command, getActor(), p.IssueIDs)
-	}
-
-	if err := st.Commit(ctx, msg); err != nil {
-		if isDoltNothingToCommit(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
 }
 
 func isDoltNothingToCommit(err error) bool {

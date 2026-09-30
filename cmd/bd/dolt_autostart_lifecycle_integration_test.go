@@ -15,9 +15,6 @@ import (
 )
 
 func TestE2E_AutoStartedRepoLocalServerPersistsAcrossCommands(t *testing.T) {
-	if !usesSQLServer() {
-		t.Skip("skipping: bd dolt status not supported in embedded mode")
-	}
 	if runtime.GOOS == windowsOS {
 		t.Skip("repo-local dolt lifecycle integration test not supported on windows")
 	}

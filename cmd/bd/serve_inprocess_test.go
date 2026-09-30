@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/spf13/pflag"
 )
 
 // Shared plumbing for the tests that run `bd serve` IN-PROCESS.
@@ -50,43 +48,6 @@ func restoreServeGlobals(t *testing.T) {
 		rootCtx, rootCancel = origCtx, origCancel
 		cmdCtx, testModeUseGlobals = origCmdCtx, origUseGlobals
 		rootCmd.SetArgs(nil)
-	})
-}
-
-// resetRootPersistentFlags puts every root persistent flag back to the default
-// it was declared with, and clears its Changed bit, for the duration of one
-// test.
-//
-// A test binary that runs the root command in-process inherits whatever the
-// thousands of tests before it left in those flags and their bound globals —
-// and `Changed` is what several PersistentPreRunE branches dispatch on, not the
-// value. A stale `--db`/`--database` alone makes the pre-run refuse with
-// "--database ... is only supported in proxied-server mode" before the command
-// under test ever runs. Reset before, restore after, so this test neither reads
-// nor writes that shared state.
-func resetRootPersistentFlags(t *testing.T) {
-	t.Helper()
-	type flagState struct {
-		value   string
-		changed bool
-	}
-	before := map[string]flagState{}
-	rootCmd.PersistentFlags().VisitAll(func(f *pflag.Flag) {
-		before[f.Name] = flagState{value: f.Value.String(), changed: f.Changed}
-		if err := f.Value.Set(f.DefValue); err != nil {
-			t.Fatalf("reset --%s to its default %q: %v", f.Name, f.DefValue, err)
-		}
-		f.Changed = false
-	})
-	t.Cleanup(func() {
-		rootCmd.PersistentFlags().VisitAll(func(f *pflag.Flag) {
-			state, ok := before[f.Name]
-			if !ok {
-				return
-			}
-			_ = f.Value.Set(state.value)
-			f.Changed = state.changed
-		})
 	})
 }
 

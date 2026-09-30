@@ -24,7 +24,6 @@ import (
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/storage/versioncontrolops"
 	"golang.org/x/term"
@@ -535,11 +534,7 @@ func printBootstrapPlan(plan BootstrapPlan) {
 	switch plan.Action {
 	case "none":
 		fmt.Printf("✓ Database already exists: %s\n", plan.BeadsDir)
-		if !usesSQLServer() {
-			fmt.Printf("  Nothing to do.\n")
-		} else {
-			fmt.Printf("  Nothing to do. Use 'bd doctor' to check health.\n")
-		}
+		fmt.Printf("  Nothing to do. Use 'bd doctor' to check health.\n")
 	case "sync":
 		fmt.Printf("Bootstrap plan: clone from remote\n")
 		fmt.Printf("  Remote: %s\n", plan.SyncRemote)
@@ -864,7 +859,7 @@ const (
 )
 
 // cloneFromRemote clones a Dolt database from a remote URL.
-// In embedded mode, uses the embedded engine's DOLT_CLONE procedure.
+// A workspace that resolves to embedded mode is refused.
 // In external server mode, connects to the running server via MySQL and
 // executes DOLT_CLONE so the server places the database in its own data
 // directory. In owned-server mode, shells out to dolt clone via
@@ -879,7 +874,9 @@ func cloneFromRemoteWithMode(ctx context.Context, beadsDir, remoteURL, dbName st
 
 	switch mode {
 	case remoteCloneEmbedded:
-		return cloneViaEmbedded(ctx, beadsDir, remoteURL, dbName)
+		// Embedded Dolt was removed; a workspace that resolves to it has no
+		// engine to clone into.
+		return fmt.Errorf("%s", embeddedRemovedErrMsg)
 
 	case remoteCloneExternalServer:
 		if cfg == nil {
@@ -920,25 +917,6 @@ func resolveRemoteCloneMode(beadsDir string, cfg *configfile.Config, cloneMode r
 	default:
 		return remoteCloneCLI
 	}
-}
-
-// cloneViaEmbedded clones using the embedded Dolt engine (CGO required).
-func cloneViaEmbedded(ctx context.Context, beadsDir, remoteURL, dbName string) error {
-	dataDir := filepath.Join(beadsDir, "embeddeddolt")
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
-		return fmt.Errorf("create embeddeddolt directory: %w", err)
-	}
-	db, cleanup, err := embeddeddolt.OpenSQL(ctx, dataDir, "", "")
-	if err != nil {
-		return fmt.Errorf("open embedded engine for clone: %w", err)
-	}
-	defer func() { _ = cleanup() }()
-
-	if err := versioncontrolops.DoltClone(ctx, db, remoteURL, dbName, os.Getenv("DOLT_REMOTE_USER")); err != nil {
-		return fmt.Errorf("clone from remote: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Synced database from %s\n", remoteURL)
-	return nil
 }
 
 // cloneViaServer clones by connecting to the external Dolt server and

@@ -109,12 +109,6 @@ Examples:
 		for _, r := range reclaimed {
 			ids = append(ids, r.ID)
 		}
-		if err := commitPendingIfEmbedded(ctx, store, actor, doltAutoCommitParams{
-			Command:  "reclaim",
-			IssueIDs: ids,
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
-		}
 
 		return renderReclaim(reclaimed, !filter.IsEmpty())
 	},

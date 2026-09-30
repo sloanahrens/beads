@@ -1,5 +1,3 @@
-//go:build cgo
-
 package beads
 
 import (
@@ -9,17 +7,12 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage/backends"
 	"github.com/steveyegge/beads/internal/storage/dolt"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 )
 
 // OpenBestAvailable opens a beads database using the best available backend
-// for the given .beads directory. It reads metadata.json to determine the
-// configured mode:
-//
-//   - Embedded Dolt (default): Opens via the CGo embedded Dolt engine.
-//   - Dolt server: Connects to a dolt sql-server via OpenFromConfig.
-//
-// The returned Storage must be closed when no longer needed.
+// for the given .beads directory. Only Dolt server mode is supported; a
+// workspace recorded as embedded returns an error directing the user to
+// server mode.
 //
 // beadsDir is the path to the .beads directory.
 func OpenBestAvailable(ctx context.Context, beadsDir string) (Storage, error) {
@@ -35,8 +28,7 @@ func OpenBestAvailable(ctx context.Context, beadsDir string) (Storage, error) {
 	}
 
 	// Dispatch to a registered extension backend before any Dolt path, mirroring
-	// the CLI store factories so SDK callers get the backend they registered
-	// instead of a silently-opened embedded Dolt store.
+	// the CLI store factories so SDK callers get the backend they registered.
 	if backend, ok := backends.Lookup(cfg.GetBackend()); ok {
 		return backend.Open(ctx, beadsDir)
 	}
@@ -48,14 +40,5 @@ func OpenBestAvailable(ctx context.Context, beadsDir string) (Storage, error) {
 		}
 		return store, nil
 	}
-
-	database := configfile.DefaultDoltDatabase
-	if cfg != nil {
-		database = cfg.GetDoltDatabase()
-	}
-	store, err := embeddeddolt.Open(ctx, beadsDir, database, "main")
-	if err != nil {
-		return nil, err
-	}
-	return store, nil
+	return nil, fmt.Errorf("embedded Dolt was removed; use server mode (bd init --server)")
 }

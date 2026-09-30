@@ -80,13 +80,6 @@ Examples:
 			return HandleErrorRespectJSON("updating %s: %v", id, err)
 		}
 
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "assign",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
-		}
-
 		SetLastTouchedID(result.ResolvedID)
 
 		updatedIssue, _ := issueStore.GetIssue(ctx, result.ResolvedID)

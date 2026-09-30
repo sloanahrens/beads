@@ -1,54 +1,18 @@
-//go:build cgo
-
 package main
 
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
-	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/configfile"
-	"github.com/steveyegge/beads/internal/doltserver"
-	"github.com/steveyegge/beads/internal/lockfile"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/backends"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	"github.com/steveyegge/beads/internal/storage/dolt"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 )
 
-func usesSQLServer() bool {
-	if shouldUseGlobals() {
-		if serverMode {
-			return true
-		}
-	} else if cmdCtx != nil && cmdCtx.ServerMode {
-		return true
-	}
-	if doltserver.IsSharedServerMode() {
-		return true
-	}
-	return false // default: embedded
-}
-
-// isEmbeddedMode reports whether the command is using embedded Dolt storage.
-func isEmbeddedMode() bool {
-	return !usesSQLServer()
-}
-
-// newDoltStore creates a storage backend from an explicit config.
-// Used by bd init and PersistentPreRun.
-//
-// Events-journal activation is applied HERE rather than by the caller: see the
-// note at the top of events_journal.go for why every store construction has to
-// go through an activating factory.
 // newRegisteredBackendStore opens a store from the pluggable backend registry,
-// so the registry arm of the root pre-run's open is not a second, unactivated
-// construction path. A read-only open still goes through activation: a
-// registered backend decides for itself what read-only means, and refusing to
-// offer it the setting would be this factory guessing on its behalf.
+// so the registry arm of the root pre-run's open goes through events-journal
+// activation like every other construction path.
 func newRegisteredBackendStore(ctx context.Context, name, beadsDir string, readOnly bool) (s storage.DoltStorage, err error) {
 	defer func() { s, err = activateEventsJournalStore(beadsDir, s, err) }()
 	backend, ok := backends.Lookup(name)
@@ -61,135 +25,26 @@ func newRegisteredBackendStore(ctx context.Context, name, beadsDir string, readO
 	return backend.Open(ctx, beadsDir)
 }
 
+// newDoltStore creates a storage backend from an explicit config. It applies
+// events-journal activation here rather than in the caller — see the note at
+// the top of events_journal.go.
 func newDoltStore(ctx context.Context, cfg *dolt.Config) (s storage.DoltStorage, err error) {
 	defer func() { s, err = activateEventsJournalStore(cfg.BeadsDir, s, err) }()
-	if cfg.ServerMode {
-		return dolt.New(ctx, cfg)
+	if !cfg.ServerMode {
+		return nil, fmt.Errorf("%s", embeddedRemovedErrMsg)
 	}
-	if refuseToCreateEmbedded(cfg) {
-		// be-n2s: every embedded open below is create-or-open, and bd's
-		// discovery accepts a bare embeddeddolt/ directory as an initialized
-		// workspace — so a directory that merely HAS one gains a database on
-		// the next command of any kind, whether or not any command ever
-		// declared a workspace there, and discovery then finds it forever
-		// after. A caller that declared the create (Config.CreateIfMissing:
-		// bd init, bd bootstrap, the --repo auto-vivify) is not refused, and
-		// neither is a shell that does hold the requested database: the
-		// guard establishes that the open is not a create, it does not
-		// replace the open.
-		if err := embeddeddolt.RequireDatabase(cfg.BeadsDir, cfg.Database); err != nil {
-			return nil, err
-		}
-	}
-	if cfg.Preview {
-		// Preview commands are stricter than ordinary read commands: they
-		// must not run schema initialization or permit incidental writes
-		// before their RunE honors --dry-run/--inspect.
-		return embeddeddolt.OpenForPreviewCommand(ctx, cfg.BeadsDir, cfg.Database, "main")
-	}
-	if cfg.ReadOnly {
-		if cfg.DisableAutoStart {
-			// Strict --readonly (cfg.DisableAutoStart is the strict-only
-			// signal threaded from policy.disableAutoStart): the command
-			// must not write anything, not even incidentally (schema
-			// init, migrations, the post-command autocommit net). Use the
-			// genuinely write-refusing open — same one used for cross-repo
-			// hydration of foreign projects (GH#3231, bd-6dnrw.32) — instead
-			// of OpenForReadOnlyCommand, which is "otherwise a normal
-			// writable store".
-			return embeddeddolt.OpenReadOnly(ctx, cfg.BeadsDir, cfg.Database, "main")
-		}
-		// Ordinary classified-read commands (bd show, bd list, ...) must
-		// not be bricked by the #4259 remote-migrate gate (bd-578h9.5);
-		// server mode's ReadOnly opens already skip migration entirely.
-		return embeddeddolt.OpenForReadOnlyCommand(ctx, cfg.BeadsDir, cfg.Database, "main")
-	}
-	if cfg.LenientOpen {
-		// Working-set-reconcile commands (bd dolt commit, bd vc commit) must
-		// not be bricked by a pending-migration dirty-table refusal: that
-		// refusal's documented recovery is exactly the commit these commands
-		// run, so failing the open here would deadlock (#4566).
-		return embeddeddolt.OpenForWorkingSetReconcile(ctx, cfg.BeadsDir, cfg.Database, "main")
-	}
-	return embeddeddolt.Open(ctx, cfg.BeadsDir, cfg.Database, "main")
+	return dolt.New(ctx, cfg)
 }
 
-// refuseToCreateEmbedded reports whether an embedded open must not be allowed
-// to create the database it names.
-//
-// The signal is a directory that carries an embeddeddolt/ tree but no
-// explicit workspace marker: it already looks like a workspace to discovery
-// (internal/beads' findDatabaseInBeadsDir falls back to a bare embeddeddolt/
-// directory, so it resolves a database path here), yet nothing ever declared
-// it one — no bd init, no metadata.json, no config.yaml. In that state a
-// missing database is an inconsistency to report, not a fresh install to
-// perform: creating one is precisely the phantom that made the town's fossil
-// rig roots (be-n2s), and bd init already treats the same combination as
-// "this workspace is already initialized" (cmd/bd/init.go).
-//
-// The check runs before the open's intent dispatch rather than inside one
-// branch, because every embedded intent except preview is create-capable —
-// including the ordinary classified-read open, so `bd list` in a fossil
-// directory fabricated a database just as `bd create` did.
-//
-// Two shapes are deliberately NOT refused. Config.CreateIfMissing is the
-// caller declaring the create (bd init, bd bootstrap, the --repo
-// auto-vivify), and init needs it precisely here: init creates
-// .beads/embeddeddolt/ — for its lock — before it writes metadata.json, so at
-// its store open the directory is marker-less with a shell in it. And a
-// directory with no embeddeddolt/ at all is the shape of a genuine first run
-// (bd import on a bare directory, a fresh clone rebuilt from tracked
-// issues.jsonl), which must keep creating. A workspace legitimately missing
-// only its database still has its marker, so it is not refused either.
-func refuseToCreateEmbedded(cfg *dolt.Config) bool {
-	if cfg.CreateIfMissing || beads.HasWorkspaceMarker(cfg.BeadsDir) {
-		return false
-	}
-	info, err := os.Stat(filepath.Join(cfg.BeadsDir, "embeddeddolt"))
-	return err == nil && info.IsDir()
-}
-
-// acquireEmbeddedLock acquires an exclusive flock on the embeddeddolt data
-// directory derived from beadsDir. The caller must defer lock.Unlock().
-// Returns a no-op lock when serverMode is true (the server handles its own
-// concurrency).
-func acquireEmbeddedLock(beadsDir string, serverMode bool) (util.Unlocker, error) {
-	if serverMode {
-		return util.NoopLock{}, nil
-	}
-	dataDir := filepath.Join(beadsDir, "embeddeddolt")
-	lock, err := util.TryLock(filepath.Join(dataDir, ".lock"))
-	if err != nil {
-		if lockfile.IsLocked(err) {
-			return nil, fmt.Errorf("embeddeddolt: another process holds the exclusive lock on %s; "+
-				"the embedded backend supports only one writer at a time — "+
-				"use the dolt server backend for concurrent access", dataDir)
-		}
-		return nil, fmt.Errorf("embeddeddolt: acquiring lock: %w", err)
-	}
-	return lock, nil
-}
-
-// newDoltStoreFromConfig creates a storage backend from the beads directory's
-// persisted metadata.json configuration. Uses embedded Dolt by default;
-// connects to dolt sql-server when dolt_mode is "server".
-//
-// For embedded mode, legacy hyphenated database names (pre-GH#2142) are
-// auto-sanitized to underscores and the fix is persisted to metadata.json.
-//
-// This is the factory the CROSS-WORKSPACE opens use — routed creates,
-// remote-cache hydration — so activation is resolved from beadsDir's own
-// config, not the launching workspace's.
+// newDoltStoreFromConfig creates a SQL-server-backed storage backend from config.
 func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (s storage.DoltStorage, err error) {
 	defer func() { s, err = activateEventsJournalStore(beadsDir, s, err) }()
 	cfg, err := configfile.Load(beadsDir)
 	if err != nil {
-		// A present-but-unloadable metadata.json must not degrade to the
-		// embedded default: on server-mode deployments the embedded
-		// directory is an empty relic, and opening it silently turns every
-		// query into an empty result set with exit 0 (false-empty). Absent
-		// metadata.json (cfg == nil, err == nil) keeps the embedded default.
-		return nil, fmt.Errorf("load %s: %w (refusing to fall back to the embedded store)", configfile.ConfigPath(beadsDir), err)
+		// Name the real cause: without this, a present-but-unloadable
+		// metadata.json surfaces as the misleading "embedded was removed"
+		// message below.
+		return nil, fmt.Errorf("load %s: %w", configfile.ConfigPath(beadsDir), err)
 	}
 	if err := validateConfiguredBackend(cfg); err != nil {
 		return nil, err
@@ -201,94 +56,17 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (s storage.Dol
 	if cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfig(ctx, beadsDir)
 	}
-	database := configfile.DefaultDoltDatabase
-	if cfg != nil {
-		database = cfg.GetDoltDatabase()
-	}
-	if sanitized := sanitizeDBName(database); sanitized != database {
-		if err := migrateHyphenatedDB(beadsDir, cfg, database, sanitized); err != nil {
-			return nil, fmt.Errorf("auto-sanitize database name %q → %q: %w", database, sanitized, err)
-		}
-		database = sanitized
-	}
-	return embeddeddolt.Open(ctx, beadsDir, database, "main")
+	return nil, fmt.Errorf("%s", embeddedRemovedErrMsg)
 }
 
-// migrateHyphenatedDB renames a legacy hyphenated database directory and
-// persists the sanitized name to metadata.json so subsequent opens use it.
-// This handles projects initialized before GH#2142 that upgrade to
-// embedded-mode-default builds (GH#3231).
-func migrateHyphenatedDB(beadsDir string, cfg *configfile.Config, oldName, newName string) error {
-	dataDir := filepath.Join(beadsDir, "embeddeddolt")
-	oldDir := filepath.Join(dataDir, oldName)
-	newDir := filepath.Join(dataDir, newName)
-
-	oldExists := false
-	if info, err := os.Stat(oldDir); err == nil && info.IsDir() {
-		oldExists = true
-	}
-
-	if oldExists {
-		_, newErr := os.Stat(newDir)
-		switch {
-		case newErr == nil:
-			return fmt.Errorf("cannot auto-migrate database: both %q and %q exist under %s; remove one manually and retry",
-				oldName, newName, dataDir)
-		case !os.IsNotExist(newErr):
-			return fmt.Errorf("checking target directory %q: %w", newDir, newErr)
-		default:
-			if err := os.Rename(oldDir, newDir); err != nil {
-				return fmt.Errorf("renaming database directory: %w", err)
-			}
-			fmt.Fprintf(os.Stderr, "bd: migrated database directory %q → %q (GH#3231)\n", oldName, newName)
-		}
-	}
-
-	if cfg != nil && cfg.DoltDatabase != newName {
-		cfg.DoltDatabase = newName
-		if err := cfg.Save(beadsDir); err != nil {
-			return fmt.Errorf("persisting sanitized database name to metadata.json: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "bd: updated metadata.json dolt_database %q → %q (GH#3231)\n", oldName, newName)
-	}
-	return nil
-}
-
-// newReadOnlyStoreFromConfig creates a read-only storage backend from the beads
-// directory's persisted metadata.json configuration.
-//
-// For embedded mode, invalid characters (hyphens, dots) are sanitized in-memory
-// only — no directory renames or metadata.json writes. This prevents cross-repo
-// hydration from mutating foreign projects (GH#3231).
+// newReadOnlyStoreFromConfig creates a read-only SQL-server-backed storage
+// backend. It does not activate the events journal: the store refuses writes,
+// so there is no mutation for a journal row to accompany (exemption is recorded
+// in the construction guard).
 func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
-	return openNonMutatingStoreFromConfig(ctx, beadsDir, false)
-}
-
-// newPreviewStoreFromConfig is newReadOnlyStoreFromConfig for a preview
-// command (--dry-run, --inspect) reading a repository it was only pointed at:
-// the same non-mutating open, but a BEHIND schema cursor is tolerated rather
-// than refused, matching embeddeddolt.OpenForPreviewCommand and the preview
-// policy the root pre-run applies to the command's own store. A preview that
-// only reads a parent issue out of another repo should not be the thing that
-// refuses because that repo has not been migrated yet — and it must certainly
-// not migrate it.
-func newPreviewStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
-	return openNonMutatingStoreFromConfig(ctx, beadsDir, true)
-}
-
-// openNonMutatingStoreFromConfig deliberately does NOT activate the events
-// journal: every arm below opens a store that refuses writes (OpenReadOnly,
-// OpenForPreviewCommand, ReadOnly server config), so there is no mutation for a
-// journal row to accompany. Registered in the construction guard's exemption
-// list with that reason.
-func openNonMutatingStoreFromConfig(ctx context.Context, beadsDir string, preview bool) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
 	if err != nil {
-		// Same contract as newDoltStoreFromConfig: a present-but-unloadable
-		// metadata.json is a hard error, not a silent embedded fallback —
-		// and the error must name the real cause rather than the downstream
-		// "database not found" the embedded open would produce.
-		return nil, fmt.Errorf("load %s: %w (refusing to fall back to the embedded store)", configfile.ConfigPath(beadsDir), err)
+		return nil, fmt.Errorf("load %s: %w", configfile.ConfigPath(beadsDir), err)
 	}
 	if err := validateConfiguredBackend(cfg); err != nil {
 		return nil, err
@@ -300,19 +78,18 @@ func openNonMutatingStoreFromConfig(ctx context.Context, beadsDir string, previe
 	if cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfigWithOptions(ctx, beadsDir, &dolt.Config{ReadOnly: true})
 	}
-	database := configfile.DefaultDoltDatabase
-	if cfg != nil {
-		database = cfg.GetDoltDatabase()
-	}
-	if sanitized := sanitizeDBName(database); sanitized != database {
-		database = sanitized
-	}
-	if preview {
-		return embeddeddolt.OpenForPreviewCommand(ctx, beadsDir, database, "main")
-	}
-	// OpenReadOnly, not Open: a read-only open of a foreign project must not
-	// run the remote-migrate gate (a behind, remote-backed database would fail
-	// hard) and must not write migrations into the target's history
-	// (bd-6dnrw.32, GH#3231).
-	return embeddeddolt.OpenReadOnly(ctx, beadsDir, database, "main")
+	return nil, fmt.Errorf("%s", embeddedRemovedErrMsg)
 }
+
+// newPreviewStoreFromConfig is the store open for a preview command
+// (--dry-run, --inspect). With no embedded store, preview and read-only opens
+// coincide.
+func newPreviewStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
+	return newReadOnlyStoreFromConfig(ctx, beadsDir)
+}
+
+const embeddedRemovedErrMsg = `embedded Dolt was removed; bd runs only against a dolt sql-server.
+
+Initialize this workspace in server mode:
+  bd init --server
+Requires a running 'dolt sql-server'. See docs/architecture/dolt.md.`

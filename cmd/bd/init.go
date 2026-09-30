@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -26,7 +25,6 @@ import (
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/backends"
 	"github.com/steveyegge/beads/internal/storage/dolt"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/templates/agents"
 	"github.com/steveyegge/beads/internal/ui"
@@ -551,84 +549,28 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
+		// Embedded Dolt was removed: with no server mode selected by a flag,
+		// env var, inherited metadata, or config.yaml, there is nothing to
+		// initialize. Refuse before any directory or file is written.
+		if !initServerMode {
+			return fmt.Errorf("%s", embeddedRemovedErrMsg)
+		}
+
 		// Explicit connection flags outrank stale BEADS_DOLT_SERVER_* values
 		// (GH#5177). This must run AFTER every source of server mode has been
 		// consulted above: --server, BEADS_DOLT_SERVER_MODE, --shared-server,
 		// workspace inheritance, and config.yaml dolt.mode. In embedded mode
 		// the flags are still recorded in metadata.json, but promoting them
 		// into the environment would trip init's own remote-host guard below.
-		if initServerMode {
-			restoreServerConnEnv, err := promoteExplicitServerConnFlags(cmd)
-			if err != nil {
-				return err
-			}
-			defer restoreServerConnEnv()
+		restoreServerConnEnv, err := promoteExplicitServerConnFlags(cmd)
+		if err != nil {
+			return err
 		}
-
-		// Reject hyphens in --database for embedded mode. Must run AFTER
-		// serverMode is set above — otherwise !usesSQLServer() always returns
-		// true and incorrectly rejects server-mode names (GH#3231).
-		if database != "" && strings.ContainsRune(database, '-') && !usesSQLServer() {
-			return fmt.Errorf("database name %q contains hyphens which are invalid in embedded mode; use underscores instead (e.g. %q)",
-				database, sanitizeDBName(database))
-		}
+		defer restoreServerConnEnv()
 
 		// Hard fail: if a remote dolt.host is configured, server mode MUST
 		// be active — embedded mode has no host. dolt.port alone is ambient
 		// plumbing (e.g. test harnesses) and is not treated as server intent.
-		if !initServerMode {
-			configHost := config.GetYamlConfig("dolt.host")
-			envHost := os.Getenv("BEADS_DOLT_SERVER_HOST")
-			configPort := config.GetYamlConfig("dolt.port")
-			envPort := os.Getenv("BEADS_DOLT_SERVER_PORT")
-
-			if conflict := detectInitRemoteHostConflict(configHost, envHost, configPort, envPort); conflict != nil {
-				detail := fmt.Sprintf("dolt.host (%s) is", conflict.host)
-				if conflict.includesPort {
-					detail = fmt.Sprintf("dolt.host (%s) and dolt.port are", conflict.host)
-				}
-				return fmt.Errorf("%s set via %s but server mode is not enabled.\n"+
-					"  Embedded mode has no host/port — these settings require server mode.\n"+
-					"  Set dolt.mode: server in %s or pass --server to bd init.",
-					detail, conflict.source, config.UserConfigYamlDisplayPath())
-			}
-		}
-
-		// A metadata.json that exists but cannot be parsed is the one broken
-		// workspace init can repair without going near the database. Everything
-		// below refuses to reinitialize precisely so init cannot repoint a
-		// workspace whose metadata.json is the only pointer to a database
-		// elsewhere; rewriting the file from disk evidence is what lets a user
-		// back in without init having to guess.
-		//
-		// Only a plain embedded init repairs in place. Every other intent is a
-		// request this repair would swallow by exiting right after the rewrite:
-		// --reinit-local/--force/--discard-remote replace the workspace,
-		// --from-jsonl/--remote bring data in, and an explicit server mode names
-		// a database the rewritten file would not describe. A shared server
-		// configured only in config.yaml counts as explicit here too — bd doctor
-		// refuses the same workspace using the same predicate.
-		plainEmbeddedInit := !initServerMode &&
-			!initModeExplicitlyRequested(cmd) && !doltserver.IsSharedServerMode()
-		if plainEmbeddedInit && !reinitLocal && !force && !fromJSONL && !discardRemote &&
-			destroyToken == "" && initRemote == "" {
-			beadsDir := resolveInitBeadsDir()
-			// The rewrite records the database name the on-disk evidence names,
-			// so it may only run when no explicit selector disagrees with it.
-			// --database/--prefix are checked against the same discovered name
-			// the repair would write, not merely refused: bd init --prefix cm is
-			// how the documented repair is reached.
-			discoveredDatabase, _ := embeddeddolt.SoleRepository(beadsDir)
-			if !explicitRepairConflict(cmd, prefix, database, discoveredDatabase) {
-				repaired, repairErr := repairUnreadableMetadata(rootCtx, beadsDir, discoveredDatabase)
-				if repairErr != nil {
-					return repairErr
-				}
-				if repaired {
-					return nil
-				}
-			}
-		}
 
 		// Historical workspaces need an explicit sealed-copy bridge. This runs
 		// before init's existing-workspace checks so even --force cannot create
@@ -835,8 +777,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// never covers it — this is its own acquisition site. The workspace
 		// gate file lives BESIDE .beads (<parent>/.beads.gate.lock), so it
 		// works before .beads exists; the acquisition must come before any
-		// directory writes below, and before acquireEmbeddedLock (lock
-		// ordering: gates rank before every other beads lock).
+		// directory writes below (lock ordering: gates rank before every
+		// other beads lock).
 		plannedDBPathAbs, err := filepath.Abs(plannedDBPath)
 		if err != nil {
 			plannedDBPathAbs = filepath.Clean(plannedDBPath)
@@ -998,16 +940,14 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// so we create the marker directory explicitly.
 		// In embedded mode the engine creates its own directories under .beads/embeddeddolt/,
 		// so skip this to avoid leaving an empty .beads/dolt/ artifact (GH#2903).
-		if initServerMode {
-			if err := os.MkdirAll(initDBPath, config.BeadsDirPerm); err != nil {
-				return fmt.Errorf("failed to create storage directory %s: %v", initDBPath, err)
-			}
-			// Linux btrfs: disable compression on the dolt data dir to avoid
-			// kworker thrashing on the append-only write path. Best-effort; a
-			// non-btrfs filesystem returns nil from applyNoCOW.
-			if err := applyNoCOW(initDBPath); err != nil && !quiet {
-				fmt.Fprintf(os.Stderr, "Warning: failed to set FS_NOCOW_FL on %s: %v\n", initDBPath, err)
-			}
+		if err := os.MkdirAll(initDBPath, config.BeadsDirPerm); err != nil {
+			return fmt.Errorf("failed to create storage directory %s: %v", initDBPath, err)
+		}
+		// Linux btrfs: disable compression on the dolt data dir to avoid
+		// kworker thrashing on the append-only write path. Best-effort; a
+		// non-btrfs filesystem returns nil from applyNoCOW.
+		if err := applyNoCOW(initDBPath); err != nil && !quiet {
+			fmt.Fprintf(os.Stderr, "Warning: failed to set FS_NOCOW_FL on %s: %v\n", initDBPath, err)
 		}
 
 		ctx := rootCtx
@@ -1232,9 +1172,9 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			ServerPort:             initPort,
 			ServerPortSource:       initPortSource,
 			ServerPortSharedServer: initPortShared,
-			ServerMode:             initServerMode,
+			ServerMode:             true,
 			CreateIfMissing:        true, // bd init is the only path that should create databases
-			AutoStart:              initServerMode && os.Getenv("BEADS_DOLT_AUTO_START") != "0",
+			AutoStart:              os.Getenv("BEADS_DOLT_AUTO_START") != "0",
 			ServerTLS:              initDoltServerTLSFromEnv(),
 		}
 		if serverHost != "" {
@@ -1263,13 +1203,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			fmt.Fprintf(os.Stderr, "Error: resolving dolt credential command: %v\n", err)
 			return &exitError{Code: 1}
 		}
-
-		initLock, err := acquireEmbeddedLock(beadsDir, initServerMode)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return &exitError{Code: 1}
-		}
-		defer initLock.Unlock()
 
 		// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/
 		// directory — including noms/LOCK files. These are Dolt-internal files.
@@ -1558,12 +1491,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				if existingCfg != nil {
 					priorMode = strings.ToLower(strings.TrimSpace(existingCfg.DoltMode))
 				}
-				switch {
-				case usesSQLServer():
-					cfg.DoltMode = configfile.DoltModeServer
-				default:
-					cfg.DoltMode = configfile.DoltModeEmbedded
-				}
+				cfg.DoltMode = configfile.DoltModeServer
 				// A mode change on an existing workspace is never silent
 				// (#3885). By this point the inheritance above has already
 				// preserved the old mode unless something explicitly asked to
@@ -1820,10 +1748,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			fmt.Fprintf(os.Stderr, "Warning: failed to close database: %v\n", err)
 		}
 
-		if initServerMode {
-			if err := doltserver.MarkDoltDirCompatible(storagePath); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to write Dolt compatibility marker at %s: %v\n", storagePath, err)
-			}
+		if err := doltserver.MarkDoltDirCompatible(storagePath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write Dolt compatibility marker at %s: %v\n", storagePath, err)
 		}
 
 		// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/
@@ -2070,29 +1996,25 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			fmt.Printf("\n%s bd initialized successfully!\n\n", ui.RenderPass("✓"))
 		}
 		fmt.Printf("  Backend: %s\n", ui.RenderAccent(backend))
-		if !usesSQLServer() {
-			fmt.Printf("  Mode: %s\n", ui.RenderAccent("embedded"))
-		} else {
-			host := serverHost
-			if host == "" {
-				host = configfile.DefaultDoltServerHost
-			}
-			port := serverPort
-			if port == 0 {
-				port = doltserver.DefaultConfig(beadsDir).Port
-			}
-			user := serverUser
-			if user == "" {
-				user = configfile.DefaultDoltServerUser
-			}
-			fmt.Printf("  Mode: %s\n", ui.RenderAccent("server"))
-			fmt.Printf("  Server: %s\n", ui.RenderAccent(fmt.Sprintf("%s@%s:%d", user, host, port)))
-			// Warn when using the default localhost — this is the #1 misconfiguration
-			// for setups where Dolt runs on a remote machine (e.g., over Tailscale).
-			if serverHost == "" && os.Getenv("BEADS_DOLT_SERVER_HOST") == "" {
-				fmt.Fprintf(os.Stderr, "\n  %s Server host defaulted to %s.\n", ui.RenderWarn("⚠"), configfile.DefaultDoltServerHost)
-				fmt.Fprintf(os.Stderr, "    If your Dolt server is remote, set BEADS_DOLT_SERVER_HOST or pass --server-host.\n")
-			}
+		host := serverHost
+		if host == "" {
+			host = configfile.DefaultDoltServerHost
+		}
+		port := serverPort
+		if port == 0 {
+			port = doltserver.DefaultConfig(beadsDir).Port
+		}
+		user := serverUser
+		if user == "" {
+			user = configfile.DefaultDoltServerUser
+		}
+		fmt.Printf("  Mode: %s\n", ui.RenderAccent("server"))
+		fmt.Printf("  Server: %s\n", ui.RenderAccent(fmt.Sprintf("%s@%s:%d", user, host, port)))
+		// Warn when using the default localhost — this is the #1 misconfiguration
+		// for setups where Dolt runs on a remote machine (e.g., over Tailscale).
+		if serverHost == "" && os.Getenv("BEADS_DOLT_SERVER_HOST") == "" {
+			fmt.Fprintf(os.Stderr, "\n  %s Server host defaulted to %s.\n", ui.RenderWarn("⚠"), configfile.DefaultDoltServerHost)
+			fmt.Fprintf(os.Stderr, "    If your Dolt server is remote, set BEADS_DOLT_SERVER_HOST or pass --server-host.\n")
 		}
 		// Advertise the prefix that issue IDs will actually use. When the database
 		// already carries a provisioned issue_prefix — gateway adoption of a
@@ -2123,24 +2045,22 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// Skipped in embedded mode: diagnostics use dolt.NewFromConfigWithOptions
 		// which auto-starts a dolt sql-server. Embedded init already validates
 		// the database via initSchema.
-		if usesSQLServer() {
-			doctorResult := runInitDiagnostics(cwd)
-			hasIssues := false
+		doctorResult := runInitDiagnostics(cwd)
+		hasIssues := false
+		for _, check := range doctorResult.Checks {
+			if check.Status != statusOK {
+				hasIssues = true
+				break
+			}
+		}
+		if hasIssues {
+			fmt.Printf("%s Setup incomplete. Some issues were detected:\n", ui.RenderWarn("⚠"))
 			for _, check := range doctorResult.Checks {
 				if check.Status != statusOK {
-					hasIssues = true
-					break
+					fmt.Printf("  • %s: %s\n", check.Name, check.Message)
 				}
 			}
-			if hasIssues {
-				fmt.Printf("%s Setup incomplete. Some issues were detected:\n", ui.RenderWarn("⚠"))
-				for _, check := range doctorResult.Checks {
-					if check.Status != statusOK {
-						fmt.Printf("  • %s: %s\n", check.Name, check.Message)
-					}
-				}
-				fmt.Printf("\nRun %s to see details and fix these issues.\n\n", ui.RenderAccent("bd doctor --fix"))
-			}
+			fmt.Printf("\nRun %s to see details and fix these issues.\n\n", ui.RenderAccent("bd doctor --fix"))
 		}
 		return nil
 	},
@@ -2314,106 +2234,6 @@ func explicitRepairConflict(cmd *cobra.Command, prefix, requestedDatabase, disco
 		return true
 	}
 	return cmd.Flags().Changed("prefix") && initIfMissingPrefixMismatch(discoveredDatabase, prefix)
-}
-
-// repairUnreadableMetadata rewrites a metadata.json that exists but cannot be
-// parsed, using only evidence left on disk, and reports whether it did.
-//
-// A metadata.json is the only record of where a workspace's database lives, so
-// init refuses to reinitialize over one it cannot read (checkExistingBeadsDataAt
-// and the legacy-upgrade guard both fail closed). That refusal is wrong for the
-// one deployment shape that does not depend on the file: an embedded database
-// under .beads/embeddeddolt, whose directory name carries both the storage mode
-// and the database name. Rebuilding the file from that directory restores the
-// workspace without init guessing at anything, and without init opening, moving,
-// or rewriting a database. Every other shape keeps the fail-closed refusal —
-// a server-mode or proxied-server pointer is not recoverable from disk (host,
-// port, and credentials live only in the file being replaced), and a workspace
-// with several embedded databases has no unambiguous database name to record.
-//
-// database is that single embedded database, or "" when there is none or more
-// than one; the caller resolves it so the same value can be checked against the
-// invocation's explicit selectors (see explicitRepairConflict). The caller also
-// checks intent before calling; see the gate at the call site.
-func repairUnreadableMetadata(ctx context.Context, beadsDir, database string) (bool, error) {
-	if beadsDir == "" || database == "" {
-		return false, nil
-	}
-	configPath := configfile.ConfigPath(beadsDir)
-	// Read the file here rather than asking LoadForDiscovery whether it loads:
-	// only a parse error means the file is corrupt in the way this repair
-	// exists to undo. A read error — a transient I/O fault, a permission
-	// problem — leaves a file that may still be the only pointer to its
-	// database, and overwriting it would destroy evidence on the strength of a
-	// failure that says nothing about its contents. Falling through returns the
-	// caller to the fail-closed refusal, which is the right answer there.
-	data, err := os.ReadFile(configPath) // #nosec G304 -- caller-selected workspace state
-	if os.IsNotExist(err) {
-		return false, nil // absent metadata.json is the fresh-workspace default
-	}
-	if err != nil {
-		return false, nil
-	}
-	var existing configfile.Config
-	if json.Unmarshal(data, &existing) == nil {
-		return false, nil // readable: nothing to repair
-	}
-
-	// Keep the unparseable original. Its bytes are the only remaining record of
-	// what the workspace was configured with — a server host, remote URLs, an
-	// identity — so a repair that guessed wrong stays reversible, and a user who
-	// wants to hand-fix one field can still read it. The name follows the
-	// recovery convention bd doctor --fix already uses, so the tree is
-	// recognized as a runtime artifact rather than mistaken for workspace state.
-	backupDir := filepath.Join(beadsDir, configfile.ConfigFileName+"."+time.Now().UTC().Format("20060102T150405Z")+".corrupt.backup")
-	if err := os.Mkdir(backupDir, 0o700); err != nil {
-		return false, fmt.Errorf("preserving %s before repairing it: %w", configPath, err)
-	}
-	backupPath := filepath.Join(backupDir, configfile.ConfigFileName)
-	// Refusing to repair without a preserved copy is deliberate: overwriting a
-	// file whose contents could not be read is the outcome this whole guard
-	// exists to prevent.
-	if err := os.WriteFile(backupPath, data, 0o600); err != nil {
-		return false, fmt.Errorf("preserving %s before repairing it: %w", configPath, err)
-	}
-
-	cfg := configfile.DefaultConfig()
-	cfg.Backend = configfile.BackendDolt
-	cfg.Database = "dolt"
-	cfg.DoltMode = configfile.DoltModeEmbedded
-	cfg.DoltDatabase = database
-	if err := cfg.Save(beadsDir); err != nil {
-		return false, fmt.Errorf("repairing %s: %w", configPath, err)
-	}
-
-	// The identity the lost file carried still lives in the database. Adopt it
-	// rather than leaving metadata.json without one: a project_id-less file is
-	// usable but disables the identity check that catches a server answering
-	// for a different project. The file above is already valid, so a failure
-	// here costs the identity, not the repair.
-	//
-	// This is a second write, and it has to be: the identity is read through the
-	// store factory, which loads metadata.json to decide how to open a store, so
-	// the file must describe the database before the database can be asked. Both
-	// writes are atomic renames, so no reader sees a partial file; the interval
-	// between them is a valid workspace that omits only the optional identity
-	// check the unparseable original could not have offered either.
-	if store, err := newReadOnlyStoreFromConfig(ctx, beadsDir); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not read the project identity from %s: %v\n", database, err)
-	} else {
-		if projectID, err := store.GetMetadata(ctx, "_project_id"); err == nil && projectID != "" {
-			cfg.ProjectID = projectID
-			if err := cfg.Save(beadsDir); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not record the project identity in %s: %v\n", configPath, err)
-			}
-		}
-		_ = store.Close()
-	}
-
-	fmt.Fprintf(os.Stderr, "warning: %s is not readable; kept it at %s and rewrote metadata.json for the embedded database %s (dolt_mode=embedded, dolt_database=%s)\n",
-		configPath, backupDir, filepath.Join(beadsDir, "embeddeddolt", database), database)
-	fmt.Fprintln(os.Stderr, "  If that is not the workspace you expected, restore the file from git or run 'bd doctor'.")
-	return true, nil
 }
 
 // checkExistingBeadsDataAt checks for existing database at a specific beadsDir path.
@@ -3309,18 +3129,14 @@ func commitInitState(ctx context.Context, store initStateCommitter) error {
 func verifyMetadata(ctx context.Context, store storage.DoltStorage, key, value string) bool {
 	if err := store.SetMetadata(ctx, key, value); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to write %s metadata: %v\n", key, err)
-		if usesSQLServer() {
-			fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
-		}
+		fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
 		return false
 	}
 	// Verify read-back
 	readBack, err := store.GetMetadata(ctx, key)
 	if err != nil || readBack != value {
 		fmt.Fprintf(os.Stderr, "Warning: %s metadata write did not persist (wrote %q, read %q)\n", key, value, readBack)
-		if usesSQLServer() {
-			fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
-		}
+		fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
 		return false
 	}
 	return true

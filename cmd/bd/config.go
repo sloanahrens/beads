@@ -136,12 +136,6 @@ var configSetCmd = &cobra.Command{
 			return SilentExit()
 		}
 
-		if key == "dolt.debug" && !usesSQLServer() {
-			fmt.Fprintln(os.Stderr, "Error: dolt.debug requires a sql-server-backed project (embedded mode has no managed server).")
-			fmt.Fprintln(os.Stderr, "  To migrate: re-init with 'bd init --server' or 'bd init --shared-server'.")
-			return SilentExit()
-		}
-
 		if strings.HasPrefix(key, "storage-class.") {
 			if err := validateStorageClassConfig(key, value); err != nil {
 				return HandleError("%v", err)
@@ -445,14 +439,7 @@ func runConfigGetBackupEnabled() error {
 	case config.SourceConfigFile:
 		sourceDesc = "config.yaml"
 	default: // SourceDefault — value came from auto-detection
-		switch {
-		case usesSQLServer():
-			sourceDesc = "default (auto: off in sql-server mode)"
-		case effective:
-			sourceDesc = "default (auto: on — git remote detected)"
-		default:
-			sourceDesc = "default (auto: off — no git remote)"
-		}
+		sourceDesc = "default (auto: off in sql-server mode)"
 	}
 
 	if jsonOutput {
