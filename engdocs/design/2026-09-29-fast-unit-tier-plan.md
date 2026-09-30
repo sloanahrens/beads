@@ -18,14 +18,16 @@
 - `BD_TEST_TIER` is `BD_`-prefixed because the cmd/bd subprocess helpers strip `BEADS_*` but keep `BD_*`. Production never sets it.
 - Gates by exit code: `go build ./...`, `go vet ./...`, `make ci-pr-lint`, `make test`, `make test-integration`.
 
-## Measured before the change (2026-09-29, host load 30 to 99)
+## Measurements (2026-09-29, shared host, load 16 to 99)
 
-| Run | Wall |
-|---|---|
-| `./scripts/test.sh ./cmd/bd` (make test env) | recorded in the branch report |
-| Same with the tripwire armed, 33 offending tests failing fast | 329 s |
+All runs use `./scripts/test.sh` (the `make test` runner, without coverage) and are judged by exit code.
 
-The 33 offenders are every cmd/bd test the unit env still ran against a real store: each spawns `bd init`, which creates an embedded store and runs the full migration chain.
+| Run | Wall | cmd/bd | Exit |
+|---|---|---|---|
+| Before: origin/main, full suite | 945 s | 793 s | 1 (internal/utils import cycle, pre-existing) |
+| After: unit tier, full suite | 222 s | 168 s | 0 |
+
+Before the change the unit env still ran every cmd/bd test that spawns `bd init`: each creates an embedded store and runs the full migration chain (8.4 s for one init on this host under load). The tripwire named 37 such tests in cmd/bd and 50 more in internal/storage/embeddeddolt, internal/tracker and scripts/repro-dolt-prod-timeouts.
 
 ---
 
@@ -72,9 +74,10 @@ Whole-file moves add `integration` to the build constraint (`//go:build cgo && i
 | update_stray_positional_test.go | 2/3 | split |
 | where_cgo_test.go | 1/1 | tag file |
 
-- [ ] Move; `go vet -tags gms_pure_go ./cmd/bd` and `go vet -tags gms_pure_go,integration ./cmd/bd` both clean.
-- [ ] `./scripts/test.sh ./cmd/bd` exits 0 with the tripwire armed; record wall time.
-- [ ] Run the whole unit tier (`./scripts/test.sh ./...`); move any further offenders the tripwire names in other packages the same way.
+- [x] Move; `go vet -tags gms_pure_go ./cmd/bd` and `go vet -tags gms_pure_go,integration ./cmd/bd` both clean. The integration build of cmd/bd did not compile on main (two `runBD` helpers); reparent_test.go's is renamed.
+- [x] `./scripts/test.sh ./cmd/bd` exits 0 with the tripwire armed.
+- [x] Run the whole unit tier; moved the further offenders it named: embeddeddolt (16 files tagged, 3 split), tracker (1 file), repro-dolt-prod-timeouts (1 test). The sqlmock `MigrateUp` tests in internal/storage/schema clear the tier per test.
+- [x] Several cmd/bd helpers strip every `BEADS_*` and `BD_*` variable, so the variable missed their subprocesses. `scripts/test.sh` now links the tier into the prebuilt bd (`-X .../testtier.buildTier`); that surfaced four more offenders, moved the same way.
 
 ### Task 4: Integration tier target and require-mode
 
@@ -86,12 +89,12 @@ Whole-file moves add `integration` to the build constraint (`//go:build cgo && i
 
 `make test-integration` = `BEADS_TEST_ENV_RUN_DOLT=1 BEADS_TEST_EMBEDDED_DOLT=1 TEST_TAGS=integration TEST_TIMEOUT=45m ./scripts/test.sh ./...`.
 
-- [ ] Failing test for require-mode in the central helpers, implement, green.
-- [ ] Docs: `engdocs/TESTING.md` names the two tiers, the tripwire, and how to move a test.
+- [x] Failing test for require-mode in the central helpers, implement, green. The server-unavailable and container-crashed skip sites outside the embedded and proxied stacks (140) go through `testutil.SkipOrFailUnavailable`.
+- [x] Docs: `engdocs/TESTING.md` names the two tiers, the tripwire, and how to move a test.
 
 ### Task 5: Policy test
 
-`TestUnitTierPolicy` (in `scripts/`) asserts the contract the tripwire depends on: `make test` runs `scripts/test.sh`, the runner enters the hermetic env, and the env exports `BD_TEST_TIER=unit` by default; the cmd/bd subprocess env builders keep `BD_TEST_TIER`. The tripwire itself is the per-test policy: any new unit-tier test that opens a fresh migrated store fails with `ErrUnitTier`.
+`TestUnitTierPolicy` (in `scripts/`) asserts the wiring: `make test` runs `scripts/test.sh` without opting into Dolt, `make test-integration` opts in, the runner links `testtier.buildTier` into the prebuilt bd, and that symbol exists (a `-X` on a missing symbol is silently ignored). `TestPrebuiltBDCarriesUnitTier` (cmd/bd) spawns the prebuilt bd with only `PATH` and `HOME` and requires `bd init` to be refused. The tripwire itself is the per-test policy: any new unit-tier test that opens a fresh migrated store fails with `ErrUnitTier`. Both tests were mutation-checked.
 
 ### Task 6: Measure, gate, review
 
@@ -100,6 +103,8 @@ Whole-file moves add `integration` to the build constraint (`//go:build cgo && i
 - [ ] `om review -base origin/main`; fix blockers and majors.
 
 ## Out of scope on this branch
+
+- A copied pre-initialized workspace for `bd init` subprocess tests. Each init mints a random `project_id` that is also the store's identity, so a byte copy would give unrelated tests one identity; fixing that means rewriting identity inside embedded stores, the stack be-c94.1 deletes. The integration tier's wall times decide any fixture work after that deletion.
 
 - be-b23.1, the narrow public client interface and in-memory fake: an API design change that depends on D7 deleting the legacy verbs; doing it now collides with the delete branch.
 - A production fresh-database fast path (one commit for a fresh schema, B2-13a): it changes the migration crash-recovery contract (#4566) and needs its own review.
