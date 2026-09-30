@@ -41,12 +41,21 @@ func PruneOrphanDependenciesInTx(ctx context.Context, tx *sql.Tx, dryRun bool) (
 	var issueSources, wispSources []string
 
 	for _, table := range []string{"dependencies", "wisp_dependencies"} {
-		sources, err := orphanDependencySources(ctx, tx, table)
+		edges, err := orphanDependencyEdges(ctx, tx, table)
 		if err != nil {
 			return storage.PruneOrphanDependenciesResult{}, nil, err
 		}
-		n := len(sources)
+		sources := make([]string, 0, len(edges))
+		for _, edge := range edges {
+			sources = append(sources, edge.source)
+		}
+		n := len(edges)
 		if !dryRun && n > 0 {
+			// Journal each edge before it goes, like every other bulk edge
+			// delete: a consumer tailing events sees the removal.
+			if err := recordDependencyRemovalsInTx(ctx, tx, edges); err != nil {
+				return storage.PruneOrphanDependenciesResult{}, nil, fmt.Errorf("prune orphan %s: journal: %w", table, err)
+			}
 			//nolint:gosec // G201: table is one of two hardcoded names
 			res, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s", table, orphanDependencyPredicate(table)))
 			if err != nil {
@@ -81,25 +90,26 @@ func PruneOrphanDependenciesInTx(ctx context.Context, tx *sql.Tx, dryRun bool) (
 	return result, tables, nil
 }
 
-// orphanDependencySources returns the issue_id of every orphan row in table,
-// one entry per row.
-func orphanDependencySources(ctx context.Context, tx *sql.Tx, table string) ([]string, error) {
+// orphanDependencyEdges returns every orphan row in table as a journal edge,
+// sorted, so the prune can journal a dep_remove for each before deleting it.
+func orphanDependencyEdges(ctx context.Context, tx *sql.Tx, table string) ([]journalDependencyEdge, error) {
 	//nolint:gosec // G201: table is one of two hardcoded names
-	rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT %[1]s.issue_id FROM %[1]s WHERE %[2]s", table, orphanDependencyPredicate(table)))
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT %[1]s.issue_id, %[2]s AS target, %[1]s.type, %[1]s.metadata FROM %[1]s WHERE %[3]s",
+		table, DepTargetExpr, orphanDependencyPredicate(table)))
 	if err != nil {
 		return nil, fmt.Errorf("find orphan %s: %w", table, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var ids []string
+	byKey := make(map[string]journalDependencyEdge)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var edge journalDependencyEdge
+		if err := rows.Scan(&edge.source, &edge.target, &edge.kind, &edge.metadata); err != nil {
 			return nil, fmt.Errorf("find orphan %s: %w", table, err)
 		}
-		ids = append(ids, id)
+		byKey[dependencyEdgeKey(edge)] = edge
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("find orphan %s: %w", table, err)
 	}
-	return ids, nil
+	return sortedDependencyEdges(byKey), nil
 }
