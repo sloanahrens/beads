@@ -78,7 +78,7 @@ func createExecTestIssueWithID(t *testing.T, tmpDir, title, id string) string {
 	return issue["id"].(string)
 }
 
-// runBD runs a bd command and fails the test on error.
+// runBDReparent runs a bd command and fails the test on error.
 func runBDReparent(t *testing.T, tmpDir string, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command(testBD, args...)

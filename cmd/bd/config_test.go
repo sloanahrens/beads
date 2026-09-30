@@ -14,6 +14,7 @@ import (
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -213,7 +214,7 @@ func setupTestDB(t *testing.T) (*dolt.DoltStore, func()) {
 	store, err := dolt.New(context.Background(), &dolt.Config{Path: testDB})
 	if err != nil {
 		os.RemoveAll(tmpDir)
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 
 	// CRITICAL (bd-166): Set issue_prefix to prevent "database not initialized" errors

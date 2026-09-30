@@ -94,7 +94,7 @@ func requireDoltStore(t *testing.T, what string) {
 	if *updateCorpus {
 		t.Fatalf("%s: -corpus.update needs a live Dolt store, but the test container is unavailable; regenerating without it would silently write nothing and leave the committed corpus stale. Start Docker/Dolt, then rerun `make corpus-regen`.", what)
 	}
-	t.Skipf("%s: test Dolt server not available", what)
+	testutil.SkipOrFailUnavailable(t, "%s: test Dolt server not available", what)
 }
 
 func buildBD(t *testing.T) string {

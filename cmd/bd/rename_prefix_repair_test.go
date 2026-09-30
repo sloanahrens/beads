@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -19,7 +20,7 @@ func TestRepairMultiplePrefixes(t *testing.T) {
 
 	testStore, err := dolt.New(ctx, &dolt.Config{Path: testDBPath})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	defer testStore.Close()
 

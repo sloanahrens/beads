@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -46,7 +47,7 @@ func TestRenamePrefixCommand(t *testing.T) {
 
 	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	defer testStore.Close()
 
@@ -174,7 +175,7 @@ func TestRenamePrefixInDB(t *testing.T) {
 
 	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	t.Cleanup(func() {
 		testStore.Close()
@@ -233,7 +234,7 @@ func TestRenamePrefixInDB_HalfMigratedConfigNotDoubled(t *testing.T) {
 
 	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	t.Cleanup(func() {
 		testStore.Close()
