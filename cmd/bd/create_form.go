@@ -193,21 +193,6 @@ func CreateIssueFromFormValues(ctx context.Context, s storage.DoltStorage, fv *c
 		return nil, fmt.Errorf("failed to create issue: %w", err)
 	}
 
-	if edges.empty() {
-		// Bare create: preserve the embedded-mode follow-up Dolt commit.
-		// The deps path commits inside its transaction instead.
-		shouldCommit, err := shouldCommitCreatePostWrites(issue, false)
-		if err != nil {
-			return nil, fmt.Errorf("dolt auto-commit: %w", err)
-		}
-		if shouldCommit {
-			commitMsg := fmt.Sprintf("bd: create %s", issue.ID)
-			if err := s.Commit(ctx, commitMsg); err != nil && !isDoltNothingToCommit(err) {
-				WarnError("failed to commit post-create metadata: %v", err)
-			}
-		}
-	}
-
 	return issue, nil
 }
 
@@ -231,9 +216,6 @@ The form uses keyboard navigation:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("create-form is not supported in proxied-server mode")
-		}
 		CheckReadonly("create-form")
 
 		evt := metrics.NewCommandEvent("create-form")

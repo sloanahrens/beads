@@ -25,8 +25,9 @@ import (
 // running. First the setting was process-global. Then it was applied at the two
 // root pre-run call sites, which missed `bd serve` (which builds its own
 // provider for server-mode workspaces), routed creates and remote-cache
-// hydration (which open a SECOND store for another workspace), the pluggable
-// backend registry arm, and the personal-migration planning store. Every one of
+// hydration (which open a SECOND store for another workspace), the (since
+// removed) pluggable backend registry arm, and the personal-migration planning
+// store. Every one of
 // those ran with the journal off while the command reported success — and an
 // empty journal is indistinguishable from a quiet one, so nothing surfaced.
 //
@@ -52,21 +53,10 @@ var storeConstructors = map[string]map[string]bool{
 		"NewFromConfigWithOptions":    true,
 		"NewFromConfigWithCLIOptions": true,
 	},
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt": {
-		"Open":                       true,
-		"OpenReadOnly":               true,
-		"OpenForReadOnlyCommand":     true,
-		"OpenForPreviewCommand":      true,
-		"OpenForWorkingSetReconcile": true,
-	},
 	"github.com/steveyegge/beads/internal/storage/uow": {
 		"NewDoltServerUOWProvider":         true,
 		"NewExternalDoltServerUOWProvider": true,
 	},
-	// The pluggable backend registry: Lookup is what turns a configured backend
-	// name into something that can Open, so a function that calls it is
-	// constructing a store just as much as the direct opens above.
-	"github.com/steveyegge/beads/internal/storage/backends": {"Lookup": true},
 }
 
 // activationCalls are the helpers that apply a workspace's configured
@@ -87,14 +77,12 @@ var qualifiedActivationCalls = map[string]map[string]bool{
 }
 
 // scannedPackages are the directories searched for construction sites: every
-// package that builds a store or provider for the bd binary, plus the standalone
-// embedded-Dolt utility so it is accounted for rather than merely unnoticed.
-// Each maps to the prefix its sites are keyed under.
+// package that builds a store or provider for the bd binary. Each maps to the
+// prefix its sites are keyed under.
 var scannedPackages = map[string]string{
 	".":          "",
 	"doctor":     "doctor/",
 	"doctor/fix": "doctor/fix/",
-	"../../internal/storage/embeddeddolt/cmd": "embeddeddolt-cmd/",
 }
 
 // constructionExemptions are construction sites that legitimately do NOT
@@ -113,10 +101,9 @@ var scannedPackages = map[string]string{
 // construction site, so an exemption cannot rot into a permanent excuse.
 var constructionExemptions = map[string]string{
 	// Non-mutating opens. Every arm returns a store that refuses writes
-	// (OpenReadOnly / OpenForPreviewCommand / a ReadOnly server config), so
-	// there is no mutation for a journal row to accompany.
-	"store_factory.go:openNonMutatingStoreFromConfig":   "read-only/preview open: the store refuses writes, so no mutation can go unrecorded",
-	"store_factory_nocgo.go:newReadOnlyStoreFromConfig": "read-only open: the store refuses writes, so no mutation can go unrecorded",
+	// (a ReadOnly server config), so there is no mutation for a journal row to
+	// accompany.
+	"store_factory.go:newReadOnlyStoreFromConfig": "read-only open: the store refuses writes, so no mutation can go unrecorded",
 
 	// Store-open-time reconciliation, which runs BEFORE the command's own store
 	// exists and therefore before any workspace config could be applied to it.
@@ -124,10 +111,6 @@ var constructionExemptions = map[string]string{
 	// not a bead mutation. Journaling it would record a row for something a
 	// replay consumer has no bead to apply it to.
 	"version_tracking.go:autoMigrateOnVersionBump": "store-open-time version reconciliation: writes only dolt-ignored local_metadata, never a bead, and runs before the command's own store is configured",
-
-	// Config reads through a throwaway store. GetConfig only; nothing here
-	// mutates a bead.
-	"ado.go:getADOConfigValue": "throwaway store used for a single GetConfig read; no bead mutation is possible through it",
 
 	// `bd config apply` / drift detection open a store to read and reconcile the
 	// workspace's Dolt REMOTE configuration. That is workspace state, not bead
@@ -158,17 +141,6 @@ var constructionExemptions = map[string]string{
 	"doctor/fix/metadata.go:FixProjectIdentity":            "writes the workspace's _project_id, never a bead",
 	"doctor/fix/repo_fingerprint.go:RepoFingerprint":       "rewrites the workspace repo_id fingerprint, never a bead",
 	"doctor/fix/repo_fingerprint.go:updateRepoIDInProcess": "rewrites the workspace repo_id fingerprint in-process, never a bead",
-
-	// The root pre-run probes the backend registry to choose WHICH factory to
-	// call; the construction itself is delegated to newRegisteredBackendStore,
-	// which activates. This is the one place the guard's "Lookup means
-	// construction" heuristic over-reports, because Lookup here decides a
-	// branch rather than opening anything.
-	"main.go:var rootCmd": "probes backends.Lookup to select a factory; the store is constructed by newRegisteredBackendStore, which activates",
-
-	// A standalone developer utility binary, not bd. It has no workspace config
-	// to read and never runs as part of a bd command.
-	"embeddeddolt-cmd/main.go:main": "standalone embeddeddolt debug utility, not the bd binary; no workspace config and no bd command context",
 }
 
 func TestEveryStoreConstructionActivatesTheEventsJournal(t *testing.T) {

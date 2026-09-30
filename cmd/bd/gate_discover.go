@@ -72,9 +72,6 @@ func init() {
 }
 
 func runGateDiscover(cmd *cobra.Command, args []string) error {
-	if usesProxiedServer() {
-		return HandleErrorRespectJSON("gate discover is not supported in proxied-server mode")
-	}
 	CheckReadonly("gate discover")
 
 	evt := metrics.NewCommandEvent("gate-discover")

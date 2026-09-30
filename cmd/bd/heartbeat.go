@@ -48,10 +48,6 @@ Examples:
 		ctx := rootCtx
 		id := args[0]
 
-		if usesProxiedServer() {
-			return runHeartbeatProxiedServer(ctx, id)
-		}
-
 		result, err := resolveAndGetIssueForMutation(ctx, store, id)
 		if err != nil {
 			if result != nil {
@@ -70,13 +66,6 @@ Examples:
 		issueStore := result.Store
 		if err := issueStore.HeartbeatIssue(ctx, result.ResolvedID, actor); err != nil {
 			return HandleErrorRespectJSON("heartbeat %s: %v", result.ResolvedID, err)
-		}
-
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "heartbeat",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		SetLastTouchedID(result.ResolvedID)

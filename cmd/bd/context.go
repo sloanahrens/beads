@@ -29,8 +29,7 @@ type CommandContext struct {
 	Verbose      bool
 	Quiet        bool
 
-	ServerMode        bool
-	ProxiedServerMode bool
+	ServerMode bool
 
 	// Runtime state
 	Store      storage.DoltStorage
@@ -365,7 +364,6 @@ func syncCommandContext() {
 
 	// Storage mode
 	cmdCtx.ServerMode = serverMode
-	cmdCtx.ProxiedServerMode = proxiedServerMode
 
 	// Runtime state
 	cmdCtx.Store = store

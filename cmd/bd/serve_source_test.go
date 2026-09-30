@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -14,71 +13,6 @@ import (
 	"github.com/steveyegge/beads/issueops"
 	"github.com/steveyegge/beads/memoryops"
 )
-
-// TestServeDatabaseSourceClassifiesTheWorkspace drives the one decision point
-// bd serve has about where it reads and claims from.
-//
-// The registered arm is the whole point: the store the root command opened for
-// a registered backend is opened through the same registry dispatch every
-// ordinary bd command uses, so a workspace fully usable from the CLI must be
-// servable too. The embedded arm is the permanent refusal, and it is here so
-// that widening the classification cannot quietly narrow the refusal.
-func TestServeDatabaseSourceClassifiesTheWorkspace(t *testing.T) {
-	t.Run("a registered backend is served from its store", func(t *testing.T) {
-		const name = "serve-registry"
-		registerContractBackend(t, name)
-		useStorageModeGlobals(t)
-		beadsDir := writeContractBackendConfig(t, name)
-
-		db, err := serveDatabaseSource(beadsDir)
-		if err != nil {
-			t.Fatalf("serveDatabaseSource() = %v, want the store source", err)
-		}
-		if db.source != serveSourceStore {
-			t.Errorf("source = %v, want serveSourceStore", db.source)
-		}
-		if db.backend != name {
-			t.Errorf("backend = %q, want %q", db.backend, name)
-		}
-	})
-
-	// The registry outranks every dolt-mode signal, because that is the order
-	// the store open already resolves them in: PersistentPreRunE dispatches on
-	// backends.Lookup before anything looks at shared-server mode, so a
-	// registered workspace with BEADS_DOLT_SHARED_SERVER=1 exported still opens
-	// the registered store. Resolving it the other way here would build a Dolt
-	// provider over a non-Dolt store and serve a different database than the
-	// CLI in the same workspace reaches.
-	t.Run("the registry outranks a shared-server environment", func(t *testing.T) {
-		const name = "serve-registry-shared"
-		registerContractBackend(t, name)
-		useStorageModeGlobals(t)
-		t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
-		beadsDir := writeContractBackendConfig(t, name)
-
-		db, err := serveDatabaseSource(beadsDir)
-		if err != nil {
-			t.Fatalf("serveDatabaseSource() = %v, want the store source", err)
-		}
-		if db.source != serveSourceStore {
-			t.Errorf("source = %v, want serveSourceStore: the store open gives the registry precedence here", db.source)
-		}
-	})
-
-	t.Run("an unloadable metadata.json is named, not classified", func(t *testing.T) {
-		useStorageModeGlobals(t)
-		beadsDir := t.TempDir()
-		writeBrokenBeadsConfig(t, beadsDir)
-
-		db, err := serveDatabaseSource(beadsDir)
-		if err == nil {
-			t.Fatalf("serveDatabaseSource() = %v, nil; want the load failure rather than a classification", db)
-		}
-		if !strings.Contains(err.Error(), configfile.ConfigPath(beadsDir)) {
-			t.Errorf("error does not name the file it could not read: %v", err)
-		}
-	})
-}
 
 // TestServeIssueRolesComeFromBeneathTheHookDecorator.
 //
@@ -357,17 +291,6 @@ func TestServeResolvedModeNamesTheRegisteredBackend(t *testing.T) {
 	}
 	if strings.Contains(got, configfile.DoltModeEmbedded) || strings.Contains(got, "dolt") {
 		t.Errorf("mode reports a Dolt topology for a registered backend: %q", got)
-	}
-}
-
-// writeBrokenBeadsConfig plants a metadata.json that configfile.Load cannot
-// parse, which is the one input serveDatabaseSource must refuse rather than
-// classify: falling back to a default here would serve the embedded default
-// for a workspace whose real backend is unknown.
-func writeBrokenBeadsConfig(t *testing.T, beadsDir string) {
-	t.Helper()
-	if err := os.WriteFile(configfile.ConfigPath(beadsDir), []byte("{ not json"), 0o600); err != nil {
-		t.Fatalf("write broken metadata.json: %v", err)
 	}
 }
 

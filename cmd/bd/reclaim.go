@@ -99,10 +99,6 @@ Examples:
 
 		CheckReadonly("reclaim")
 
-		if usesProxiedServer() {
-			return runReclaimProxiedServer(rootCtx, olderThan, filter)
-		}
-
 		ctx := rootCtx
 		reclaimed, err := store.ReclaimExpiredLeases(ctx, olderThan, filter, actor)
 		if err != nil {
@@ -112,12 +108,6 @@ Examples:
 		ids := make([]string, 0, len(reclaimed))
 		for _, r := range reclaimed {
 			ids = append(ids, r.ID)
-		}
-		if err := commitPendingIfEmbedded(ctx, store, actor, doltAutoCommitParams{
-			Command:  "reclaim",
-			IssueIDs: ids,
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		return renderReclaim(reclaimed, !filter.IsEmpty())

@@ -90,9 +90,6 @@ To list comments on an issue, use the plural form: bd comments <id>`,
 
 		// Dispatched after the text is resolved so both backends read the
 		// same sources and report the same conflicts.
-		if usesProxiedServer() {
-			return runCommentProxiedServer(rootCtx, id, author, commentText)
-		}
 
 		ctx := rootCtx
 
@@ -120,12 +117,6 @@ To list comments on an issue, use the plural form: bd comments <id>`,
 		comment, err := addCommentDirect(ctx, issueStore, result.ResolvedID, author, commentText)
 		if err != nil {
 			return HandleErrorRespectJSON("adding comment: %v", err)
-		}
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "comment",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		SetLastTouchedID(result.ResolvedID)

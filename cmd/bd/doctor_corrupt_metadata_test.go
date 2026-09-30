@@ -21,11 +21,14 @@ func TestValidateDoctorWorkspaceBackendCorruptMetadata(t *testing.T) {
 		wantRefusal bool
 	}{
 		{
-			name: "sole embedded database is diagnosable",
+			// Embedded Dolt was removed, so a leftover embedded database no
+			// longer makes a corrupt metadata.json diagnosable.
+			name: "leftover embedded database is refused",
 			setup: func(t *testing.T, beadsDir string) {
 				t.Helper()
 				writeEmbeddedRepository(t, beadsDir, "cm")
 			},
+			wantRefusal: true,
 		},
 		{
 			name:        "no local database to diagnose",

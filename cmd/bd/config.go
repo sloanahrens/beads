@@ -16,7 +16,6 @@ import (
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/remotecache"
-	"github.com/steveyegge/beads/internal/tracker"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/issueops"
 )
@@ -137,12 +136,6 @@ var configSetCmd = &cobra.Command{
 			return SilentExit()
 		}
 
-		if key == "dolt.debug" && !usesSQLServer() {
-			fmt.Fprintln(os.Stderr, "Error: dolt.debug requires a sql-server-backed project (embedded mode has no managed server).")
-			fmt.Fprintln(os.Stderr, "  To migrate: re-init with 'bd init --server' or 'bd init --shared-server'.")
-			return SilentExit()
-		}
-
 		if strings.HasPrefix(key, "storage-class.") {
 			if err := validateStorageClassConfig(key, value); err != nil {
 				return HandleError("%v", err)
@@ -253,9 +246,6 @@ var configSetCmd = &cobra.Command{
 // is reachable by neither route. It is per-verb because the shipped text names
 // the verb.
 func openWorkspaceConfig(directRequirement string) (issueops.WorkspaceConfig, error) {
-	if usesProxiedServer() {
-		return proxiedWorkspaceConfig()
-	}
 	if err := ensureDirectMode(directRequirement); err != nil {
 		return nil, err
 	}
@@ -264,14 +254,8 @@ func openWorkspaceConfig(directRequirement string) (issueops.WorkspaceConfig, er
 
 // noteDirectConfigWrite marks the invocation as having written, which is what
 // the auto-commit epilogue in main.go keys on.
-//
-// It is DIRECT-ROUTE ONLY: a proxied write already committed inside the role's
-// own unit of work, so flagging it here would ask the epilogue to commit a
-// second time on a route that has nothing outstanding.
 func noteDirectConfigWrite() {
-	if !usesProxiedServer() {
-		commandDidWrite.Store(true)
-	}
+	commandDidWrite.Store(true)
 }
 
 var configGetCmd = &cobra.Command{
@@ -455,14 +439,7 @@ func runConfigGetBackupEnabled() error {
 	case config.SourceConfigFile:
 		sourceDesc = "config.yaml"
 	default: // SourceDefault — value came from auto-detection
-		switch {
-		case usesSQLServer():
-			sourceDesc = "default (auto: off in sql-server mode)"
-		case effective:
-			sourceDesc = "default (auto: on — git remote detected)"
-		default:
-			sourceDesc = "default (auto: off — no git remote)"
-		}
+		sourceDesc = "default (auto: off in sql-server mode)"
 	}
 
 	if jsonOutput {
@@ -949,27 +926,15 @@ Examples:
 		// setting per call and commits each, so routing this through it would
 		// turn a three-key batch into three commits.
 		if len(dbPairs) > 0 {
-			if usesProxiedServer() {
-				keys := make([]string, len(dbPairs))
-				values := make([]string, len(dbPairs))
-				for i, p := range dbPairs {
-					keys[i] = p.key
-					values[i] = p.value
-				}
-				if err := runConfigSetManyProxiedServer(rootCtx, keys, values); err != nil {
-					return err
-				}
-			} else {
-				if err := ensureDirectMode("config set-many requires direct database access"); err != nil {
-					return HandleError("%v", err)
-				}
-				for _, p := range dbPairs {
-					if err := store.SetConfig(rootCtx, p.key, p.value); err != nil {
-						return HandleError("setting config %s: %v", p.key, err)
-					}
-				}
-				commandDidWrite.Store(true)
+			if err := ensureDirectMode("config set-many requires direct database access"); err != nil {
+				return HandleError("%v", err)
 			}
+			for _, p := range dbPairs {
+				if err := store.SetConfig(rootCtx, p.key, p.value); err != nil {
+					return HandleError("setting config %s: %v", p.key, err)
+				}
+			}
+			commandDidWrite.Store(true)
 		}
 
 		if jsonOutput {
@@ -1011,11 +976,6 @@ Examples:
 
 // recognizedConfigPrefixes lists valid top-level config namespaces.
 // Keys under custom.* are always accepted (user-extensible).
-//
-// Tracker namespaces (jira., linear., github., ado., ...) are NOT listed here:
-// they are derived from the tracker registry at runtime via
-// allRecognizedConfigPrefixes, so the recognizer cannot drift out of sync when
-// a new tracker is added (GH#4427).
 var recognizedConfigPrefixes = []string{
 	"export.", "import.", "dolt.", "custom.",
 	"status.", "types.", "doctor.suppress.", "routing.", "sync.", "git.",
@@ -1051,18 +1011,9 @@ func validateStorageClassConfig(key, value string) error {
 	return nil
 }
 
-// allRecognizedConfigPrefixes returns the static namespaces plus the prefix of
-// every registered tracker ("ado.", "jira.", ...). Deriving tracker prefixes
-// from the registry keeps config-key recognition in sync with the set of
-// trackers compiled into bd instead of a hand-maintained allowlist (GH#4427).
+// allRecognizedConfigPrefixes returns the recognized config namespaces.
 func allRecognizedConfigPrefixes() []string {
-	names := tracker.List()
-	prefixes := make([]string, 0, len(recognizedConfigPrefixes)+len(names))
-	prefixes = append(prefixes, recognizedConfigPrefixes...)
-	for _, name := range names {
-		prefixes = append(prefixes, name+".")
-	}
-	return prefixes
+	return recognizedConfigPrefixes
 }
 
 // recognizedConfigKeys lists valid non-namespaced config keys.

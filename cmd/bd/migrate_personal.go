@@ -63,9 +63,6 @@ func init() {
 }
 
 func runMigratePersonal(cmd *cobra.Command, args []string) error {
-	if usesProxiedServer() {
-		return HandleErrorRespectJSON("migrate-personal is not supported in proxied-server mode")
-	}
 	ctx := rootCtx
 
 	identity := getActorWithGit()

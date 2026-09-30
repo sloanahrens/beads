@@ -84,9 +84,6 @@ Each call replaces the previous record of the same kind.`,
 		if err != nil {
 			return err
 		}
-		if usesProxiedServer() {
-			return failKind(kindInvalidArgs, "land-record is not supported in proxied-server mode")
-		}
 		if store == nil {
 			if err := ensureStoreActive(); err != nil {
 				return handleClassifiedRespectJSON(err)
@@ -123,12 +120,6 @@ Each call replaces the previous record of the same kind.`,
 			return handleClassifiedRespectJSON(fmt.Errorf("recording %s on %s: %w", summary, result.ResolvedID, err))
 		}
 		commandDidWrite.Store(true)
-		if err := commitPendingIfEmbedded(ctx, result.Store, actor, doltAutoCommitParams{
-			Command:  "land-record",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return handleClassifiedRespectJSON(fmt.Errorf("failed to commit: %w", err))
-		}
 
 		if jsonOutput {
 			issue := updated.Issue

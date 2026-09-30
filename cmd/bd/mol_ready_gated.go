@@ -64,9 +64,6 @@ func runMolReadyGated(cmd *cobra.Command, args []string) error {
 // standalone runMolReadyGated entrypoint records "mol-ready-gated"; this keeps a
 // single `bd ready --gated` invocation to exactly one cli_command event.
 func runMolReadyGatedCore(_ *cobra.Command, _ []string) error {
-	if usesProxiedServer() {
-		return runMolReadyGatedProxiedServer(rootCtx)
-	}
 
 	ctx := rootCtx
 

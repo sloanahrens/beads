@@ -71,10 +71,6 @@ Examples:
 		id := args[0]
 		reason, _ := cmd.Flags().GetString("reason")
 
-		if usesProxiedServer() {
-			return runPromoteProxiedServer(rootCtx, id, reason)
-		}
-
 		ctx := rootCtx
 
 		if store == nil {

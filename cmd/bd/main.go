@@ -34,12 +34,9 @@ import (
 	"github.com/steveyegge/beads/internal/remotecache"
 	"github.com/steveyegge/beads/internal/routing"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/backends"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	dbidentifier "github.com/steveyegge/beads/internal/storage/domain/db"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/schema"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/telemetry"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
@@ -53,7 +50,6 @@ var (
 	databaseFlag string
 	actor        string
 	store        storage.DoltStorage
-	uowProvider  uow.UnitOfWorkProvider
 	jsonOutput   bool
 
 	// Signal-aware context for graceful cancellation
@@ -85,7 +81,6 @@ var (
 	sandboxMode       bool
 	globalFlag        bool
 	serverMode        bool
-	proxiedServerMode bool
 	readonlyMode      bool               // Read-only mode: block write operations (for worker sandboxes)
 	storeIsReadOnly   bool               // Track if store was opened read-only (for staleness checks)
 	ignoreSchemaSkew  bool               // Proceed despite forward schema drift
@@ -212,13 +207,6 @@ func effectiveRootStorePolicy(cmdName string, strictReadonly bool) rootStorePoli
 	}
 }
 
-// backendSupportsStrictReadonly reports whether the live backend path can open
-// without provisioning or lifecycle changes. Unsupported SQL backends are
-// rejected earlier by validateConfiguredBackend; proxied Dolt remains writable-only.
-func backendSupportsStrictReadonly(cfg *configfile.Config) bool {
-	return cfg == nil || !cfg.IsDoltProxiedServerMode()
-}
-
 // runsPostCommandMaintenance reports whether PersistentPostRunE should run the
 // post-command maintenance net — Dolt auto-commit, the tip-metadata commit,
 // auto-backup, auto-export and auto-push.
@@ -228,10 +216,7 @@ func backendSupportsStrictReadonly(cfg *configfile.Config) bool {
 // for hours and committed each mutation inside its own transaction as it
 // happened. Running them when the operator finally sends SIGTERM would push and
 // export on the way out of a signal handler — the worst possible moment — and
-// attribute a whole process lifetime of requests to the shutdown. Proxied-mode
-// serve never reached this branch at all (PersistentPostRunE only closes the
-// provider there); server and shared-server mode do, so the exclusion has to be
-// stated rather than inherited.
+// attribute a whole process lifetime of requests to the shutdown.
 func runsPostCommandMaintenance(cmdName string, strictReadonly bool) bool {
 	if cmdName == serveCmdName {
 		return false
@@ -282,7 +267,6 @@ func resolveDoltServerConnection(ctx context.Context, beadsDir string, fileCfg *
 }
 
 var (
-	runPostRunAutoCommit = maybeAutoCommit
 	runPostRunAutoBackup = maybeAutoBackup
 	runPostRunAutoExport = maybeAutoExport
 	runPostRunAutoPush   = maybeAutoPush
@@ -451,9 +435,9 @@ func warnSharedServerEmbeddedMismatch(cfg *configfile.Config) {
 	fmt.Fprintln(os.Stderr, "  To stay embedded: unset BEADS_DOLT_SHARED_SERVER (or remove dolt.shared-server from config.yaml).")
 }
 
-// loadServerModeFromBeadsDir loads the storage mode (embedded vs server vs
-// proxied-server) from the given beads directory's metadata.json so that
-// usesSQLServer() and usesProxiedServer() return the correct values.
+// loadServerModeFromBeadsDir loads the storage mode (embedded vs server) from
+// the given beads directory's metadata.json so that usesSQLServer() returns
+// the correct value.
 //
 // A metadata.json that exists but cannot be loaded is a hard error: treating
 // it like an absent file silently flips server-mode deployments onto the
@@ -473,24 +457,21 @@ func loadServerModeFromBeadsDir(beadsDir string) error {
 	// depend on metadata existing.
 	cfg = normalizeLoadedConfig(cfg)
 	warnSharedServerEmbeddedMismatch(cfg)
-	psm := cfg.IsDoltProxiedServerMode()
 	sm := cfg.IsDoltServerMode()
 	// GH#2946: shared-server override for stale metadata.json (no-db commands)
-	if !sm && !psm && doltserver.IsSharedServerMode() {
+	if !sm && doltserver.IsSharedServerMode() {
 		sm = true
 	}
 	serverMode = sm
-	proxiedServerMode = psm
 	if cmdCtx != nil {
 		cmdCtx.ServerMode = sm
-		cmdCtx.ProxiedServerMode = psm
 	}
 	return nil
 }
 
-// loadServerModeFromConfig loads the storage mode (embedded vs server vs
-// proxied-server) from metadata.json so that usesSQLServer() and
-// usesProxiedServer() return the correct values. Called for commands that
+// loadServerModeFromConfig loads the storage mode (embedded vs server) from
+// metadata.json so that usesSQLServer() returns the correct value. Called for
+// commands that
 // skip full DB init but still need to know the mode.
 func loadServerModeFromConfig() error {
 	return loadServerModeFromBeadsDir(beads.FindBeadsDir())
@@ -756,8 +737,8 @@ func init() {
 
 	// Register persistent flags
 	rootCmd.PersistentFlags().StringVarP(&changeDir, "directory", "C", "", "Change to this directory before running the command (like git -C)")
-	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "", "Database path (default: auto-discover .beads/*.db). In proxied-server mode, a value that isn't an existing path is treated as a database name override (see --database)")
-	rootCmd.PersistentFlags().StringVar(&databaseFlag, "database", "", "Run against a different server database for this invocation, without changing the project's configured database (proxied-server mode only)")
+	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "", "Database path (default: auto-discover .beads/*.db)")
+	rootCmd.PersistentFlags().StringVar(&databaseFlag, "database", "", "Server database name (bd init only)")
 	rootCmd.PersistentFlags().StringVar(&actor, "actor", "", "Actor name for audit trail (default: $BEADS_ACTOR, git user.name, $USER)")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().String("format", "", "Output format (json). Alias for --json")
@@ -765,7 +746,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&sandboxMode, "sandbox", false, "Sandbox mode: disables Dolt auto-push")
 	rootCmd.PersistentFlags().BoolVar(&readonlyMode, "readonly", false, "Read-only mode: block write operations (for worker sandboxes)")
 	rootCmd.PersistentFlags().BoolVar(&globalFlag, "global", false, "Use the global shared-server database (beads_global)")
-	rootCmd.PersistentFlags().StringVar(&doltAutoCommit, "dolt-auto-commit", "", "Dolt auto-commit policy (off|on|batch). 'on': commit after each write. 'batch': defer commits to bd dolt commit; uncommitted changes persist in the working set until then (a live batch-mode bd process also flushes on SIGTERM/SIGHUP). Applies to embedded and direct SQL-server modes; proxied-server routes are unaffected. Default: on. Override via config key dolt.auto-commit")
+	rootCmd.PersistentFlags().StringVar(&doltAutoCommit, "dolt-auto-commit", "", "Dolt auto-commit policy (off|on|batch). 'on': commit after each write. 'batch': defer commits to bd dolt commit; uncommitted changes persist in the working set until then (a live batch-mode bd process also flushes on SIGTERM/SIGHUP). Applies to embedded and direct SQL-server modes. Default: on. Override via config key dolt.auto-commit")
 	rootCmd.PersistentFlags().BoolVar(&cpuProfileEnabled, "cpu-profile", false, "Generate CPU profile for performance analysis")
 	rootCmd.PersistentFlags().StringVar(&memProfilePath, "mem-profile", "", "Write heap profile to FILE on exit (also respects BEADS_MEM_PROFILE)")
 	rootCmd.PersistentFlags().BoolVarP(&verboseFlag, "verbose", "v", false, "Enable verbose/debug output")
@@ -1097,11 +1078,8 @@ var rootCmd = &cobra.Command{
 		// bd-m7zzd: "human" is listed in noDbCommands for its bare help
 		// screen, but list/respond/dismiss/stats are DB-backed. Without this
 		// they skip store init entirely, which direct mode papered over by
-		// lazily opening a store via ensureStoreActive() — and which in
-		// proxied mode left no UOW provider for the proxied duals.
+		// lazily opening a store via ensureStoreActive().
 		needsStoreHumanSubcommands := []string{"list", "respond", "dismiss", "stats"}
-
-		skipStoreMigrateSubcommands := []string{"from-server-to-proxied-server", "from-proxied-server-to-server", "from-shared-server-to-proxied-server", "from-proxied-server-to-shared-server"}
 
 		// Check both the command name and parent command name for subcommands
 		cmdName := cmd.Name()
@@ -1115,8 +1093,6 @@ var rootCmd = &cobra.Command{
 				// GH#2224: dolt remote add/list/remove need the store — fall through to init
 			} else if parentName == "human" && slices.Contains(needsStoreHumanSubcommands, cmdName) {
 				// bd-m7zzd: human list/respond/dismiss/stats need the store — fall through to init
-			} else if parentName == "migrate" && slices.Contains(skipStoreMigrateSubcommands, cmdName) {
-				skipsStoreInit = true
 			} else if slices.Contains(noDbCommands, parentName) {
 				skipsStoreInit = true
 			}
@@ -1228,9 +1204,8 @@ var rootCmd = &cobra.Command{
 				}
 				cfg, cfgErr := configfile.LoadForDiscovery(bd)
 				if cfgErr != nil || cfg != nil && (cfg.IsDoltProxiedServerMode() ||
-					registeredBackendWorkspaceIsBeadsDir(cfg) ||
 					!configfile.IsSupportedBackend(cfg.Backend)) {
-					// Proxied-server, registered remote, and removed-backend
+					// Removed proxied-server, registered remote, and removed-backend
 					// workspaces may have no local Dolt database file. Invalid
 					// or unknown metadata likewise must reach config validation
 					// instead of becoming a generic "no database" result.
@@ -1404,9 +1379,6 @@ var rootCmd = &cobra.Command{
 		if backendErr := validateConfiguredBackend(cfg); backendErr != nil {
 			return HandleError("%v", backendErr)
 		}
-		if readonlyMode && !backendSupportsStrictReadonly(cfg) {
-			return HandleError("strict readonly is unavailable for dolt proxied-server backend; refusing to open a store that cannot guarantee mutation-free access")
-		}
 
 		// Set actor for audit trail
 		actor = getActorWithGit()
@@ -1542,18 +1514,11 @@ var rootCmd = &cobra.Command{
 		}
 		if cfg != nil {
 			warnSharedServerEmbeddedMismatch(cfg)
-			doltCfg.ProxiedServer = cfg.IsDoltProxiedServerMode()
-			proxiedServerMode = doltCfg.ProxiedServer
-			if cmdCtx != nil {
-				cmdCtx.ProxiedServerMode = doltCfg.ProxiedServer
-			}
-
 			doltCfg.ServerMode = cfg.IsDoltServerMode()
 			// Shared server mode (dolt.shared-server in config.yaml) is a
 			// form of server mode. Override metadata.json if it still says
-			// embedded — handles installs created before GH#2946 fix. Skip
-			// this for proxied-server: it's its own backend, not server.
-			if !doltCfg.ServerMode && !doltCfg.ProxiedServer && doltserver.IsSharedServerMode() {
+			// embedded — handles installs created before GH#2946 fix.
+			if !doltCfg.ServerMode && doltserver.IsSharedServerMode() {
 				doltCfg.ServerMode = true
 			}
 			serverMode = doltCfg.ServerMode
@@ -1589,7 +1554,7 @@ var rootCmd = &cobra.Command{
 		// falls through to embeddeddolt.Open, creating a phantom embedded DB
 		// that subsequent writes fragment into (GH#3817). This is idempotent:
 		// when the override above already ran, ServerMode is already true.
-		if !doltCfg.ServerMode && !doltCfg.ProxiedServer && doltserver.IsSharedServerMode() {
+		if !doltCfg.ServerMode && doltserver.IsSharedServerMode() {
 			doltCfg.ServerMode = true
 			serverMode = doltCfg.ServerMode
 			if cmdCtx != nil {
@@ -1624,47 +1589,10 @@ var rootCmd = &cobra.Command{
 			databaseOverride = dbNameFromDBFlag
 		}
 		if databaseOverride != "" {
-			if !proxiedServerMode {
-				return HandleErrorRespectJSON("--database (or a --db value naming a database) is only supported in proxied-server mode")
-			}
-			if err := dbidentifier.ValidateIdentifier(databaseOverride); err != nil {
-				return HandleErrorRespectJSON("%v", err)
-			}
-		}
-
-		// In proxied mode the CLI short-circuits to the uowProvider path and
-		// dispatches through the *_proxied_server.go duals.
-		//
-		// Preview commands take the same policy here as they do on the
-		// embedded and server paths, and for the same reason: the provider
-		// open runs CREATE DATABASE and schema.MigrateUpWithLock, and
-		// reconcileVersionProxiedServer writes version metadata — all during
-		// root pre-run, before --dry-run/--inspect has had any effect. Proxied
-		// mode is where that is least visible, not where it is acceptable.
-		if proxiedServerMode {
-			p, err := newProxiedServerUOWProvider(rootCtx, beadsDir, databaseOverride, previewProviderOptions(previewMode)...)
-			if err != nil {
-				return HandleError("failed to open uow provider: %v", err)
-			}
-			// Fire the workspace's script hooks after commits on the
-			// unit-of-work plumbing, which notified no one: hooks now fire on
-			// both write plumbings, from the plumbing rather than from each
-			// command. This is the proxied twin of the wireStorageDecorators
-			// call below. With hooks disabled the sinks are empty and the
-			// provider comes back unwrapped.
-			var uowSinks uow.Sinks
-			if beadsDir != "" && !config.GetBool("no-hooks") {
-				hookRunner = hooks.NewRunner(filepath.Join(beadsDir, "hooks"))
-				uowSinks.Hook = hookRunner
-			}
-			uowProvider = wireExternalDependencyUOWProvider(uow.NewNotifyingProvider(p, uowSinks))
-
-			if !previewMode {
-				reconcileVersionProxiedServer(rootCtx)
-			}
-
-			syncCommandContext()
-			return nil
+			// A per-invocation database override was a proxied-server feature;
+			// server mode selects its database from metadata.json. bd init
+			// reads --database itself and never reaches this pre-run.
+			return HandleErrorRespectJSON("--database (or a --db value naming a database) is only supported by bd init")
 		}
 
 		// Default auto-commit to ON when the user hasn't set a value, in both
@@ -1687,11 +1615,7 @@ var rootCmd = &cobra.Command{
 		// Removing them WILL cause unrecoverable data corruption and data loss.
 		// Dolt manages these files itself; external interference is never safe.
 
-		if _, ok := backends.Lookup(cfg.GetBackend()); ok {
-			store, err = newRegisteredBackendStore(rootCtx, cfg.GetBackend(), beadsDir, useReadOnly)
-		} else {
-			store, err = newDoltStore(rootCtx, doltCfg)
-		}
+		store, err = newDoltStore(rootCtx, doltCfg)
 
 		// Track final read-only state for staleness checks (GH#1089)
 		storeIsReadOnly = doltCfg.ReadOnly
@@ -1852,131 +1776,82 @@ var rootCmd = &cobra.Command{
 			releaseWorkspaceGates()
 		}()
 
-		if proxiedServerMode {
-			// Retention maintenance before the provider closes: the journal
-			// this workspace just wrote to is reached through it. In the body
-			// rather than beside the deferred hook wait, for the reason spelled
-			// out at the other trigger site below.
+		if runsPostCommandMaintenance(cmd.Name(), readonlyMode) {
+			// Tip metadata auto-commit: if a tip was shown, create a separate Dolt commit for the
+			// tip_*_last_shown metadata updates. This may happen even for otherwise read-only commands.
+			if commandDidWriteTipMetadata && len(commandTipIDsShown) > 0 {
+				// Only applies when dolt auto-commit is enabled and backend is versioned (Dolt).
+				if mode, err := getDoltAutoCommitMode(); err != nil {
+					return HandleError("dolt tip auto-commit failed: %v", err)
+				} else if mode == doltAutoCommitOn {
+					// Apply tip metadata writes now (deferred in recordTipShown for Dolt).
+					// In server mode each write commits inside the storage layer.
+					for tipID := range commandTipIDsShown {
+						key := fmt.Sprintf("tip_%s_last_shown", tipID)
+						value := time.Now().Format(time.RFC3339)
+						if err := store.SetLocalMetadata(rootCtx, key, value); err != nil {
+							return HandleError("dolt tip auto-commit failed: %v", err)
+						}
+					}
+				}
+			}
+
+			// Auto-backup: sync a Dolt-native backup if enabled and due
+			runPostRunAutoBackup(rootCtx)
+
+			// Auto-export: write git-tracked JSONL for portability if enabled and due.
+			// Read-only commands must not perform post-run maintenance writes or emit
+			// sync guidance after machine-readable output.
+			if shouldRunPostCommandAutoExport(cmd) {
+				if err := runPostRunAutoExport(rootCtx, commandAllowsEmptyAutoExport(cmd)); err != nil {
+					return HandleError("%v", err)
+				}
+			}
+
+			// Auto-push: push to Dolt remote if enabled and due.
+			// Skip for read-only commands to avoid unnecessary network operations
+			// and metadata writes on commands like bd list/show/ready (GH#2191).
+			if !isReadOnlyCommand(cmd.Name()) {
+				runPostRunAutoPush(rootCtx)
+			}
+
+			// Events-journal retention, LAST in the maintenance net. It is
+			// the only step here that serves nobody but the database
+			// itself, so everything the user can observe — the commit, the
+			// backup, the export, the push — is already done and durable
+			// before a maintenance transaction opens. Its failures are
+			// logged, never returned.
+			//
+			// COMBINED ORDERING with the hook teardown above, since both
+			// land in this function and each has its own reason:
+			// maintenance runs in the BODY, so it is finished before the
+			// first defer; the defers then run close-and-release, then
+			// waitForCommandHooks, then restoreChangeDirSelection, then the
+			// context cancel. That is the only order in which both hold.
+			// Auto-prune needs an OPEN store, which the body still has and
+			// the hook wait deliberately does not (it is sequenced after
+			// the close so a hook that shells out to bd can take the
+			// embedded Dolt lock). And it must not be deferred alongside
+			// them: it would then either run after the store closed, or
+			// delay the close the hook children are waiting on. Its cost is
+			// bounded — one indexed query when nothing is due, a 30s pass
+			// budget at worst — so the hook wait it precedes starts
+			// essentially on time.
 			if shouldAutoPruneEventsJournal(cmd) {
 				maybeAutoPruneEventsJournal(rootCtx, beads.FindBeadsDir())
 			}
-			if uowProvider != nil {
-				_ = uowProvider.Close(rootCtx)
-				uowProvider = nil
-			}
-		} else {
-			if runsPostCommandMaintenance(cmd.Name(), readonlyMode) {
-				// Dolt auto-commit: after a successful write command (and after final flush),
-				// create a Dolt commit so changes don't remain only in the working set.
-				if commandDidWrite.Load() && !commandDidExplicitDoltCommit {
-					if err := runPostRunAutoCommit(rootCtx, doltAutoCommitParams{Command: cmd.Name()}); err != nil {
-						return HandleError("dolt auto-commit failed: %v", err)
-					}
-				}
+		}
 
-				// Tip metadata auto-commit: if a tip was shown, create a separate Dolt commit for the
-				// tip_*_last_shown metadata updates. This may happen even for otherwise read-only commands.
-				if commandDidWriteTipMetadata && len(commandTipIDsShown) > 0 {
-					// Only applies when dolt auto-commit is enabled and backend is versioned (Dolt).
-					if mode, err := getDoltAutoCommitMode(); err != nil {
-						return HandleError("dolt tip auto-commit failed: %v", err)
-					} else if mode == doltAutoCommitOn {
-						// Apply tip metadata writes now (deferred in recordTipShown for Dolt).
-						//
-						// A store that refuses writes by construction — the
-						// preview open, and strict --readonly — must not turn
-						// an otherwise successful command into a non-zero exit
-						// here. This block is deliberately not gated by the
-						// read-only classification, and that has been fine
-						// because OpenForReadOnlyCommand is "otherwise a normal
-						// writable store"; the write-refusing opens break that
-						// assumption. Tip bookkeeping is incidental and
-						// recordTipShown's own contract is that it may fail
-						// silently, so skip it and carry on.
-						tipWritesRefused := false
-						for tipID := range commandTipIDsShown {
-							key := fmt.Sprintf("tip_%s_last_shown", tipID)
-							value := time.Now().Format(time.RFC3339)
-							if err := store.SetLocalMetadata(rootCtx, key, value); err != nil {
-								if errors.Is(err, embeddeddolt.ErrReadOnly) {
-									debug.Logf("tip auto-commit: store is read-only, skipping tip metadata: %v", err)
-									tipWritesRefused = true
-									break
-								}
-								return HandleError("dolt tip auto-commit failed: %v", err)
-							}
-						}
+		// Signal that store is closing (prevents background flush from accessing closed store)
+		storeMutex.Lock()
+		storeActive = false
+		storeMutex.Unlock()
 
-						if !tipWritesRefused {
-							ids := make([]string, 0, len(commandTipIDsShown))
-							for tipID := range commandTipIDsShown {
-								ids = append(ids, tipID)
-							}
-							msg := formatDoltAutoCommitMessage("tip", getActor(), ids)
-							if err := runPostRunAutoCommit(rootCtx, doltAutoCommitParams{Command: "tip", MessageOverride: msg}); err != nil {
-								return HandleError("dolt tip auto-commit failed: %v", err)
-							}
-						}
-					}
-				}
-
-				// Auto-backup: sync a Dolt-native backup if enabled and due
-				runPostRunAutoBackup(rootCtx)
-
-				// Auto-export: write git-tracked JSONL for portability if enabled and due.
-				// Read-only commands must not perform post-run maintenance writes or emit
-				// sync guidance after machine-readable output.
-				if shouldRunPostCommandAutoExport(cmd) {
-					if err := runPostRunAutoExport(rootCtx, commandAllowsEmptyAutoExport(cmd)); err != nil {
-						return HandleError("%v", err)
-					}
-				}
-
-				// Auto-push: push to Dolt remote if enabled and due.
-				// Skip for read-only commands to avoid unnecessary network operations
-				// and metadata writes on commands like bd list/show/ready (GH#2191).
-				if !isReadOnlyCommand(cmd.Name()) {
-					runPostRunAutoPush(rootCtx)
-				}
-
-				// Events-journal retention, LAST in the maintenance net. It is
-				// the only step here that serves nobody but the database
-				// itself, so everything the user can observe — the commit, the
-				// backup, the export, the push — is already done and durable
-				// before a maintenance transaction opens. Its failures are
-				// logged, never returned.
-				//
-				// COMBINED ORDERING with the hook teardown above, since both
-				// land in this function and each has its own reason:
-				// maintenance runs in the BODY, so it is finished before the
-				// first defer; the defers then run close-and-release, then
-				// waitForCommandHooks, then restoreChangeDirSelection, then the
-				// context cancel. That is the only order in which both hold.
-				// Auto-prune needs an OPEN store, which the body still has and
-				// the hook wait deliberately does not (it is sequenced after
-				// the close so a hook that shells out to bd can take the
-				// embedded Dolt lock). And it must not be deferred alongside
-				// them: it would then either run after the store closed, or
-				// delay the close the hook children are waiting on. Its cost is
-				// bounded — one indexed query when nothing is due, a 30s pass
-				// budget at worst — so the hook wait it precedes starts
-				// essentially on time.
-				if shouldAutoPruneEventsJournal(cmd) {
-					maybeAutoPruneEventsJournal(rootCtx, beads.FindBeadsDir())
-				}
-			}
-
-			// Signal that store is closing (prevents background flush from accessing closed store)
-			storeMutex.Lock()
-			storeActive = false
-			storeMutex.Unlock()
-
-			if store != nil {
-				_ = store.Close() // Best effort cleanup
-				// Mark closed so the deferred gate-release cleanup above
-				// does not double-close it.
-				store = nil
-			}
+		if store != nil {
+			_ = store.Close() // Best effort cleanup
+			// Mark closed so the deferred gate-release cleanup above
+			// does not double-close it.
+			store = nil
 		}
 
 		// End the command span and flush OTel data before process exit.

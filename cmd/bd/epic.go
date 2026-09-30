@@ -35,10 +35,6 @@ var epicStatusCmd = &cobra.Command{
 
 		eligibleOnly, _ := cmd.Flags().GetBool("eligible-only")
 
-		if usesProxiedServer() {
-			return runEpicStatusProxiedServer(rootCtx, eligibleOnly)
-		}
-
 		epics, err := store.GetEpicsEligibleForClosure(rootCtx)
 		if err != nil {
 			return HandleErrorRespectJSON("getting epic status: %v", err)
@@ -122,10 +118,6 @@ var closeEligibleEpicsCmd = &cobra.Command{
 
 		if err := validateCloseReasons([]string{reason}); err != nil {
 			return HandleErrorRespectJSON("%v", err)
-		}
-
-		if usesProxiedServer() {
-			return runCloseEligibleEpicsProxiedServer(rootCtx, dryRun, reason)
 		}
 
 		if !dryRun {

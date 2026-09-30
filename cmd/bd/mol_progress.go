@@ -40,10 +40,6 @@ Example:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runMolProgressProxiedServer(rootCtx, args)
-		}
-
 		ctx := rootCtx
 
 		if store == nil {

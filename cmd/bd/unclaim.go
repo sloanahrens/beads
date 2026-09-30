@@ -61,14 +61,6 @@ Examples:
 
 		CheckReadonly("unclaim")
 
-		if usesProxiedServer() {
-			expected := ""
-			if conditional {
-				expected = ifAssignee
-			}
-			return runUnclaimProxiedServer(rootCtx, args, reason, force, expected)
-		}
-
 		ctx := rootCtx
 
 		unclaimedIssues := []*types.Issue{}

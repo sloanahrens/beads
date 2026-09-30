@@ -19,8 +19,7 @@ func TestConformanceScriptUsesExplicitTimeoutBudgets(t *testing.T) {
 	}
 
 	want := [][]string{
-		{"test", "-tags", "gms_pure_go", "-v", "-timeout", "30m", "./internal/storage/embeddeddolt/", "-run", "TestConformance"},
-		{"test", "-tags", "gms_pure_go e2e", "-timeout", "10m", "./test/conformance/"},
+		{"test", "-tags", "gms_pure_go", "-v", "-timeout", "30m", "./internal/storage/dolt/", "-run", "^TestConformance$"},
 	}
 	if !reflect.DeepEqual(run.calls, want) {
 		t.Fatalf("go calls = %#v, want %#v", run.calls, want)
@@ -35,7 +34,6 @@ func TestConformanceScriptPropagatesGoTestFailures(t *testing.T) {
 		wantCalls int
 	}{
 		{name: "tier 1", failCall: 1, exitCode: 41, wantCalls: 1},
-		{name: "tier 2", failCall: 2, exitCode: 42, wantCalls: 2},
 	}
 
 	for _, test := range tests {
@@ -70,7 +68,7 @@ func TestConformanceWorkflowHasOuterTimeoutBudget(t *testing.T) {
 	}
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	want := "  conformance:\n" +
-		"    name: Storage backend conformance (embedded Dolt oracle)\n" +
+		"    name: Storage backend conformance (Dolt server)\n" +
 		"    timeout-minutes: 45\n" +
 		"    runs-on: ubuntu-latest\n"
 	if !strings.Contains(text, want) {

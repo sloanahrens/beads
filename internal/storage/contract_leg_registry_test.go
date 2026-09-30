@@ -47,7 +47,6 @@ var contractLegRegistry []contractLeg
 
 func init() {
 	registerContractLeg(contractLeg{name: "dolt", wiringRoot: "internal/storage/dolt"})
-	registerContractLeg(contractLeg{name: "embeddeddolt", wiringRoot: "internal/storage/embeddeddolt"})
 	registerContractLeg(contractLeg{name: "uow", wiringRoot: "internal/storage/uow"})
 }
 

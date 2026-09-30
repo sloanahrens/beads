@@ -461,7 +461,7 @@ func TestDoltAddAndCommitInTxStopsAtStageFailure(t *testing.T) {
 	mock.ExpectRollback()
 
 	store := &DoltStore{}
-	err = store.doltAddAndCommitInTx(context.Background(), tx, []string{"issues", "events"}, "bd: test commit")
+	err = store.doltAddAndCommitInTx(context.Background(), tx, []string{"issues"}, "bd: test commit")
 	if !errors.Is(err, stageErr) {
 		t.Fatalf("doltAddAndCommitInTx() error = %v, want stage failure %v", err, stageErr)
 	}

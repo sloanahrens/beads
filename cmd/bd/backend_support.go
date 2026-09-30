@@ -4,15 +4,14 @@ import (
 	"fmt"
 
 	"github.com/steveyegge/beads/internal/configfile"
-	"github.com/steveyegge/beads/internal/storage/backends"
 )
 
 func validateConfiguredBackend(cfg *configfile.Config) error {
 	if cfg == nil {
 		return nil
 	}
-	if backends.Registered(cfg.Backend) {
-		return nil
+	if cfg.IsDoltProxiedServerMode() {
+		return errProxiedServerModeRemoved()
 	}
 	switch cfg.Backend {
 	case configfile.BackendPostgres, configfile.BackendMySQL, configfile.BackendSQLite:
@@ -22,15 +21,6 @@ func validateConfiguredBackend(cfg *configfile.Config) error {
 	default:
 		return configfile.UnknownBackendError(cfg.Backend)
 	}
-}
-
-// registeredBackendWorkspaceIsBeadsDir reports whether metadata selects a
-// backend that has no separately discoverable local database.
-func registeredBackendWorkspaceIsBeadsDir(cfg *configfile.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	return backends.WorkspaceIsBeadsDir(cfg.GetBackend())
 }
 
 func requireDoltBackend(cfg *configfile.Config) error {
@@ -68,4 +58,14 @@ func loadDoltBackendConfig(beadsDir string) (*configfile.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// errProxiedServerModeRemoved is the fail-closed refusal for a workspace whose
+// metadata.json still selects dolt_mode "proxied-server". That mode was removed;
+// bd opens nothing rather than guessing at a server-mode equivalent.
+func errProxiedServerModeRemoved() error {
+	return fmt.Errorf("dolt_mode %q in metadata.json is no longer supported: proxied-server mode was removed; %s; "+
+		"convert the workspace to server mode with a bd built from beads commit 92d15f7 or earlier "+
+		"(bd migrate from-proxied-server-to-server), then retry",
+		configfile.DoltModeProxiedServer, configfile.BackendNotOpenedGuarantee)
 }

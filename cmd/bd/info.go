@@ -53,10 +53,6 @@ Examples:
 			return showWhatsNew()
 		}
 
-		if usesProxiedServer() {
-			return runInfoProxiedServer(rootCtx, schemaFlag)
-		}
-
 		absDBPath := absoluteDBPath()
 
 		info := map[string]interface{}{

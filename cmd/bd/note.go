@@ -134,10 +134,6 @@ To read notes on an issue, use: bd show <id>`,
 			return HandleErrorRespectJSON("%v", err)
 		}
 
-		if usesProxiedServer() {
-			return runNoteProxiedServer(rootCtx, id, noteText)
-		}
-
 		ctx := rootCtx
 
 		result, err := resolveAndGetIssueForMutation(ctx, store, id)
@@ -172,12 +168,6 @@ To read notes on an issue, use: bd show <id>`,
 		}
 		if err := issueStore.UpdateIssue(ctx, result.ResolvedID, updates, actor); err != nil {
 			return HandleErrorRespectJSON("updating %s: %v", id, err)
-		}
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "note",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		SetLastTouchedID(result.ResolvedID)

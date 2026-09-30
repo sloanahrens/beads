@@ -61,10 +61,6 @@ Examples:
 		typeFilter, _ := cmd.Flags().GetString("type")
 		statusFilter, _ := cmd.Flags().GetString("status")
 
-		if usesProxiedServer() {
-			return runLintProxiedServer(rootCtx, args, typeFilter, statusFilter)
-		}
-
 		ctx := rootCtx
 		if store == nil {
 			return HandleErrorWithHint("database not initialized", diagHint())

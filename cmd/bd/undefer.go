@@ -35,10 +35,6 @@ Examples:
 
 		CheckReadonly("undefer")
 
-		if usesProxiedServer() {
-			return runUndeferProxiedServer(rootCtx, args)
-		}
-
 		ctx := rootCtx
 
 		_, err := utils.ResolvePartialIDs(ctx, store, args)

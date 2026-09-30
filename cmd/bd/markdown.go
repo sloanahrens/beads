@@ -342,13 +342,6 @@ func createIssuesFromMarkdown(ctx context.Context, in createInput) error {
 	for _, issue := range result.Issues {
 		issueIDs = append(issueIDs, issue.ID)
 	}
-	if err := commitPendingIfEmbedded(ctx, store, request.Actor, doltAutoCommitParams{
-		Command:         "create",
-		IssueIDs:        issueIDs,
-		MessageOverride: request.Provenance,
-	}); err != nil {
-		WarnError("failed to commit: %v", err)
-	}
 	return reportMarkdownBatch(result.Issues, in)
 }
 

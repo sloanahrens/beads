@@ -224,9 +224,6 @@ Examples:
 		CheckReadonly("dolt remote reset-data")
 		name := args[0]
 
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("bd dolt remote reset-data is not supported over a proxied bd server; run it from the workspace that hosts the Dolt database")
-		}
 		if isDoltLocalOnly() {
 			fmt.Fprintln(os.Stderr, "Error: cannot reset remote data: remote sync is disabled (dolt.local-only=true).")
 			fmt.Fprintln(os.Stderr, "To re-enable remote sync: bd config unset dolt.local-only")

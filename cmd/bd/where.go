@@ -138,9 +138,8 @@ func shouldReadWherePrefixFromStore(beadsDir string) bool {
 	}
 
 	// `bd where` should be able to report selected metadata without requiring
-	// a live Dolt server (or spawning the proxied-server daemon) just to
-	// recover issue_prefix.
-	return !cfg.IsDoltServerMode() && !cfg.IsDoltProxiedServerMode()
+	// a live Dolt server just to recover issue_prefix.
+	return !cfg.IsDoltServerMode()
 }
 
 // findOriginalBeadsDir walks up from cwd looking for a .beads directory with a redirect file

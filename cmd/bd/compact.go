@@ -83,18 +83,6 @@ Examples:
   bd compact --stats                       # Show statistics
 `,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		if usesProxiedServer() {
-			if compactDolt {
-				return runCompactDoltProxiedServer(rootCtx)
-			}
-			return HandleErrorRespectJSON("only 'compact --dolt' is supported in proxied-server mode")
-		}
-		// Block mutating operations in embedded mode; allow --stats, --analyze, --dry-run read-only paths.
-		if !compactStats && !compactAnalyze && !compactDryRun {
-			if err := requireServerMode("compact"); err != nil {
-				return HandleError("%v", err)
-			}
-		}
 		// Compact modifies data unless --stats or --analyze or --dry-run or --dolt with --dry-run
 		if !compactStats && !compactAnalyze && !compactDryRun && !(compactDolt && compactDryRun) {
 			CheckReadonly("compact")

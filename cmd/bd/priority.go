@@ -40,10 +40,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runPriorityProxiedServer(rootCtx, args)
-		}
-
 		id := args[0]
 		priorityStr := args[1]
 
@@ -80,12 +76,6 @@ Examples:
 		}
 		if err := issueStore.UpdateIssue(ctx, result.ResolvedID, updates, actor); err != nil {
 			return HandleErrorRespectJSON("updating %s: %v", id, err)
-		}
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "priority",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		SetLastTouchedID(result.ResolvedID)

@@ -70,7 +70,7 @@ func (s *DoltStore) wakeExpiredDefers(ctx context.Context) {
 				return nil, "", nil
 			}
 			tables := issueops.ChangedTables{}
-			tables.Add("issues", "events")
+			tables.Add("issues")
 			return tables, issueops.WakeDefersCommitMessage(len(woke.Issues)), nil
 		})
 	})

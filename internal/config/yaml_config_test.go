@@ -49,8 +49,7 @@ func TestIsYamlOnlyKey(t *testing.T) {
 		{"import.unlisted-key", false},
 
 		// Secret keys (stored in yaml to avoid leaking via Dolt push)
-		{"github.token", true},
-		{"linear.api_key", true},
+		{"ai.api_key", true},
 
 		// Non-yaml keys (should return false)
 		{"jira.url", false},
@@ -830,8 +829,6 @@ func TestSecretKeyEnvVarHint(t *testing.T) {
 		key      string
 		expected string
 	}{
-		{"linear.api_key", "LINEAR_API_KEY"},
-		{"github.token", "GITHUB_TOKEN"},
 		{"ai.api_key", "ANTHROPIC_API_KEY"},
 		{"custom.secret-token", "BD_CUSTOM_SECRET_TOKEN"},
 	}
@@ -872,14 +869,14 @@ func TestCheckSecretKeyGitSafety_RefusesGitTrackedSecret(t *testing.T) {
 	}
 
 	// checkSecretGitTracked should refuse a secret key
-	err := checkSecretGitTracked(configPath, "linear.api_key")
+	err := checkSecretGitTracked(configPath, "ai.api_key")
 	if err == nil {
 		t.Fatal("expected error for secret key on git-tracked config, got nil")
 	}
 	if !strings.Contains(err.Error(), "refusing to write secret key") {
 		t.Fatalf("expected 'refusing to write' error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "LINEAR_API_KEY") {
+	if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
 		t.Fatalf("expected env var hint in error, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "--force-git-tracked") {
@@ -937,7 +934,7 @@ func TestCheckSecretKeyGitSafety_AllowsUntrackedConfig(t *testing.T) {
 	}
 
 	// checkSecretGitTracked should allow untracked config
-	err := checkSecretGitTracked(configPath, "linear.api_key")
+	err := checkSecretGitTracked(configPath, "ai.api_key")
 	if err != nil {
 		t.Fatalf("expected no error for untracked config, got: %v", err)
 	}

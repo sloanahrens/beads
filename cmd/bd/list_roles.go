@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/issueops"
 )
@@ -75,17 +72,4 @@ func annotateListBlocking(ctx context.Context, store storage.DoltStorage, ids []
 		return newListBlocking(issueops.BlockingResult{})
 	}
 	return newListBlocking(result)
-}
-
-// proxiedBlockingAnnotator hands back the guarded blocking-decoration surface
-// for the proxied-server provider, through the provider's own accessor.
-func proxiedBlockingAnnotator() (issueops.BlockingAnnotator, error) {
-	if uowProvider == nil {
-		return nil, errors.New("proxied-server UOW provider not initialized")
-	}
-	src, ok := uowProvider.(uow.BlockingAnnotatorSource)
-	if !ok {
-		return nil, fmt.Errorf("proxied-server provider %T does not offer the blocking-decoration surface", uowProvider)
-	}
-	return src.BlockingAnnotator()
 }

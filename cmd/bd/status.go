@@ -114,9 +114,6 @@ Examples:
 // openStatsReporter hands back the summary role for whichever route this
 // invocation is on, each through its own capability accessor.
 func openStatsReporter() (issueops.StatsReporter, error) {
-	if usesProxiedServer() {
-		return proxiedStatsReporter()
-	}
 	return store.StatsReporter()
 }
 
@@ -198,7 +195,7 @@ func init() {
 	statusCmd.Flags().Bool("all", false, "Show all issues (default behavior)")
 	statusCmd.Flags().Bool("assigned", false, "Show issues assigned to current user")
 	statusCmd.Flags().Bool("no-activity", false, "Skip git activity summary (faster)")
-	statusCmd.Flags().Bool("no-blocked", false, "Skip blocked-count computation (faster on large rigs; not supported in proxied-server mode)")
+	statusCmd.Flags().Bool("no-blocked", false, "Skip blocked-count computation (faster on large rigs)")
 	// Note: --json flag is defined as a persistent flag in main.go, not here
 	rootCmd.AddCommand(statusCmd)
 }

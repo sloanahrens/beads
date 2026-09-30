@@ -38,10 +38,6 @@ Example:
 		autoMerge, _ := cmd.Flags().GetBool("auto-merge")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-		if usesProxiedServer() {
-			return runDuplicatesProxiedServer(rootCtx, autoMerge, dryRun)
-		}
-
 		if autoMerge && !dryRun {
 			CheckReadonly("duplicates --auto-merge")
 		}

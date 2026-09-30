@@ -27,9 +27,6 @@ var labelCmd = &cobra.Command{
 // opens a unit of work, names a use case or composes a transaction: the label
 // edit is a patch, and the role is what applies it.
 func openIssueLifecycle() (issueops.Lifecycle, error) {
-	if usesProxiedServer() {
-		return proxiedIssueLifecycle()
-	}
 	return store.IssueLifecycle()
 }
 
@@ -38,9 +35,6 @@ func openIssueLifecycle() (issueops.Lifecycle, error) {
 // IssueDetails with Labels on it — so there is nothing here for a label-shaped
 // read surface to add.
 func openIssueReader() (issueops.Reader, error) {
-	if usesProxiedServer() {
-		return proxiedIssueReader()
-	}
 	return store.IssueReader()
 }
 
@@ -53,9 +47,6 @@ func openIssueReader() (issueops.Reader, error) {
 // internal/workapi already defines for every proxied front door, and its
 // not-found is normalized to the same message shape.
 func resolveLabelTarget(ctx context.Context, id string) (string, error) {
-	if usesProxiedServer() {
-		return resolveLabelTargetProxied(ctx, id)
-	}
 	return utils.ResolvePartialID(ctx, store, id)
 }
 
@@ -332,10 +323,6 @@ var labelListAllCmd = &cobra.Command{
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runLabelListAllProxiedServer(rootCtx)
-		}
-
 		labelCounts, err := countLabelsAcrossIssues(rootCtx, store)
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
@@ -398,10 +385,6 @@ var labelPropagateCmd = &cobra.Command{
 				c.CloseEventAndAdd(evt)
 			}
 		}()
-
-		if usesProxiedServer() {
-			return runLabelPropagateProxiedServer(rootCtx, args)
-		}
 
 		ctx := rootCtx
 

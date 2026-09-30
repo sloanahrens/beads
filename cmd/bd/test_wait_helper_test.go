@@ -5,25 +5,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/git"
 )
-
-// waitFor repeatedly evaluates pred until it returns true or timeout expires.
-// Use this instead of time.Sleep for event-driven testing.
-func waitFor(t *testing.T, timeout, poll time.Duration, pred func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if pred() {
-			return
-		}
-		time.Sleep(poll)
-	}
-	t.Fatalf("condition not met within %v", timeout)
-}
 
 // setupGitRepo creates a temporary git repository and returns its path and cleanup function.
 // The repo is initialized with git config, a .beads directory, and an initial commit.

@@ -152,9 +152,6 @@ Examples:
 		if _, err := loadDoltBackendConfig(beadsDir); err != nil {
 			return HandleError("%v", err)
 		}
-		if !usesSQLServer() {
-			return HandleError("'bd dolt set' is not supported in embedded mode (no Dolt server)")
-		}
 		key := args[0]
 		value := args[1]
 		updateConfig, _ := cmd.Flags().GetBool("update-config")
@@ -181,9 +178,6 @@ Use this before switching to server mode to ensure the server is running.`,
 		}
 		if _, err := loadDoltBackendConfig(beadsDir); err != nil {
 			return HandleError("%v", err)
-		}
-		if !usesSQLServer() {
-			return HandleError("'bd dolt test' is not supported in embedded mode (no Dolt server)")
 		}
 		return testDoltConnection()
 	},
@@ -783,14 +777,11 @@ required. Use this command for explicit control or diagnostics.`,
 		if err != nil {
 			return HandleError("%v", err)
 		}
-		if !usesSQLServer() {
-			return HandleError("'bd dolt start' is not supported in embedded mode (no Dolt server)")
-		}
 		// A remote (non-localhost) server host means bd does not own the
 		// server lifecycle (GH#3545/GH#3518): starting a repo-local
 		// server here would write local PID/port state that shadows the
 		// configured remote endpoint.
-		if host := fileCfg.GetDoltServerHost(); !usesProxiedServer() && !configfile.IsLocalHostString(host) {
+		if host := fileCfg.GetDoltServerHost(); !configfile.IsLocalHostString(host) {
 			return HandleError("the configured Dolt server host is remote (%s); 'bd dolt start' only manages a local server.\nStart the server on that host, or clear dolt_server_host / dolt.host / BEADS_DOLT_SERVER_HOST to run one locally", host)
 		}
 		serverDir := doltserver.ResolveServerDir(beadsDir)
@@ -844,38 +835,14 @@ scope cannot be established.`,
 		if err != nil {
 			return HandleError("%v", err)
 		}
-		if !usesSQLServer() {
-			return HandleError("'bd dolt stop' is not supported in embedded mode (no Dolt server)")
-		}
 		// Same remote-host ownership guard as 'bd dolt start': with a
 		// remote server host, the repo-local PID state (if any) is a
 		// leftover, and stopping it would report success while the
 		// configured external server keeps running (GH#3545/GH#3518).
-		if host := fileCfg.GetDoltServerHost(); !usesProxiedServer() && !configfile.IsLocalHostString(host) {
+		if host := fileCfg.GetDoltServerHost(); !configfile.IsLocalHostString(host) {
 			return HandleError("the configured Dolt server host is remote (%s); 'bd dolt stop' only manages a local server.\nStop the server on that host, or clear dolt_server_host / dolt.host / BEADS_DOLT_SERVER_HOST to manage one locally", host)
 		}
 		force, _ := cmd.Flags().GetBool("force")
-
-		if usesProxiedServer() {
-			rootDir, err := resolveProxiedServerRootPath(beadsDir)
-			if err != nil {
-				return HandleError("%v", err)
-			}
-			shutdownErr := proxy.Shutdown(rootDir)
-			if shutdownErr == nil {
-				return renderDoltStopResult(doltStopResult{
-					Stopped:  true,
-					Force:    force,
-					Verified: boolPointer(true),
-				})
-			}
-			if !force || !proxy.CanForceStopUnverified(shutdownErr) {
-				return HandleErrorRespectJSON("%v", shutdownErr)
-			}
-
-			report, forceErr := proxy.ForceStopUnverified(rootDir)
-			return renderDoltStopResult(newForcedDoltStopResult(shutdownErr, report, forceErr))
-		}
 
 		serverDir := doltserver.ResolveServerDir(beadsDir)
 
@@ -1090,10 +1057,6 @@ endpoint via SQL and reports reachability, server version, and database.`,
 			fmt.Printf("Backend: %s (no Dolt engine)\n", cfg.GetBackend())
 			return nil
 		}
-		if !usesSQLServer() {
-			showEmbeddedDoltStatus(beadsDir)
-			return nil
-		}
 
 		// For externally-managed Dolt servers, the local PID file is
 		// meaningless or absent — ping the configured endpoint via SQL
@@ -1196,8 +1159,7 @@ func shouldUseExternalDoltStatus(cfg *configfile.Config, autoStartDisabled, shar
 	// this must precede the IsDoltServerMode guard — otherwise a workspace
 	// with dolt.shared-server: true in config.yaml and stale embedded
 	// metadata still falls through to the PID-file "not running" path.
-	// Proxied-server mode is excluded, matching that override's !psm guard.
-	if sharedServerMode && !cfg.IsDoltProxiedServerMode() {
+	if sharedServerMode {
 		return true
 	}
 	if !cfg.IsDoltServerMode() {
@@ -1306,41 +1268,6 @@ func runExternalDoltStatus(beadsDir string, cfg *configfile.Config) {
 	}
 }
 
-// showEmbeddedDoltStatus reports Dolt engine status when running in
-// embedded mode. There is no separate server process; the engine runs
-// in-process and data lives at .beads/embeddeddolt/.
-func showEmbeddedDoltStatus(beadsDir string) {
-	dataDir := filepath.Join(beadsDir, "embeddeddolt")
-	dataDirExists := false
-	if info, err := os.Stat(dataDir); err == nil && info.IsDir() {
-		dataDirExists = true
-	}
-
-	if jsonOutput {
-		if err := outputJSON(map[string]interface{}{
-			"mode": "embedded",
-			// Embedded mode has an active in-process engine, but no
-			// separate server process. Use a server-specific field so
-			// clients do not read running=false as "Dolt is unavailable".
-			"server_running":  false,
-			"data_dir":        dataDir,
-			"data_dir_exists": dataDirExists,
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		}
-		return
-	}
-
-	fmt.Println("Dolt engine: embedded (in-process, no server)")
-	fmt.Printf("  Data: %s\n", dataDir)
-	if !dataDirExists {
-		fmt.Printf("  %s\n", ui.RenderWarn("Data directory does not exist — run 'bd init' to create it"))
-	}
-	if isDoltLocalOnly() {
-		fmt.Println("  Remote sync: disabled (dolt.local-only=true)")
-	}
-}
-
 var doltKillallCmd = &cobra.Command{
 	Use:   "killall",
 	Short: "Kill all orphan Dolt server processes",
@@ -1362,9 +1289,6 @@ servers are preserved.`,
 			if _, err := loadDoltBackendConfig(beadsDir); err != nil {
 				return HandleError("%v", err)
 			}
-		}
-		if !usesSQLServer() {
-			return HandleError("'bd dolt killall' is not supported in embedded mode (no Dolt server)")
 		}
 		if beadsDir == "" {
 			beadsDir = "." // best effort
@@ -1450,16 +1374,9 @@ recovery.`,
 		if _, err := loadDoltBackendConfig(beadsDir); err != nil {
 			return HandleError("%v", err)
 		}
-		if !usesSQLServer() {
-			return HandleError("'bd dolt clean-databases' is not supported in embedded mode (no Dolt server)")
-		}
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		purgeDropped, _ := cmd.Flags().GetBool("purge-dropped")
 		opts := cleanDatabasesOptions{dryRun: dryRun, purgeDropped: purgeDropped}
-
-		if usesProxiedServer() {
-			return runDoltCleanDatabasesProxied(rootCtx, beadsDir, opts)
-		}
 
 		// Connect directly to the Dolt server via config instead of getStore(),
 		// which isn't initialized for dolt subcommands (beads-9vt).
@@ -1738,10 +1655,6 @@ var doltRemoteRemoveCmd = &cobra.Command{
 		ctx := context.Background()
 		name := args[0]
 
-		if usesProxiedServer() {
-			return runDoltRemoteRemoveProxied(ctx, name)
-		}
-
 		st := getStore()
 		if st == nil {
 			return HandleError("no store available")
@@ -1860,7 +1773,7 @@ func selectedDoltBeadsDir() string {
 // an authoritative-but-empty active database from falling through to a
 // stale candidate. A corrupt or unreadable repo_state.json is surfaced as a
 // warning rather than silently rendered as "(none)".
-func resolveDoltShowRemotes(beadsDir string, cfg *configfile.Config, embeddedDataDir string, embedded bool) []storage.RemoteInfo {
+func resolveDoltShowRemotes(beadsDir string, cfg *configfile.Config) []storage.RemoteInfo {
 	ctx := context.Background()
 	if st := getStore(); st != nil {
 		if remotes, err := st.ListRemotes(ctx); err == nil && len(remotes) > 0 {
@@ -1872,14 +1785,7 @@ func resolveDoltShowRemotes(beadsDir string, cfg *configfile.Config, embeddedDat
 		dbName = cfg.GetDoltDatabase()
 	}
 	var candidates []string
-	if embedded {
-		if embeddedDataDir != "" {
-			candidates = append(candidates, embeddedDataDir)
-			if dbName != "" {
-				candidates = append(candidates, filepath.Join(embeddedDataDir, dbName))
-			}
-		}
-	} else if beadsDir != "" {
+	if beadsDir != "" {
 		candidates = append(candidates, filepath.Join(beadsDir, "dolt"))
 		if dbName != "" {
 			candidates = append(candidates, filepath.Join(beadsDir, "dolt", dbName))
@@ -1925,13 +1831,11 @@ func showDoltConfig(testConnection bool) error {
 	}
 
 	backend := cfg.GetBackend()
-	embedded := !usesSQLServer()
 
 	// Resolve actual server port for connection testing
 	showHost := cfg.GetDoltServerHost()
 	dsCfg := doltserver.DefaultConfig(beadsDir)
 	showPort := dsCfg.Port
-	embeddedDataDir := filepath.Join(beadsDir, "embeddeddolt")
 
 	if jsonOutput {
 		result := map[string]interface{}{
@@ -1939,18 +1843,15 @@ func showDoltConfig(testConnection bool) error {
 		}
 		if backend == configfile.BackendDolt {
 			result["database"] = cfg.GetDoltDatabase()
-			result["embedded"] = embedded
-			if embedded {
-				result["data_dir"] = embeddedDataDir
-			} else {
-				result["host"] = showHost
-				result["port"] = showPort
-				result["user"] = cfg.GetDoltServerUser()
-				result["tls"] = cfg.GetDoltServerTLS()
-				result["shared_server"] = doltserver.IsSharedServerMode()
-				if testConnection {
-					result["connection_ok"] = testServerConnection(showHost, showPort)
-				}
+			// Kept for JSON consumers; embedded mode no longer exists.
+			result["embedded"] = false
+			result["host"] = showHost
+			result["port"] = showPort
+			result["user"] = cfg.GetDoltServerUser()
+			result["tls"] = cfg.GetDoltServerTLS()
+			result["shared_server"] = doltserver.IsSharedServerMode()
+			if testConnection {
+				result["connection_ok"] = testServerConnection(showHost, showPort)
 			}
 		}
 		if err := outputJSON(result); err != nil {
@@ -1967,35 +1868,30 @@ func showDoltConfig(testConnection bool) error {
 	fmt.Println("Dolt Configuration")
 	fmt.Println("==================")
 	fmt.Printf("  Database: %s\n", cfg.GetDoltDatabase())
-	if embedded {
-		fmt.Println("  Mode:     embedded (in-process Dolt engine)")
-		fmt.Printf("  Data:     %s\n", embeddedDataDir)
-	} else {
-		fmt.Printf("  Host:     %s\n", showHost)
-		fmt.Printf("  Port:     %d\n", showPort)
-		fmt.Printf("  User:     %s\n", cfg.GetDoltServerUser())
-		fmt.Printf("  TLS:      %t\n", cfg.GetDoltServerTLS())
-		if doltserver.IsSharedServerMode() {
-			fmt.Println("  Mode:     shared server")
-			if sharedDir, err := doltserver.SharedServerDir(); err == nil {
-				fmt.Printf("  Server:   %s\n", sharedDir)
-			}
-		} else {
-			fmt.Println("  Mode:     per-project")
+	fmt.Printf("  Host:     %s\n", showHost)
+	fmt.Printf("  Port:     %d\n", showPort)
+	fmt.Printf("  User:     %s\n", cfg.GetDoltServerUser())
+	fmt.Printf("  TLS:      %t\n", cfg.GetDoltServerTLS())
+	if doltserver.IsSharedServerMode() {
+		fmt.Println("  Mode:     shared server")
+		if sharedDir, err := doltserver.SharedServerDir(); err == nil {
+			fmt.Printf("  Server:   %s\n", sharedDir)
 		}
+	} else {
+		fmt.Println("  Mode:     per-project")
+	}
 
-		if testConnection {
-			fmt.Println()
-			if testServerConnection(showHost, showPort) {
-				fmt.Printf("  %s\n", ui.RenderPass("✓ Server connection OK"))
-			} else {
-				fmt.Printf("  %s\n", ui.RenderWarn("✗ Server not reachable"))
-			}
+	if testConnection {
+		fmt.Println()
+		if testServerConnection(showHost, showPort) {
+			fmt.Printf("  %s\n", ui.RenderPass("✓ Server connection OK"))
+		} else {
+			fmt.Printf("  %s\n", ui.RenderWarn("✗ Server not reachable"))
 		}
 	}
 
 	fmt.Println("\nRemotes:")
-	remotes := resolveDoltShowRemotes(beadsDir, cfg, embeddedDataDir, embedded)
+	remotes := resolveDoltShowRemotes(beadsDir, cfg)
 	if len(remotes) == 0 {
 		fmt.Println("  (none)")
 	} else {

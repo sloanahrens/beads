@@ -22,7 +22,6 @@ type ContextInfo struct {
 	DoltMode      string `json:"dolt_mode"`
 	ServerHost    string `json:"server_host,omitempty"`
 	ServerPort    int    `json:"server_port,omitempty"`
-	ProxiedDir    string `json:"proxied_dir,omitempty"`
 	Database      string `json:"database"`
 	DataDir       string `json:"data_dir,omitempty"`
 	ProjectID     string `json:"project_id,omitempty"`
@@ -55,10 +54,6 @@ Examples:
 				c.CloseEventAndAdd(evt)
 			}
 		}()
-
-		if usesProxiedServer() {
-			return runContextProxiedServer(cmd, rootCtx)
-		}
 
 		// The direct route reads config files itself rather than through the
 		// contextinfo provider — it must answer in degraded states where no
@@ -104,9 +99,7 @@ Examples:
 			cfg = configfile.DefaultConfig()
 		}
 
-		if err := applyContextBackend(&snapshot, rc.BeadsDir, cfg); err != nil {
-			return HandleError("%v", err)
-		}
+		applyContextBackend(&snapshot, rc.BeadsDir, cfg)
 
 		snapshot.SyncRemote = resolveSyncRemoteFromDir(rc.BeadsDir)
 
@@ -133,7 +126,7 @@ Examples:
 // policy both routes share: it is what stops a non-Dolt workspace from being
 // described as embedded Dolt on database "beads", which is what both routes did
 // while each held its own copy of `Backend: configfile.BackendDolt`.
-func applyContextBackend(snapshot *domain.ContextInfo, beadsDir string, cfg *configfile.Config) error {
+func applyContextBackend(snapshot *domain.ContextInfo, beadsDir string, cfg *configfile.Config) {
 	snapshot.SetBackendIdentity(cfg.GetBackend(), cfg.GetDoltMode(), cfg.GetDoltDatabase())
 	snapshot.ProjectID = cfg.ProjectID
 
@@ -141,17 +134,9 @@ func applyContextBackend(snapshot *domain.ContextInfo, beadsDir string, cfg *con
 		snapshot.ServerHost = cfg.GetDoltServerHost()
 		snapshot.ServerPort = doltserver.DefaultConfig(beadsDir).Port
 	}
-	if cfg.IsDoltProxiedServerMode() {
-		p, err := resolveProxiedServerRootPath(beadsDir)
-		if err != nil {
-			return fmt.Errorf("resolve proxied server root: %w", err)
-		}
-		snapshot.ProxiedDir = p
-	}
 	if dataDir := cfg.GetDoltDataDir(); dataDir != "" {
 		snapshot.DataDir = dataDir
 	}
-	return nil
 }
 
 func printContextText(info ContextInfo) {
@@ -191,9 +176,6 @@ func printContextText(info ContextInfo) {
 	if info.ServerHost != "" {
 		fmt.Printf("  server:       %s:%d\n", info.ServerHost, info.ServerPort)
 	}
-	if info.ProxiedDir != "" {
-		fmt.Printf("  proxied dir:  %s\n", info.ProxiedDir)
-	}
 	if info.DataDir != "" {
 		fmt.Printf("  data dir:     %s\n", info.DataDir)
 	}
@@ -212,4 +194,41 @@ func printContextText(info ContextInfo) {
 func init() {
 	rootCmd.AddCommand(contextCmd)
 	readOnlyCommands["context"] = true
+}
+
+// contextInfoView projects a workspace snapshot onto what `bd context` prints
+// and marshals.
+//
+// The workspace identity half comes from domain.PublishedContext, the same
+// projection GET /v0/beads/context serves, so the two surfaces cannot name the
+// same workspace differently.
+//
+// Everything below that call is LOCAL-ONLY and deliberately so, which is why
+// it is written out here rather than added to the shared projection. These are
+// operator diagnostics printed to the terminal of whoever owns the workspace:
+// the redirect and worktree flags, the absolute host paths, the database bind
+// endpoint, the role, and the sync remote — which is exactly the member the
+// shared projection has no room for, because a remote URL routinely embeds a
+// credential and an HTTP client is not the person who configured it.
+func contextInfoView(d domain.ContextInfo) ContextInfo {
+	published := domain.PublishedContext(d)
+	return ContextInfo{
+		BdVersion: published.BdVersion,
+		Backend:   published.Backend,
+		DoltMode:  published.DoltMode,
+		Database:  published.Database,
+		BeadsDir:  published.BeadsDir,
+		RepoRoot:  published.RepoRoot,
+		ProjectID: published.ProjectID,
+
+		CWDRepoRoot:   d.CWDRepoRoot,
+		IsRedirected:  d.IsRedirected,
+		IsWorktree:    d.IsWorktree,
+		ServerHost:    d.ServerHost,
+		ServerPort:    d.ServerPort,
+		DataDir:       d.DataDir,
+		Role:          d.Role,
+		SyncRemote:    d.SyncRemote,
+		SyncGitRemote: d.SyncRemote,
+	}
 }

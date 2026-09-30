@@ -36,9 +36,6 @@ recomputed in the same transaction.
 		if !dryRun {
 			CheckReadonly("dep prune-orphans")
 		}
-		if usesProxiedServer() {
-			return failKind(kindInvalidArgs, "dep prune-orphans is not supported in proxied-server mode")
-		}
 		if store == nil {
 			if err := ensureStoreActive(); err != nil {
 				return handleClassifiedRespectJSON(err)

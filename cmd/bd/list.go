@@ -191,24 +191,8 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 	}
 	out := cmd.OutOrStdout()
 
-	if usesProxiedServer() {
-		// The cap USED to be rejected here: the proxied query path threaded no
-		// MaxRows, so honoring it would have been silence. It threads one now
-		// (internal/storage/domain/db sizes its bound and enforces the cap
-		// through the same two functions the store seam uses), so this route
-		// answers *ErrTooManyRows the same way the direct route below does —
-		// same message, same exit code.
-		if err := runListProxiedServer(cmd, rootCtx, out, in); err != nil {
-			if capErr := handleMaxRowsError(err); capErr != nil {
-				return capErr
-			}
-			return HandleError("%v", err)
-		}
-		return nil
-	}
-
 	if in.Offset > 0 {
-		return HandleError("--offset is only supported under --proxied-server")
+		return HandleError("--offset is not supported: page with --limit")
 	}
 
 	// `bd list`'s PAGE is on issueops.Reader. The filter is still built here
@@ -419,7 +403,7 @@ func init() {
 	listCmd.Flags().String("spec", "", "Filter by spec_id prefix")
 	listCmd.Flags().String("id", "", "Filter by specific issue IDs (comma-separated, e.g., bd-1,bd-5,bd-10)")
 	listCmd.Flags().IntP("limit", "n", workapi.DefaultListLimit, "Limit results (default 50, use 0 for unlimited)")
-	listCmd.Flags().Int("offset", 0, "Skip the first N matching results (0-based). Only supported under --proxied-server.")
+	listCmd.Flags().Int("offset", 0, "Not supported: any value above 0 is rejected (page with --limit).")
 	listCmd.Flags().String("format", "", "Output format: 'digraph' (for golang.org/x/tools/cmd/digraph), 'dot' (Graphviz), or Go template")
 	listCmd.Flags().Bool("all", false, "Show all issues including closed (overrides default filter)")
 	listCmd.Flags().Bool("long", false, "Show detailed multi-line output for each issue")
@@ -534,7 +518,7 @@ func init() {
 
 	// Defensive row cap (be-x42v): exits 2 on overage, default disabled.
 	// ROUTED, not direct-only: both routes thread the cap now.
-	addRoutedMaxRowsFlag(listCmd)
+	addMaxRowsFlag(listCmd)
 
 	// Note: --json flag is defined as a persistent flag in main.go, not here
 	rootCmd.AddCommand(listCmd)

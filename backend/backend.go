@@ -1,9 +1,9 @@
 // Package backend is the public surface for OUT-OF-TREE storage backends: it
 // exports, by type alias, the storage contract an external Go module must
 // implement (the engine interface storage.DoltStorage and every type its
-// method signatures reach), the process-init registry that plugs an
-// implementation into bd, and — via the backend/conformance subpackage — the
-// tests that prove an implementation behaves like the Dolt reference.
+// method signatures reach) and — via the backend/conformance subpackage — the
+// tests that prove an implementation behaves like the Dolt reference. bd itself
+// opens only Dolt; there is no registry that plugs another backend into bd.
 //
 // Every name here is an alias or thin wrapper over the in-tree definition, so
 // an external implementation and the in-tree consumers see IDENTICAL types:
@@ -19,13 +19,6 @@
 //	import "github.com/steveyegge/beads/backend"
 //
 //	type Store struct{ ... }   // implements backend.DoltStorage
-//
-//	func init() {
-//	    backend.Register("mybackend", backend.Backend{
-//	        Open:         open,
-//	        OpenReadOnly: openReadOnly,
-//	    })
-//	}
 //
 // and proves itself with the conformance package:
 //
@@ -48,10 +41,6 @@
 // role contracts in that package are the third piece, covering the issueops
 // roles the accessors on Storage return.
 //
-// Registration is init-time wiring only; see Register. bd init / bd bootstrap
-// do not provision registered backends — an external backend supplies its own
-// workspace-creation path and is opened by name via metadata.json.
-//
 // # Stability
 //
 // EXPERIMENTAL. This surface is exported so external backends can be built
@@ -66,7 +55,6 @@ import (
 	"context"
 
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/backends"
 )
 
 // DoltStorage is the full engine interface an external backend implements:
@@ -135,41 +123,6 @@ type (
 // VCStatus here — matching the root beads package — because Status is the
 // issue-status enum from the domain types.
 type VCStatus = storage.Status
-
-// Backend describes a registered storage backend: how to open its workspace
-// store. See the field docs on the aliased struct.
-type Backend = backends.Backend
-
-// Register adds a backend under name. It is process-start wiring: call it
-// once during initialization (typically from a registrant package's init that
-// the embedding binary blank-imports), before any concurrent store access.
-// Invalid or duplicate registrations panic; the name "dolt" is reserved.
-func Register(name string, backend Backend) {
-	backends.Register(name, backend)
-}
-
-// Deregister removes a backend. It exists for isolated single-threaded
-// contract tests; production registrants never deregister.
-func Deregister(name string) bool {
-	return backends.Deregister(name)
-}
-
-// Lookup returns the backend registered under name.
-func Lookup(name string) (Backend, bool) {
-	return backends.Lookup(name)
-}
-
-// Registered reports whether name has a backend implementation.
-func Registered(name string) bool {
-	return backends.Registered(name)
-}
-
-// WorkspaceIsBeadsDir reports whether name is a registered backend whose
-// workspace is identified by the .beads directory alone (metadata.json plus a
-// remote store), with no separately discoverable local database.
-func WorkspaceIsBeadsDir(name string) bool {
-	return backends.WorkspaceIsBeadsDir(name)
-}
 
 // Iter is the streaming-read cursor returned by the Iter* methods.
 type Iter[T any] = storage.Iter[T]

@@ -436,7 +436,7 @@ linters:
       # be churn asserting nothing". That reasoning is wrong in the one way that
       # matters for a guard: a rule is not sized by where the violations are, it
       # is sized by where the next one may be WRITTEN. A review probe put a
-      # neutrally-named helper into the ado/gitlab/jira/linear hole and it
+      # neutrally-named helper into the then-existing tracker-sync hole and it
       # passed. Every hole below is scoped now, and adding a file family to this
       # list no longer silently costs the label boundary.
       #
@@ -450,11 +450,6 @@ linters:
           - forbidigo
       # Molecule reporting: each selects the members of one molecule.
       - path: '^cmd/bd/mol_(current|port|progress|ready_gated|stale)\.go$'
-        text: 'do not write a filter here'
-        linters:
-          - forbidigo
-      # External-tracker sync: each selects the beads to push to its tracker.
-      - path: '^cmd/bd/(ado|gitlab|jira|linear)\.go$'
         text: 'do not write a filter here'
         linters:
           - forbidigo
@@ -536,7 +531,7 @@ linters:
           - gosec
         text: "G115"
       # G117: Exported struct fields matching secret patterns are intentional API fields
-      - path: 'internal/compact/compactor\.go|internal/jira/client\.go|internal/linear/types\.go|internal/linear/oauth\.go|internal/storage/versioned\.go'
+      - path: 'internal/compact/compactor\.go|internal/storage/versioned\.go'
         linters:
           - gosec
         text: "G117"
@@ -555,12 +550,12 @@ linters:
           - gosec
         text: "G703"
       # G704: SSRF via taint in API clients with user-configured URLs
-      - path: 'cmd/bd/doctor/(claude|version)\.go|internal/github/client\.go|internal/gitlab/client\.go|internal/jira/client\.go|internal/linear/client\.go|internal/linear/oauth\.go'
+      - path: 'cmd/bd/doctor/(claude|version)\.go'
         linters:
           - gosec
         text: "G704"
       # G705: XSS via taint in CLI template rendering (no browser context)
-      - path: 'cmd/bd/compact\.go|internal/linear/client\.go'
+      - path: 'cmd/bd/compact\.go'
         linters:
           - gosec
         text: "G705"
@@ -568,7 +563,7 @@ linters:
       # sink is fmt.Fprint* to the terminal (os.Stderr or cobra's stdout/stderr
       # writers), never a browser context (surfaced by the gosec bundled with
       # golangci-lint v2.10)
-      - path: 'cmd/bd/(ado|doctor|errors|github|gitlab|hooks|jira|linear|main|notion|sync_push_pull)\.go'
+      - path: 'cmd/bd/(doctor|errors|hooks|main)\.go'
         linters:
           - gosec
         text: "G705"
@@ -583,11 +578,6 @@ linters:
           - errcheck
         text: "Error return value of .*(Close|Rollback|RemoveAll|Setenv|Unsetenv|Chdir|MkdirAll|Remove|Write|SetReadDeadline|SetDeadline|Start|Stop).* is not checked"
 
-      # unparam: Placeholder functions that may return errors in future implementation
-      - path: 'cmd/bd/jira\.go'
-        linters:
-          - unparam
-        text: 'reimportConflicts|resolveConflictsByTimestamp'
       # unparam: childrenMap return computed for future parent-child display
       - path: 'cmd/bd/list\.go'
         linters:
@@ -598,16 +588,6 @@ linters:
         linters:
           - unparam
         text: 'truncateID.*maxLen'
-      # unparam: getConfig error return kept for API consistency with store.GetConfig
-      - path: 'internal/(linear|gitlab|jira)/tracker\.go'
-        linters:
-          - unparam
-        text: 'getConfig'
-      # unparam: ctx kept for context propagation; callers currently all pass rootCtx
-      - path: 'cmd/bd/linear\.go'
-        linters:
-          - unparam
-        text: 'getLinearConfig'
       # misspell: "cancelled" is intentional - matching GitHub API response values
       - path: 'cmd/bd/gate\.go'
         linters:

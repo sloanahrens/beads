@@ -61,11 +61,6 @@ func activateEventsJournalStore(beadsDir string, s storage.DoltStorage, err erro
 // A backend that cannot journal cannot need pruning, so a nil result is a
 // silent no-op rather than a diagnostic.
 func eventsJournalMaintenanceRunner() issueops.EventsMaintenanceRunner {
-	if uowProvider != nil {
-		if runner := eventsJournalMaintenanceRunnerFor(uowProvider); runner != nil {
-			return runner
-		}
-	}
 	return eventsJournalMaintenanceRunnerFor(store)
 }
 

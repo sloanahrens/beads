@@ -38,10 +38,6 @@ Examples:
 			return HandleErrorRespectJSON("tag %s: %v", args[0], err)
 		}
 
-		if usesProxiedServer() {
-			return runTagProxiedServer(rootCtx, args[0], label)
-		}
-
 		id := args[0]
 
 		ctx := rootCtx
@@ -69,12 +65,6 @@ Examples:
 
 		if err := issueStore.AddLabel(ctx, result.ResolvedID, label, actor); err != nil {
 			return HandleErrorRespectJSON("adding label to %s: %v", id, err)
-		}
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "tag",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		SetLastTouchedID(result.ResolvedID)

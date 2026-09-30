@@ -58,10 +58,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runStatusesProxiedServer(rootCtx)
-		}
-
 		if err := ensureDirectMode("statuses command requires direct database access"); err != nil {
 			return HandleError("%v", err)
 		}

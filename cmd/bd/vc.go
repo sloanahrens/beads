@@ -74,9 +74,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("vc merge is not supported in proxied-server mode")
-		}
 		evt := metrics.NewCommandEvent("vc-merge")
 		defer func() {
 			if c := metrics.Global(); c != nil {
@@ -178,9 +175,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("vc commit is not supported in proxied-server mode")
-		}
 		evt := metrics.NewCommandEvent("vc-commit")
 		defer func() {
 			if c := metrics.Global(); c != nil {
@@ -258,9 +252,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("vc status is not supported in proxied-server mode")
-		}
 		evt := metrics.NewCommandEvent("vc-status")
 		defer func() {
 			if c := metrics.Global(); c != nil {

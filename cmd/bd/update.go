@@ -115,10 +115,6 @@ pointless).`,
 			return HandleErrorRespectJSON("%s", err)
 		}
 
-		if usesProxiedServer() {
-			return runUpdateProxiedServer(cmd, rootCtx, args)
-		}
-
 		// If no IDs provided, use last touched issue (interactive only;
 		// the non-interactive case was already refused in Args validation)
 		if len(args) == 0 {
@@ -603,16 +599,9 @@ pointless).`,
 		}
 
 		if len(mutatedStores) > 0 {
-			for s, ids := range mutatedStores {
+			for s := range mutatedStores {
 				if s == nil {
 					continue
-				}
-				if err := commitPendingIfEmbedded(ctx, s, actor, doltAutoCommitParams{
-					Command:  "update",
-					IssueIDs: ids,
-				}); err != nil {
-					closePendingResults()
-					return HandleErrorRespectJSON("failed to commit: %v", err)
 				}
 				for _, id := range notesOverwriteWarnings[s] {
 					warnNotesReplacement(id)

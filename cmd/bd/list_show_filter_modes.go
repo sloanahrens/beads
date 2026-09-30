@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/workapi"
 )
@@ -222,68 +221,6 @@ func watchIssues(ctx context.Context, store storage.DoltStorage, filter types.Is
 	}
 }
 
-func openAndPrepare(ctx context.Context, in listInput) (uow.UnitOfWork, types.IssueFilter, error) {
-	uw, err := openProxiedListUOW(ctx)
-	if err != nil {
-		return nil, types.IssueFilter{}, err
-	}
-	cfg, err := workapi.LoadUOWListConfig(ctx, uw)
-	if err != nil {
-		uw.Close(ctx)
-		return nil, types.IssueFilter{}, err
-	}
-	filter, err := workapi.BuildListFilter(in.ListRequest, cfg)
-	if err != nil {
-		uw.Close(ctx)
-		return nil, types.IssueFilter{}, err
-	}
-	return uw, filter, nil
-}
-
-func runListProxiedHierarchicalParent(ctx context.Context, uw uow.UnitOfWork, in listInput, filter types.IssueFilter) error {
-	treeIssues, err := gatherProxiedHierarchical(ctx, uw, in.ParentID, filter)
-	if err != nil {
-		return err
-	}
-	if len(treeIssues) == 0 {
-		fmt.Printf("Issue '%s' has no children\n", in.ParentID)
-		return nil
-	}
-
-	depsByIssueID, err := loadDepsForIssues(ctx, uw, treeIssues)
-	if err != nil {
-		return err
-	}
-
-	// Hierarchical --parent walks use an unlimited per-level query; never page-truncated.
-	displayPrettyListWithDepsMode(treeIssues, false, depsByIssueID, in.depsMode, false, in.ReadyFlag, in.Status)
-	printSkipLabelsFooter(in.SkipLabels)
-	return nil
-}
-
-func gatherProxiedHierarchical(ctx context.Context, uw uow.UnitOfWork, parentID string, baseFilter types.IssueFilter) ([]*types.Issue, error) {
-	parent, err := uw.IssueUseCase().GetIssue(ctx, parentID)
-	if err != nil {
-		return nil, fmt.Errorf("error checking parent issue: %w", err)
-	}
-	if parent == nil {
-		return nil, fmt.Errorf("parent issue %q not found", parentID)
-	}
-
-	descendants, err := uw.IssueUseCase().GetDescendants(ctx, parentID, baseFilter)
-	if err != nil {
-		return nil, fmt.Errorf("error finding descendants: %w", err)
-	}
-	if len(descendants) == 0 {
-		return nil, nil
-	}
-
-	out := make([]*types.Issue, 0, len(descendants)+1)
-	out = append(out, parent)
-	out = append(out, descendants...)
-	return out, nil
-}
-
 type currentIssueSearcher interface {
 	SearchIssues(context.Context, string, types.IssueFilter) ([]*types.Issue, error)
 }
@@ -316,20 +253,4 @@ func resolveCurrentIssueIDFrom(ctx context.Context, searcher currentIssueSearche
 	}
 
 	return fallback()
-}
-
-func resolveCurrentIssueIDProxied(ctx context.Context, uw uow.UnitOfWork) string {
-	currentActor := getActorWithGit()
-	if currentActor == "" {
-		return ""
-	}
-	for _, status := range []types.Status{types.StatusInProgress, types.StatusHooked} {
-		st := status
-		filter := types.IssueFilter{Status: &st, Assignee: &currentActor}
-		page, err := uw.IssueUseCase().SearchIssues(ctx, "", filter)
-		if err == nil && len(page.Items) > 0 {
-			return page.Items[0].ID
-		}
-	}
-	return ""
 }

@@ -547,9 +547,6 @@ func conflictsMetrics(name string) func() {
 // meaning: a proxied server owns its own working set, and a non-Dolt backend
 // has no merge state at all.
 func requireConflictSupport() error {
-	if usesProxiedServer() {
-		return HandleErrorRespectJSON("bd conflicts is not supported in proxied-server mode")
-	}
 	if store == nil {
 		return HandleErrorRespectJSON("no database open")
 	}

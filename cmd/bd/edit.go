@@ -42,10 +42,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runEditProxiedServer(cmd, rootCtx, args)
-		}
-
 		id := args[0]
 		ctx := rootCtx
 
@@ -167,13 +163,6 @@ Examples:
 			return HandleErrorRespectJSON("updating issue: %v", err)
 		}
 		editSaved = true
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "edit",
-			IssueIDs: []string{id},
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Your edits are preserved in: %s\n", tmpPath)
-			return HandleErrorRespectJSON("failed to commit: %v", err)
-		}
 
 		displayTitle := issue.Title
 		if fieldToEdit == "title" {

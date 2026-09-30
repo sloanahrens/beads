@@ -95,8 +95,7 @@ normal 'bd' subcommands for interactive/read operations.`,
 			}
 		}()
 
-		proxied := usesProxiedServer()
-		if !proxied && store == nil {
+		if store == nil {
 			return fmt.Errorf("no database connection available (%s)", diagHint())
 		}
 
@@ -170,21 +169,17 @@ normal 'bd' subcommands for interactive/read operations.`,
 		// transaction primitive differs (uow.RunTx there, transact here), and
 		// both wrap a per-op dispatch that shares this file's parser.
 		var results []batchOpResult
-		if proxied {
-			results, err = runBatchProxiedServer(ctx, ops, commitMsg)
-		} else {
-			results = make([]batchOpResult, 0, len(ops))
-			err = transact(ctx, store, commitMsg, func(tx storage.Transaction) error {
-				for _, op := range ops {
-					res, rerr := runBatchOp(ctx, tx, op)
-					if rerr != nil {
-						return fmt.Errorf("line %d (%s): %w", op.line, op.raw, rerr)
-					}
-					results = append(results, res)
+		results = make([]batchOpResult, 0, len(ops))
+		err = transact(ctx, store, commitMsg, func(tx storage.Transaction) error {
+			for _, op := range ops {
+				res, rerr := runBatchOp(ctx, tx, op)
+				if rerr != nil {
+					return fmt.Errorf("line %d (%s): %w", op.line, op.raw, rerr)
 				}
-				return nil
-			})
-		}
+				results = append(results, res)
+			}
+			return nil
+		})
 		if err != nil {
 			if jsonOutput {
 				if jerr := outputJSONError(err, "batch_error"); jerr != nil {

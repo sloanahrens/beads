@@ -40,10 +40,6 @@ Examples:
 
 		force, _ := cmd.Flags().GetBool("force")
 
-		if usesProxiedServer() {
-			return runAssignProxiedServer(rootCtx, args, force)
-		}
-
 		id := args[0]
 		assignee := args[1]
 
@@ -82,13 +78,6 @@ Examples:
 		}
 		if err := issueStore.UpdateIssue(ctx, result.ResolvedID, updates, actor); err != nil {
 			return HandleErrorRespectJSON("updating %s: %v", id, err)
-		}
-
-		if err := commitPendingIfEmbedded(ctx, issueStore, actor, doltAutoCommitParams{
-			Command:  "assign",
-			IssueIDs: []string{result.ResolvedID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		SetLastTouchedID(result.ResolvedID)

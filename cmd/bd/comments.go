@@ -84,10 +84,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runCommentsProxiedServer(cmd, rootCtx, args)
-		}
-
 		localTime, _ := cmd.Flags().GetBool("local-time")
 		issueID := args[0]
 
@@ -204,9 +200,6 @@ Examples:
 
 		// Dispatched after the text is resolved so both backends read the
 		// same sources and report the same conflicts.
-		if usesProxiedServer() {
-			return runCommentsAddProxiedServer(rootCtx, issueID, author, commentText)
-		}
 
 		if err := ensureStoreActive(); err != nil {
 			return HandleErrorRespectJSON("adding comment: %v", err)
@@ -232,12 +225,6 @@ Examples:
 		comment, err := addCommentDirect(ctx, result.Store, issueID, author, commentText)
 		if err != nil {
 			return HandleErrorRespectJSON("adding comment: %v", err)
-		}
-		if err := commitPendingIfEmbedded(ctx, result.Store, actor, doltAutoCommitParams{
-			Command:  "comments add",
-			IssueIDs: []string{issueID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		if jsonOutput {

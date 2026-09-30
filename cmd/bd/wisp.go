@@ -180,10 +180,6 @@ func runWispCreateCore(cmd *cobra.Command, args []string) error {
 
 	in := gatherWispCreateInput(cmd, args)
 
-	if usesProxiedServer() {
-		return runWispCreateProxiedServer(rootCtx, in)
-	}
-
 	ctx := rootCtx
 
 	if store == nil {
@@ -518,10 +514,6 @@ func runWispList(cmd *cobra.Command, args []string) error {
 	showAll, _ := cmd.Flags().GetBool("all")
 	typeFilter, _ := cmd.Flags().GetString("type")
 
-	if usesProxiedServer() {
-		return runWispListProxiedServer(rootCtx, showAll, typeFilter)
-	}
-
 	ctx := rootCtx
 
 	if store == nil {
@@ -757,10 +749,6 @@ func runWispGC(cmd *cobra.Command, args []string) error {
 	var excludeTypes []types.IssueType
 	for _, t := range excludeTypeStrs {
 		excludeTypes = append(excludeTypes, types.IssueType(t))
-	}
-
-	if usesProxiedServer() {
-		return runWispGCProxiedServer(rootCtx, dryRun, ageThreshold, cleanAll, closedMode, force, excludeTypes)
 	}
 
 	if store == nil {

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/config"
-	"github.com/steveyegge/beads/internal/storage/backendnames"
 )
 
 const ConfigFileName = "metadata.json"
@@ -279,19 +278,17 @@ func (c *Config) GetCapabilities() BackendCapabilities {
 	return CapabilitiesForBackend(backend)
 }
 
-// IsSupportedBackend reports whether backend selects Dolt or a backend
-// registered by this binary. The empty value is the legacy/default spelling
-// of Dolt. OSS registers no alternate backends.
+// IsSupportedBackend reports whether backend selects Dolt. The empty value is
+// the legacy/default spelling of Dolt.
 func IsSupportedBackend(backend string) bool {
-	return backend == "" || backend == BackendDolt || backendnames.Has(backend)
+	return backend == "" || backend == BackendDolt
 }
 
 // GetBackend returns the configured storage backend. PostgreSQL, MySQL, and
 // SQLite remain recognizable here so workspaces created by earlier builds can
 // fail loudly at store selection instead of silently falling back to an empty
 // Dolt database.
-// Registered extension names are returned unchanged. Empty and explicit Dolt
-// retain the established Dolt behavior. GetBackend keeps the historical Dolt
+// Empty and explicit Dolt retain the established Dolt behavior. GetBackend keeps the historical Dolt
 // fallback for unknown values, so storage-selection callers must check
 // IsSupportedBackend(c.Backend) before opening or creating storage.
 func (c *Config) GetBackend() string {
@@ -303,9 +300,6 @@ func (c *Config) GetBackend() string {
 			return BackendMySQL
 		case BackendSQLite:
 			return BackendSQLite
-		}
-		if backendnames.Has(c.Backend) {
-			return c.Backend
 		}
 	}
 	return BackendDolt

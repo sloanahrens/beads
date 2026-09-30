@@ -50,10 +50,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runSearchProxiedServer(cmd, rootCtx, args)
-		}
-
 		queryFlag, _ := cmd.Flags().GetString("query")
 		var query string
 		if len(args) > 0 {

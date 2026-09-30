@@ -1,12 +1,10 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/issueops"
 )
@@ -17,23 +15,7 @@ import (
 // openCycleDetector hands back the cycle role for whichever route this
 // invocation is on.
 func openCycleDetector() (issueops.CycleDetector, error) {
-	if usesProxiedServer() {
-		return proxiedCycleDetector()
-	}
 	return store.CycleDetector()
-}
-
-// proxiedCycleDetector hands back the guarded cycle-report surface for the
-// proxied-server provider, through the provider's own capability accessor.
-func proxiedCycleDetector() (issueops.CycleDetector, error) {
-	if uowProvider == nil {
-		return nil, errors.New("proxied-server UOW provider not initialized")
-	}
-	src, ok := uowProvider.(uow.CycleDetectorSource)
-	if !ok {
-		return nil, fmt.Errorf("proxied-server provider %T does not offer the cycle-report surface", uowProvider)
-	}
-	return src.CycleDetector()
 }
 
 // runDepCycles is the whole of `bd dep cycles` on both routes.

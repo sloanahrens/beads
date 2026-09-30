@@ -65,16 +65,9 @@ Force: Delete and orphan dependents
 			return err
 		}
 		if guards.set() {
-			if usesProxiedServer() {
-				return failKind(kindInvalidArgs, "--if-status/--if-assignee are not supported in proxied-server mode")
-			}
 			if cascade, _ := cmd.Flags().GetBool("cascade"); cascade {
 				return failKind(kindInvalidArgs, "--if-status/--if-assignee cannot be combined with --cascade: the guards cover the named ids only, never the dependents a cascade would also delete")
 			}
-		}
-
-		if usesProxiedServer() {
-			return runDeleteProxiedServer(cmd, rootCtx, args)
 		}
 
 		fromFile, _ := cmd.Flags().GetString("from-file")

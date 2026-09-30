@@ -14,7 +14,6 @@ import (
 // AddComment adds a comment event to an issue
 func (s *DoltStore) AddComment(ctx context.Context, issueID, actor, comment string) error {
 	return s.withCircuitWrite(ctx, func(ctx context.Context) error {
-		isWisp := s.isActiveWisp(ctx, issueID)
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin tx: %w", err)
@@ -30,10 +29,9 @@ func (s *DoltStore) AddComment(ctx context.Context, issueID, actor, comment stri
 		if err := s.commitSQLTx(ctx, "commit add comment event", tx); err != nil {
 			return err
 		}
-		if isWisp {
-			return nil
-		}
-		return s.doltAddAndCommit(ctx, []string{"events"}, fmt.Sprintf("bd: comment %s", issueID))
+		// The comment lands in the events table, which is dolt-ignored since
+		// migration 0062: there is nothing to version-commit.
+		return nil
 	})
 }
 

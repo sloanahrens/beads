@@ -457,23 +457,19 @@ func TestFormatMemoriesForPrimeTimesOutOpeningStore(t *testing.T) {
 
 // stubPrimeStoreOpen points prime's lazy store open at the given error and
 // clears the ambient store, so a test drives formatMemoriesForPrime through a
-// chosen failure edge. proxiedServerMode is forced off so the classic route is
-// the one under test regardless of ambient wiring.
+// chosen failure edge.
 func stubPrimeStoreOpen(t *testing.T, err error) {
 	t.Helper()
 	oldStore := store
 	oldStoreActive := storeActive
 	oldEnsure := ensureStoreActiveForPrime
-	oldProxied := proxiedServerMode
 	store = nil
 	storeActive = false
-	proxiedServerMode = false
 	ensureStoreActiveForPrime = func(context.Context) error { return err }
 	t.Cleanup(func() {
 		store = oldStore
 		storeActive = oldStoreActive
 		ensureStoreActiveForPrime = oldEnsure
-		proxiedServerMode = oldProxied
 	})
 }
 

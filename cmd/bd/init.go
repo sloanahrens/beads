@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -24,10 +23,7 @@ import (
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/backends"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
 	"github.com/steveyegge/beads/internal/storage/dolt"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/storage/schema"
 	"github.com/steveyegge/beads/internal/templates/agents"
 	"github.com/steveyegge/beads/internal/ui"
@@ -344,9 +340,9 @@ With --stealth: configures per-repository git settings for invisible beads usage
   Perfect for personal use without affecting repo collaborators.
   To set up a specific AI tool, run: bd setup <claude|cursor|aider|...> --stealth
 
-By default, beads uses an embedded Dolt engine (no external server needed).
-Pass --server to use an external dolt sql-server instead. In server mode,
-set connection details with --server-host, --server-port, and --server-user.
+beads runs against a dolt sql-server (server mode is the default; --server
+is accepted for compatibility). Set connection details with --server-host,
+--server-port, and --server-user.
 Password should be set via BEADS_DOLT_PASSWORD environment variable.
 
 Auto-export is optional. When enabled, bd exports issues to
@@ -404,134 +400,16 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		sharedServer, _ := cmd.Flags().GetBool("shared-server")
 		externalServer, _ := cmd.Flags().GetBool("external")
 		debugMode, _ := cmd.Flags().GetBool("debug")
-		initProxiedServer, _ := cmd.Flags().GetBool("proxied-server")
-		initTeamServer, _ := cmd.Flags().GetBool("team-server")
-		serverConfigPath, _ := cmd.Flags().GetString("proxied-server-config-path")
-		serverLogPath, _ := cmd.Flags().GetString("proxied-server-log-path")
-		serverRootPath, _ := cmd.Flags().GetString("proxied-server-root-path")
-		serverProxyPort, _ := cmd.Flags().GetInt("proxied-server-port")
-		serverProxyIdleTimeout, _ := cmd.Flags().GetDuration("proxied-server-idle-timeout")
-		idleTimeoutSet := cmd.Flags().Changed("proxied-server-idle-timeout")
-		externalHost, _ := cmd.Flags().GetString("proxied-server-external-host")
-		externalPort, _ := cmd.Flags().GetInt("proxied-server-external-port")
-		externalSocketPath, _ := cmd.Flags().GetString("proxied-server-external-socket-path")
-		externalUser, _ := cmd.Flags().GetString("proxied-server-external-user")
-		externalTLS, _ := cmd.Flags().GetBool("proxied-server-external-tls")
-		externalTLSCACertPath, _ := cmd.Flags().GetString("proxied-server-external-tls-ca-cert-path")
-		externalTLSCertPath, _ := cmd.Flags().GetString("proxied-server-external-tls-cert-path")
-		externalTLSKeyPath, _ := cmd.Flags().GetString("proxied-server-external-tls-key-path")
-		externalTLSServerName, _ := cmd.Flags().GetString("proxied-server-external-tls-server-name")
-		externalTLSSkipVerify, _ := cmd.Flags().GetBool("proxied-server-external-tls-skip-verify")
-		externalKeepAlive, _ := cmd.Flags().GetDuration("proxied-server-external-keep-alive")
-		if os.Getenv("BEADS_DOLT_PROXIED_SERVER") == "1" {
-			initProxiedServer = true
+		if cmd.Flags().Changed("proxied-server") || cmd.Flags().Changed("team-server") || os.Getenv("BEADS_DOLT_PROXIED_SERVER") == "1" {
+			return errProxiedServerModeRemoved()
 		}
 
-		initEvt := metrics.NewCommandEvent("init-" + resolveInitDoltMode(initProxiedServer, sharedServer, initServerMode))
+		initEvt := metrics.NewCommandEvent("init-" + resolveInitDoltMode(sharedServer, initServerMode))
 		defer func() {
 			if c := metrics.Global(); c != nil {
 				c.CloseEventAndAdd(initEvt)
 			}
 		}()
-
-		if initProxiedServer && initServerMode {
-			return fmt.Errorf("--server and --proxied-server are mutually exclusive")
-		}
-		if initProxiedServer {
-			if sharedServer || externalServer ||
-				serverHost != "" || serverPort != 0 || serverSocket != "" || serverUser != "" || cmd.Flags().Changed("server-tls") {
-				return fmt.Errorf("--proxied-server cannot be combined with --shared-server, --external, or any --server-* flag")
-			}
-		}
-		if initTeamServer && !initProxiedServer {
-			return fmt.Errorf("--team-server requires --proxied-server")
-		}
-		if serverConfigPath != "" {
-			if !initProxiedServer {
-				return fmt.Errorf("--proxied-server-config-path requires --proxied-server")
-			}
-			if !filepath.IsAbs(serverConfigPath) {
-				return fmt.Errorf("--proxied-server-config-path must be an absolute path, got %q", serverConfigPath)
-			}
-			if err := validateProxiedServerConfig(serverConfigPath); err != nil {
-				return fmt.Errorf("--proxied-server-config-path %v", err)
-			}
-		}
-		if serverLogPath != "" {
-			if !initProxiedServer {
-				return fmt.Errorf("--proxied-server-log-path requires --proxied-server")
-			}
-			if !filepath.IsAbs(serverLogPath) {
-				return fmt.Errorf("--proxied-server-log-path must be an absolute path, got %q", serverLogPath)
-			}
-			if err := validateProxiedServerLogPath(serverLogPath); err != nil {
-				return fmt.Errorf("--proxied-server-log-path %v", err)
-			}
-		}
-		if serverRootPath != "" {
-			if !initProxiedServer {
-				return fmt.Errorf("--proxied-server-root-path requires --proxied-server")
-			}
-			if !filepath.IsAbs(serverRootPath) {
-				return fmt.Errorf("--proxied-server-root-path must be an absolute path, got %q", serverRootPath)
-			}
-			if err := validateProxiedServerRootPath(serverRootPath); err != nil {
-				return fmt.Errorf("--proxied-server-root-path %v", err)
-			}
-		}
-		if serverProxyPort != 0 {
-			if !initProxiedServer {
-				return fmt.Errorf("--proxied-server-port requires --proxied-server")
-			}
-			if serverProxyPort < 1 || serverProxyPort > 65535 {
-				return fmt.Errorf("--proxied-server-port must be between 1 and 65535, got %d", serverProxyPort)
-			}
-		}
-		if idleTimeoutSet {
-			if !initProxiedServer {
-				return fmt.Errorf("--proxied-server-idle-timeout requires --proxied-server")
-			}
-			if serverProxyIdleTimeout < 0 {
-				return fmt.Errorf("--proxied-server-idle-timeout must be 0 (never) or a positive duration, got %s", serverProxyIdleTimeout)
-			}
-			if serverProxyIdleTimeout == 0 {
-				serverProxyIdleTimeout = proxy.IdleTimeoutNever
-			}
-		}
-
-		externalProvided := externalHost != "" || externalPort != 0 || externalSocketPath != "" ||
-			externalUser != "" ||
-			externalTLS || externalTLSCACertPath != "" || externalTLSCertPath != "" || externalTLSKeyPath != "" ||
-			externalTLSServerName != "" || externalTLSSkipVerify || externalKeepAlive != 0
-		if externalProvided && !initProxiedServer {
-			return fmt.Errorf("--proxied-server-external-* flags require --proxied-server")
-		}
-		if externalProvided && serverConfigPath != "" {
-			return fmt.Errorf("--proxied-server-external-* flags cannot be combined with --proxied-server-config-path (external mode has no managed dolt sql-server to configure)")
-		}
-		if externalProvided && debugMode {
-			return fmt.Errorf("--debug cannot be combined with --proxied-server-external-* (debug applies to the managed dolt sql-server only)")
-		}
-		var externalConfig *configfile.ExternalDoltConfig
-		if externalProvided {
-			cfg := configfile.ExternalDoltConfig{
-				Host:            externalHost,
-				Port:            externalPort,
-				Socket:          externalSocketPath,
-				User:            externalUser,
-				TLSRequired:     externalTLS,
-				TLSCACert:       externalTLSCACertPath,
-				TLSCert:         externalTLSCertPath,
-				TLSKey:          externalTLSKeyPath,
-				TLSServerName:   externalTLSServerName,
-				TLSSkipVerify:   externalTLSSkipVerify,
-				KeepAlivePeriod: externalKeepAlive,
-			}
-			if err := cfg.Validate(); err != nil {
-				return fmt.Errorf("--proxied-server-external-*: %v", err)
-			}
-			externalConfig = &cfg
-		}
 
 		// Backend selection: Dolt is the only supported backend.
 		if !configfile.IsSupportedBackend(backendFlag) {
@@ -542,14 +420,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				return fmt.Errorf("storage backend %q is no longer supported: %s; the supported backend is \"dolt\" (default)", backendFlag, configfile.RemovedSQLiteRationale)
 			}
 			return fmt.Errorf("unknown backend %q: the supported backend is \"dolt\" (default)", backendFlag)
-		}
-		// A registered extension backend passes IsSupportedBackend so its
-		// existing workspaces can be opened, but init provisions Dolt only and
-		// would otherwise create the workspace and persist backend: dolt. Reject
-		// it here rather than silently creating the wrong workspace; downstream
-		// registrants supply their own workspace-creation path.
-		if backends.Registered(backendFlag) {
-			return fmt.Errorf("backend %q cannot be created by bd init; it can only open an existing workspace (bd init provisions \"dolt\", the default)", backendFlag)
 		}
 		for _, legacyFlag := range removedBackendInitFlags {
 			if cmd.Flags().Changed(legacyFlag.name) {
@@ -605,45 +475,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// Both the global and cmdCtx must be set because PersistentPreRun
 		// creates a fresh cmdCtx (with ServerMode=false) before Run executes.
 		serverMode = initServerMode
-		proxiedServerMode = initProxiedServer
 		if cmdCtx != nil {
 			cmdCtx.ServerMode = initServerMode
-			cmdCtx.ProxiedServerMode = initProxiedServer
-		}
-
-		if initProxiedServer {
-			if beadsDir := resolveInitBeadsDir(); beadsDir != "" {
-				if err := guardLegacyUpgradeWorkspace(beadsDir); err != nil {
-					return err
-				}
-			}
-			if err := runInitProxiedServer(cmd, rootCtx, initProxiedServerInput{
-				prefix:                 prefix,
-				database:               database,
-				roleFlag:               roleFlag,
-				initRemote:             initRemote,
-				initRemoteChanged:      initRemoteChanged,
-				destroyToken:           destroyToken,
-				serverConfigPath:       serverConfigPath,
-				serverLogPath:          serverLogPath,
-				serverRootPath:         serverRootPath,
-				serverProxyPort:        serverProxyPort,
-				serverProxyIdleTimeout: serverProxyIdleTimeout,
-				externalConfig:         externalConfig,
-				quiet:                  quiet,
-				stealth:                stealth,
-				skipHooks:              skipHooks,
-				skipAgents:             skipAgents,
-				reinitLocal:            reinitLocal,
-				contributor:            contributor,
-				team:                   team,
-				teamServer:             initTeamServer,
-				fromJSONL:              fromJSONL,
-				nonInteractive:         nonInteractive,
-			}); err != nil {
-				return err
-			}
-			return nil
 		}
 
 		// Propagate --shared-server flag to env so that IsSharedServerMode(),
@@ -707,84 +540,32 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
+		// Embedded Dolt was removed, so server mode is the only mode: a bare
+		// `bd init` with no flag, env var, inherited metadata, or config.yaml
+		// selecting it gets server mode by default.
+		if !initServerMode {
+			initServerMode = true
+			serverMode = true
+			if cmdCtx != nil {
+				cmdCtx.ServerMode = true
+			}
+		}
+
 		// Explicit connection flags outrank stale BEADS_DOLT_SERVER_* values
 		// (GH#5177). This must run AFTER every source of server mode has been
 		// consulted above: --server, BEADS_DOLT_SERVER_MODE, --shared-server,
 		// workspace inheritance, and config.yaml dolt.mode. In embedded mode
 		// the flags are still recorded in metadata.json, but promoting them
 		// into the environment would trip init's own remote-host guard below.
-		if initServerMode {
-			restoreServerConnEnv, err := promoteExplicitServerConnFlags(cmd)
-			if err != nil {
-				return err
-			}
-			defer restoreServerConnEnv()
+		restoreServerConnEnv, err := promoteExplicitServerConnFlags(cmd)
+		if err != nil {
+			return err
 		}
-
-		// Reject hyphens in --database for embedded mode. Must run AFTER
-		// serverMode is set above — otherwise !usesSQLServer() always returns
-		// true and incorrectly rejects server-mode names (GH#3231).
-		if database != "" && strings.ContainsRune(database, '-') && !usesSQLServer() {
-			return fmt.Errorf("database name %q contains hyphens which are invalid in embedded mode; use underscores instead (e.g. %q)",
-				database, sanitizeDBName(database))
-		}
+		defer restoreServerConnEnv()
 
 		// Hard fail: if a remote dolt.host is configured, server mode MUST
 		// be active — embedded mode has no host. dolt.port alone is ambient
 		// plumbing (e.g. test harnesses) and is not treated as server intent.
-		if !initServerMode {
-			configHost := config.GetYamlConfig("dolt.host")
-			envHost := os.Getenv("BEADS_DOLT_SERVER_HOST")
-			configPort := config.GetYamlConfig("dolt.port")
-			envPort := os.Getenv("BEADS_DOLT_SERVER_PORT")
-
-			if conflict := detectInitRemoteHostConflict(configHost, envHost, configPort, envPort); conflict != nil {
-				detail := fmt.Sprintf("dolt.host (%s) is", conflict.host)
-				if conflict.includesPort {
-					detail = fmt.Sprintf("dolt.host (%s) and dolt.port are", conflict.host)
-				}
-				return fmt.Errorf("%s set via %s but server mode is not enabled.\n"+
-					"  Embedded mode has no host/port — these settings require server mode.\n"+
-					"  Set dolt.mode: server in %s or pass --server to bd init.",
-					detail, conflict.source, config.UserConfigYamlDisplayPath())
-			}
-		}
-
-		// A metadata.json that exists but cannot be parsed is the one broken
-		// workspace init can repair without going near the database. Everything
-		// below refuses to reinitialize precisely so init cannot repoint a
-		// workspace whose metadata.json is the only pointer to a database
-		// elsewhere; rewriting the file from disk evidence is what lets a user
-		// back in without init having to guess.
-		//
-		// Only a plain embedded init repairs in place. Every other intent is a
-		// request this repair would swallow by exiting right after the rewrite:
-		// --reinit-local/--force/--discard-remote replace the workspace,
-		// --from-jsonl/--remote bring data in, and an explicit server mode names
-		// a database the rewritten file would not describe. A shared server
-		// configured only in config.yaml counts as explicit here too — bd doctor
-		// refuses the same workspace using the same predicate.
-		plainEmbeddedInit := !initServerMode && !initProxiedServer && !initTeamServer &&
-			!initModeExplicitlyRequested(cmd) && !doltserver.IsSharedServerMode()
-		if plainEmbeddedInit && !reinitLocal && !force && !fromJSONL && !discardRemote &&
-			destroyToken == "" && initRemote == "" {
-			beadsDir := resolveInitBeadsDir()
-			// The rewrite records the database name the on-disk evidence names,
-			// so it may only run when no explicit selector disagrees with it.
-			// --database/--prefix are checked against the same discovered name
-			// the repair would write, not merely refused: bd init --prefix cm is
-			// how the documented repair is reached.
-			discoveredDatabase, _ := embeddeddolt.SoleRepository(beadsDir)
-			if !explicitRepairConflict(cmd, prefix, database, discoveredDatabase) {
-				repaired, repairErr := repairUnreadableMetadata(rootCtx, beadsDir, discoveredDatabase)
-				if repairErr != nil {
-					return repairErr
-				}
-				if repaired {
-					return nil
-				}
-			}
-		}
 
 		// Historical workspaces need an explicit sealed-copy bridge. This runs
 		// before init's existing-workspace checks so even --force cannot create
@@ -969,12 +750,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// to ensure consistent path representation.
 		beadsDir := beadsDirForInit
 
-		if initProxiedServer && externalConfig == nil {
-			if err := validateManagedProxiedServerConfigAtInit(beadsDir, serverConfigPath, serverRootPath); err != nil {
-				return fmt.Errorf("managed proxied-server config: %w", err)
-			}
-		}
-
 		// Prevent nested .beads directories
 		// Check if current working directory is inside a .beads directory
 		if strings.Contains(filepath.Clean(cwd), string(filepath.Separator)+".beads"+string(filepath.Separator)) ||
@@ -997,8 +772,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// never covers it — this is its own acquisition site. The workspace
 		// gate file lives BESIDE .beads (<parent>/.beads.gate.lock), so it
 		// works before .beads exists; the acquisition must come before any
-		// directory writes below, and before acquireEmbeddedLock (lock
-		// ordering: gates rank before every other beads lock).
+		// directory writes below (lock ordering: gates rank before every
+		// other beads lock).
 		plannedDBPathAbs, err := filepath.Abs(plannedDBPath)
 		if err != nil {
 			plannedDBPathAbs = filepath.Clean(plannedDBPath)
@@ -1160,16 +935,14 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// so we create the marker directory explicitly.
 		// In embedded mode the engine creates its own directories under .beads/embeddeddolt/,
 		// so skip this to avoid leaving an empty .beads/dolt/ artifact (GH#2903).
-		if initServerMode {
-			if err := os.MkdirAll(initDBPath, config.BeadsDirPerm); err != nil {
-				return fmt.Errorf("failed to create storage directory %s: %v", initDBPath, err)
-			}
-			// Linux btrfs: disable compression on the dolt data dir to avoid
-			// kworker thrashing on the append-only write path. Best-effort; a
-			// non-btrfs filesystem returns nil from applyNoCOW.
-			if err := applyNoCOW(initDBPath); err != nil && !quiet {
-				fmt.Fprintf(os.Stderr, "Warning: failed to set FS_NOCOW_FL on %s: %v\n", initDBPath, err)
-			}
+		if err := os.MkdirAll(initDBPath, config.BeadsDirPerm); err != nil {
+			return fmt.Errorf("failed to create storage directory %s: %v", initDBPath, err)
+		}
+		// Linux btrfs: disable compression on the dolt data dir to avoid
+		// kworker thrashing on the append-only write path. Best-effort; a
+		// non-btrfs filesystem returns nil from applyNoCOW.
+		if err := applyNoCOW(initDBPath); err != nil && !quiet {
+			fmt.Fprintf(os.Stderr, "Warning: failed to set FS_NOCOW_FL on %s: %v\n", initDBPath, err)
 		}
 
 		ctx := rootCtx
@@ -1394,10 +1167,9 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			ServerPort:             initPort,
 			ServerPortSource:       initPortSource,
 			ServerPortSharedServer: initPortShared,
-			ServerMode:             initServerMode,
-			ProxiedServer:          initProxiedServer,
+			ServerMode:             true,
 			CreateIfMissing:        true, // bd init is the only path that should create databases
-			AutoStart:              initServerMode && os.Getenv("BEADS_DOLT_AUTO_START") != "0",
+			AutoStart:              os.Getenv("BEADS_DOLT_AUTO_START") != "0",
 			ServerTLS:              initDoltServerTLSFromEnv(),
 		}
 		if serverHost != "" {
@@ -1426,13 +1198,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			fmt.Fprintf(os.Stderr, "Error: resolving dolt credential command: %v\n", err)
 			return &exitError{Code: 1}
 		}
-
-		initLock, err := acquireEmbeddedLock(beadsDir, initServerMode || initProxiedServer)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return &exitError{Code: 1}
-		}
-		defer initLock.Unlock()
 
 		// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/
 		// directory — including noms/LOCK files. These are Dolt-internal files.
@@ -1721,14 +1486,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				if existingCfg != nil {
 					priorMode = strings.ToLower(strings.TrimSpace(existingCfg.DoltMode))
 				}
-				switch {
-				case usesProxiedServer():
-					cfg.DoltMode = configfile.DoltModeProxiedServer
-				case usesSQLServer():
-					cfg.DoltMode = configfile.DoltModeServer
-				default:
-					cfg.DoltMode = configfile.DoltModeEmbedded
-				}
+				cfg.DoltMode = configfile.DoltModeServer
 				// A mode change on an existing workspace is never silent
 				// (#3885). By this point the inheritance above has already
 				// preserved the old mode unless something explicitly asked to
@@ -1741,19 +1499,17 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 						priorMode, cfg.DoltMode)
 				}
 
-				if !usesProxiedServer() {
-					if serverHost != "" {
-						cfg.DoltServerHost = serverHost
-					}
-					if serverPort != 0 {
-						cfg.DoltServerPort = serverPort
-					}
-					if serverSocket != "" {
-						cfg.DoltServerSocket = serverSocket
-					}
-					if serverUser != "" {
-						cfg.DoltServerUser = serverUser
-					}
+				if serverHost != "" {
+					cfg.DoltServerHost = serverHost
+				}
+				if serverPort != 0 {
+					cfg.DoltServerPort = serverPort
+				}
+				if serverSocket != "" {
+					cfg.DoltServerSocket = serverSocket
+				}
+				if serverUser != "" {
+					cfg.DoltServerUser = serverUser
 				}
 
 			}
@@ -1987,10 +1743,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			fmt.Fprintf(os.Stderr, "Warning: failed to close database: %v\n", err)
 		}
 
-		if initServerMode {
-			if err := doltserver.MarkDoltDirCompatible(storagePath); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to write Dolt compatibility marker at %s: %v\n", storagePath, err)
-			}
+		if err := doltserver.MarkDoltDirCompatible(storagePath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to write Dolt compatibility marker at %s: %v\n", storagePath, err)
 		}
 
 		// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/
@@ -2237,29 +1991,25 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			fmt.Printf("\n%s bd initialized successfully!\n\n", ui.RenderPass("✓"))
 		}
 		fmt.Printf("  Backend: %s\n", ui.RenderAccent(backend))
-		if !usesSQLServer() {
-			fmt.Printf("  Mode: %s\n", ui.RenderAccent("embedded"))
-		} else {
-			host := serverHost
-			if host == "" {
-				host = configfile.DefaultDoltServerHost
-			}
-			port := serverPort
-			if port == 0 {
-				port = doltserver.DefaultConfig(beadsDir).Port
-			}
-			user := serverUser
-			if user == "" {
-				user = configfile.DefaultDoltServerUser
-			}
-			fmt.Printf("  Mode: %s\n", ui.RenderAccent("server"))
-			fmt.Printf("  Server: %s\n", ui.RenderAccent(fmt.Sprintf("%s@%s:%d", user, host, port)))
-			// Warn when using the default localhost — this is the #1 misconfiguration
-			// for setups where Dolt runs on a remote machine (e.g., over Tailscale).
-			if serverHost == "" && os.Getenv("BEADS_DOLT_SERVER_HOST") == "" {
-				fmt.Fprintf(os.Stderr, "\n  %s Server host defaulted to %s.\n", ui.RenderWarn("⚠"), configfile.DefaultDoltServerHost)
-				fmt.Fprintf(os.Stderr, "    If your Dolt server is remote, set BEADS_DOLT_SERVER_HOST or pass --server-host.\n")
-			}
+		host := serverHost
+		if host == "" {
+			host = configfile.DefaultDoltServerHost
+		}
+		port := serverPort
+		if port == 0 {
+			port = doltserver.DefaultConfig(beadsDir).Port
+		}
+		user := serverUser
+		if user == "" {
+			user = configfile.DefaultDoltServerUser
+		}
+		fmt.Printf("  Mode: %s\n", ui.RenderAccent("server"))
+		fmt.Printf("  Server: %s\n", ui.RenderAccent(fmt.Sprintf("%s@%s:%d", user, host, port)))
+		// Warn when using the default localhost — this is the #1 misconfiguration
+		// for setups where Dolt runs on a remote machine (e.g., over Tailscale).
+		if serverHost == "" && os.Getenv("BEADS_DOLT_SERVER_HOST") == "" {
+			fmt.Fprintf(os.Stderr, "\n  %s Server host defaulted to %s.\n", ui.RenderWarn("⚠"), configfile.DefaultDoltServerHost)
+			fmt.Fprintf(os.Stderr, "    If your Dolt server is remote, set BEADS_DOLT_SERVER_HOST or pass --server-host.\n")
 		}
 		// Advertise the prefix that issue IDs will actually use. When the database
 		// already carries a provisioned issue_prefix — gateway adoption of a
@@ -2290,24 +2040,22 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// Skipped in embedded mode: diagnostics use dolt.NewFromConfigWithOptions
 		// which auto-starts a dolt sql-server. Embedded init already validates
 		// the database via initSchema.
-		if usesSQLServer() {
-			doctorResult := runInitDiagnostics(cwd)
-			hasIssues := false
+		doctorResult := runInitDiagnostics(cwd)
+		hasIssues := false
+		for _, check := range doctorResult.Checks {
+			if check.Status != statusOK {
+				hasIssues = true
+				break
+			}
+		}
+		if hasIssues {
+			fmt.Printf("%s Setup incomplete. Some issues were detected:\n", ui.RenderWarn("⚠"))
 			for _, check := range doctorResult.Checks {
 				if check.Status != statusOK {
-					hasIssues = true
-					break
+					fmt.Printf("  • %s: %s\n", check.Name, check.Message)
 				}
 			}
-			if hasIssues {
-				fmt.Printf("%s Setup incomplete. Some issues were detected:\n", ui.RenderWarn("⚠"))
-				for _, check := range doctorResult.Checks {
-					if check.Status != statusOK {
-						fmt.Printf("  • %s: %s\n", check.Name, check.Message)
-					}
-				}
-				fmt.Printf("\nRun %s to see details and fix these issues.\n\n", ui.RenderAccent("bd doctor --fix"))
-			}
+			fmt.Printf("\nRun %s to see details and fix these issues.\n\n", ui.RenderAccent("bd doctor --fix"))
 		}
 		return nil
 	},
@@ -2349,7 +2097,7 @@ func init() {
 	}
 
 	// Dolt server connection flags
-	initCmd.Flags().Bool("server", false, "Use external dolt sql-server instead of embedded engine")
+	initCmd.Flags().Bool("server", false, "Use a dolt sql-server (the default; kept for compatibility)")
 	initCmd.Flags().String("server-host", "", "Dolt server host (default: 127.0.0.1)")
 	initCmd.Flags().Bool("server-tls", false, "Require TLS for the init-time Dolt server connection (overrides BEADS_DOLT_SERVER_TLS for this run; not persisted - set the env var or credentials file for later commands)")
 	initCmd.Flags().Int("server-port", 0, "Dolt server port (default: 3307)")
@@ -2358,24 +2106,12 @@ func init() {
 	initCmd.Flags().Bool("shared-server", false, "Enable shared Dolt server mode (all projects share one server at ~/.beads/shared-server/)")
 	initCmd.Flags().Bool("external", false, "Server is externally managed (skip server startup); use with --shared-server or --server")
 	initCmd.Flags().Bool("debug", false, "Run the managed Dolt sql-server with --loglevel=debug and CPU profiling (--prof cpu). Persisted to config.yaml as dolt.debug. No effect on externally-managed servers.")
-	initCmd.Flags().Bool("proxied-server", false, "[EXPERIMENTAL] Use a per-workspace proxied dolt sql-server (proxy + child dolt) rooted at .beads/dolt")
-	initCmd.Flags().Bool("team-server", false, "[EXPERIMENTAL] The shared database's schema is managed by beads-team-server (bts): bd never creates the database or runs schema migrations, only verifies the schema version (proxied-server mode only). Not related to --team.")
-	initCmd.Flags().String("proxied-server-config-path", "", "[EXPERIMENTAL] Absolute path to an existing dolt sql-server YAML config (proxied-server mode only). When set, bd uses this file instead of auto-generating one. Relative paths are rejected. Managed mode requires listener.host to be a numeric loopback IP (hostnames including localhost, non-loopback addresses, listener.socket, remotesapi, and cluster config are rejected); the same policy applies to BEADS_PROXIED_SERVER_CONFIG.")
-	initCmd.Flags().String("proxied-server-log-path", "", "[EXPERIMENTAL] Absolute path to the proxied dolt sql-server log file (proxied-server mode only). Default: <beadsDir>/dolt/server.log. Relative paths are rejected.")
-	initCmd.Flags().String("proxied-server-root-path", "", "[EXPERIMENTAL] Absolute directory holding the proxied dolt sql-server's lockfiles, pidfiles, and child .dolt repository (proxied-server mode only). Default: <beadsDir>/dolt. May not exist yet — bd will create it. Relative paths are rejected.")
-	initCmd.Flags().Int("proxied-server-port", 0, "[EXPERIMENTAL] Fixed TCP port for the proxy's loopback listener (proxied-server mode only). Default 0 = an OS-assigned free port. Startup fails if the port is already in use.")
-	initCmd.Flags().Duration("proxied-server-idle-timeout", 0, "[EXPERIMENTAL] Idle duration after which the proxy shuts down its loopback listener and backend (proxied-server mode only). Omit for the built-in default (30s); 0 keeps the proxy and backend alive indefinitely; a positive value sets the window.")
-	initCmd.Flags().String("proxied-server-external-host", "", "[EXPERIMENTAL] Hostname or IP of an externally-managed dolt sql-server the proxy should front (proxied-server mode only). Mutually exclusive with --proxied-server-external-socket-path.")
-	initCmd.Flags().Int("proxied-server-external-port", 0, "[EXPERIMENTAL] TCP port of the externally-managed dolt sql-server (proxied-server mode only). Required when --proxied-server-external-host is set.")
-	initCmd.Flags().String("proxied-server-external-socket-path", "", "[EXPERIMENTAL] Absolute unix socket path of the externally-managed dolt sql-server (proxied-server mode only). Mutually exclusive with --proxied-server-external-host. Relative paths are rejected.")
-	initCmd.Flags().String("proxied-server-external-user", "", "[EXPERIMENTAL] MySQL user for the externally-managed dolt sql-server (proxied-server mode only). Defaults to \"root\" when empty. Password is read at runtime from $BEADS_PROXIED_SERVER_EXTERNAL_PASSWORD and is never persisted to disk.")
-	initCmd.Flags().Bool("proxied-server-external-tls", false, "[EXPERIMENTAL] Require TLS when connecting to the externally-managed dolt sql-server (proxied-server mode only).")
-	initCmd.Flags().String("proxied-server-external-tls-ca-cert-path", "", "[EXPERIMENTAL] Absolute path to a CA certificate (PEM) used to verify the externally-managed dolt sql-server. Empty uses the system trust store. Relative paths are rejected.")
-	initCmd.Flags().String("proxied-server-external-tls-cert-path", "", "[EXPERIMENTAL] Absolute path to a client TLS certificate (for mTLS to the externally-managed dolt sql-server). Must be paired with --proxied-server-external-tls-key-path. Relative paths are rejected.")
-	initCmd.Flags().String("proxied-server-external-tls-key-path", "", "[EXPERIMENTAL] Absolute path to the client TLS private key (for mTLS to the externally-managed dolt sql-server). Must be paired with --proxied-server-external-tls-cert-path. Relative paths are rejected.")
-	initCmd.Flags().String("proxied-server-external-tls-server-name", "", "[EXPERIMENTAL] Server name to verify in the external dolt sql-server's TLS certificate. Defaults to the external host. Required with a unix socket unless --proxied-server-external-tls-skip-verify is set.")
-	initCmd.Flags().Bool("proxied-server-external-tls-skip-verify", false, "[EXPERIMENTAL] Skip TLS certificate verification for the external dolt sql-server. Insecure; testing only.")
-	initCmd.Flags().Duration("proxied-server-external-keep-alive", 0, "[EXPERIMENTAL] TCP keepalive period for the proxy→external connection. Zero uses the package default (30s).")
+	// Tombstones for the removed proxied-server mode: parsed, hidden, and
+	// refused in RunE with migration guidance instead of "unknown flag".
+	initCmd.Flags().Bool("proxied-server", false, "Removed: proxied-server mode is no longer supported")
+	initCmd.Flags().Bool("team-server", false, "Removed: proxied-server mode is no longer supported")
+	_ = initCmd.Flags().MarkHidden("proxied-server")
+	_ = initCmd.Flags().MarkHidden("team-server")
 
 	rootCmd.AddCommand(initCmd)
 }
@@ -2495,106 +2231,6 @@ func explicitRepairConflict(cmd *cobra.Command, prefix, requestedDatabase, disco
 	return cmd.Flags().Changed("prefix") && initIfMissingPrefixMismatch(discoveredDatabase, prefix)
 }
 
-// repairUnreadableMetadata rewrites a metadata.json that exists but cannot be
-// parsed, using only evidence left on disk, and reports whether it did.
-//
-// A metadata.json is the only record of where a workspace's database lives, so
-// init refuses to reinitialize over one it cannot read (checkExistingBeadsDataAt
-// and the legacy-upgrade guard both fail closed). That refusal is wrong for the
-// one deployment shape that does not depend on the file: an embedded database
-// under .beads/embeddeddolt, whose directory name carries both the storage mode
-// and the database name. Rebuilding the file from that directory restores the
-// workspace without init guessing at anything, and without init opening, moving,
-// or rewriting a database. Every other shape keeps the fail-closed refusal —
-// a server-mode or proxied-server pointer is not recoverable from disk (host,
-// port, and credentials live only in the file being replaced), and a workspace
-// with several embedded databases has no unambiguous database name to record.
-//
-// database is that single embedded database, or "" when there is none or more
-// than one; the caller resolves it so the same value can be checked against the
-// invocation's explicit selectors (see explicitRepairConflict). The caller also
-// checks intent before calling; see the gate at the call site.
-func repairUnreadableMetadata(ctx context.Context, beadsDir, database string) (bool, error) {
-	if beadsDir == "" || database == "" {
-		return false, nil
-	}
-	configPath := configfile.ConfigPath(beadsDir)
-	// Read the file here rather than asking LoadForDiscovery whether it loads:
-	// only a parse error means the file is corrupt in the way this repair
-	// exists to undo. A read error — a transient I/O fault, a permission
-	// problem — leaves a file that may still be the only pointer to its
-	// database, and overwriting it would destroy evidence on the strength of a
-	// failure that says nothing about its contents. Falling through returns the
-	// caller to the fail-closed refusal, which is the right answer there.
-	data, err := os.ReadFile(configPath) // #nosec G304 -- caller-selected workspace state
-	if os.IsNotExist(err) {
-		return false, nil // absent metadata.json is the fresh-workspace default
-	}
-	if err != nil {
-		return false, nil
-	}
-	var existing configfile.Config
-	if json.Unmarshal(data, &existing) == nil {
-		return false, nil // readable: nothing to repair
-	}
-
-	// Keep the unparseable original. Its bytes are the only remaining record of
-	// what the workspace was configured with — a server host, remote URLs, an
-	// identity — so a repair that guessed wrong stays reversible, and a user who
-	// wants to hand-fix one field can still read it. The name follows the
-	// recovery convention bd doctor --fix already uses, so the tree is
-	// recognized as a runtime artifact rather than mistaken for workspace state.
-	backupDir := filepath.Join(beadsDir, configfile.ConfigFileName+"."+time.Now().UTC().Format("20060102T150405Z")+".corrupt.backup")
-	if err := os.Mkdir(backupDir, 0o700); err != nil {
-		return false, fmt.Errorf("preserving %s before repairing it: %w", configPath, err)
-	}
-	backupPath := filepath.Join(backupDir, configfile.ConfigFileName)
-	// Refusing to repair without a preserved copy is deliberate: overwriting a
-	// file whose contents could not be read is the outcome this whole guard
-	// exists to prevent.
-	if err := os.WriteFile(backupPath, data, 0o600); err != nil {
-		return false, fmt.Errorf("preserving %s before repairing it: %w", configPath, err)
-	}
-
-	cfg := configfile.DefaultConfig()
-	cfg.Backend = configfile.BackendDolt
-	cfg.Database = "dolt"
-	cfg.DoltMode = configfile.DoltModeEmbedded
-	cfg.DoltDatabase = database
-	if err := cfg.Save(beadsDir); err != nil {
-		return false, fmt.Errorf("repairing %s: %w", configPath, err)
-	}
-
-	// The identity the lost file carried still lives in the database. Adopt it
-	// rather than leaving metadata.json without one: a project_id-less file is
-	// usable but disables the identity check that catches a server answering
-	// for a different project. The file above is already valid, so a failure
-	// here costs the identity, not the repair.
-	//
-	// This is a second write, and it has to be: the identity is read through the
-	// store factory, which loads metadata.json to decide how to open a store, so
-	// the file must describe the database before the database can be asked. Both
-	// writes are atomic renames, so no reader sees a partial file; the interval
-	// between them is a valid workspace that omits only the optional identity
-	// check the unparseable original could not have offered either.
-	if store, err := newReadOnlyStoreFromConfig(ctx, beadsDir); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not read the project identity from %s: %v\n", database, err)
-	} else {
-		if projectID, err := store.GetMetadata(ctx, "_project_id"); err == nil && projectID != "" {
-			cfg.ProjectID = projectID
-			if err := cfg.Save(beadsDir); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not record the project identity in %s: %v\n", configPath, err)
-			}
-		}
-		_ = store.Close()
-	}
-
-	fmt.Fprintf(os.Stderr, "warning: %s is not readable; kept it at %s and rewrote metadata.json for the embedded database %s (dolt_mode=embedded, dolt_database=%s)\n",
-		configPath, backupDir, filepath.Join(beadsDir, "embeddeddolt", database), database)
-	fmt.Fprintln(os.Stderr, "  If that is not the workspace you expected, restore the file from git or run 'bd doctor'.")
-	return true, nil
-}
-
 // checkExistingBeadsDataAt checks for existing database at a specific beadsDir path.
 // This is extracted to support both BEADS_DIR and CWD-based resolution.
 //
@@ -2627,25 +2263,6 @@ func checkExistingBeadsDataAt(beadsDir string, prefix string) error {
 	}
 
 	if cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
-		if cfg.IsDoltProxiedServerMode() {
-			proxiedRoot, rootErr := resolveProxiedServerRootPath(beadsDir)
-			if rootErr != nil {
-				return fmt.Errorf("resolve proxied server root: %w", rootErr)
-			}
-			if info, statErr := os.Stat(proxiedRoot); statErr == nil && info.IsDir() {
-				return alreadyInitialized(`
-%s Found existing Dolt database: %s
-
-This workspace is already initialized.
-
-To use the existing database:
-  Just run bd commands normally (e.g., %s)
-
-Aborting.`, ui.RenderWarn("⚠"), proxiedRoot, ui.RenderAccent("bd list"))
-			}
-			return nil
-		}
-
 		// Embedded mode stores databases under `.beads/embeddeddolt/<db>/`.
 		// Use the target workspace metadata rather than ambient process state so
 		// init guards remain deterministic even when another test or earlier
@@ -2986,7 +2603,7 @@ func existingWorkspaceDoltMode() string {
 		return ""
 	}
 	// Matched case-insensitively by callers, mirroring configfile's own
-	// IsServerMode/IsProxiedServerMode comparisons.
+	// IsServerMode comparisons.
 	return strings.ToLower(strings.TrimSpace(cfg.DoltMode))
 }
 
@@ -2994,20 +2611,14 @@ func existingWorkspaceDoltMode() string {
 // re-init adopts from the workspace it is re-initializing. It returns
 // inheritServer=true when the workspace records server mode.
 //
-// Proxied-server is deliberately an error, not an inheritance: the dedicated
-// proxied init path (runInitProxiedServer) dispatches on the explicit flag
-// BEFORE the inheritance point in RunE, so inheriting by mutating only the
-// process-mode globals would build the database embedded while metadata.json
-// kept claiming proxied-server — the exact silent mismatch inheritance exists
-// to prevent. The mode is experimental and dark-launched; a re-init of such a
-// workspace must name it explicitly so it routes through the real init path.
+// Proxied-server is an error: that mode was removed, and inheriting anything
+// from such a workspace would silently rebuild it in a different mode.
 func inheritWorkspaceDoltMode() (bool, error) {
 	switch existingWorkspaceDoltMode() {
 	case configfile.DoltModeServer:
 		return true, nil
 	case configfile.DoltModeProxiedServer:
-		return false, fmt.Errorf("this workspace is recorded as proxied-server in .beads/metadata.json; " +
-			"re-run with --proxied-server to keep it, or name another mode explicitly to change it")
+		return false, errProxiedServerModeRemoved()
 	default:
 		return false, nil
 	}
@@ -3022,7 +2633,7 @@ func inheritWorkspaceDoltMode() (bool, error) {
 // is #3885: the project comes back half-configured and the user is told
 // nothing.
 func initModeExplicitlyRequested(cmd *cobra.Command) bool {
-	for _, name := range []string{"server", "shared-server", "proxied-server"} {
+	for _, name := range []string{"server", "shared-server"} {
 		if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
 			return true
 		}
@@ -3030,7 +2641,6 @@ func initModeExplicitlyRequested(cmd *cobra.Command) bool {
 	for _, env := range []string{
 		"BEADS_DOLT_SERVER_MODE",
 		"BEADS_DOLT_SHARED_SERVER",
-		"BEADS_DOLT_PROXIED_SERVER",
 	} {
 		if os.Getenv(env) != "" {
 			return true
@@ -3514,18 +3124,14 @@ func commitInitState(ctx context.Context, store initStateCommitter) error {
 func verifyMetadata(ctx context.Context, store storage.DoltStorage, key, value string) bool {
 	if err := store.SetMetadata(ctx, key, value); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to write %s metadata: %v\n", key, err)
-		if usesSQLServer() {
-			fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
-		}
+		fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
 		return false
 	}
 	// Verify read-back
 	readBack, err := store.GetMetadata(ctx, key)
 	if err != nil || readBack != value {
 		fmt.Fprintf(os.Stderr, "Warning: %s metadata write did not persist (wrote %q, read %q)\n", key, value, readBack)
-		if usesSQLServer() {
-			fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
-		}
+		fmt.Fprintf(os.Stderr, "  Run 'bd doctor --fix' to repair.\n")
 		return false
 	}
 	return true
@@ -3583,10 +3189,7 @@ func initGlobalDatabaseConfig(ctx context.Context, projectCfg *dolt.Config, quie
 	}
 }
 
-func resolveInitDoltMode(proxiedFlag, sharedFlag, serverFlag bool) string {
-	if proxiedFlag || os.Getenv("BEADS_DOLT_PROXIED_SERVER") == "1" {
-		return "proxied-server"
-	}
+func resolveInitDoltMode(sharedFlag, serverFlag bool) string {
 	shared := os.Getenv("BEADS_DOLT_SHARED_SERVER")
 	if sharedFlag || shared == "1" || strings.EqualFold(shared, "true") {
 		return "shared-server"

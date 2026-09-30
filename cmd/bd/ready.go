@@ -58,36 +58,8 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			return err
 		}
 
-		if usesProxiedServer() {
-			// Ignoring --after would hand a paging caller page one forever.
-			if after, _ := cmd.Flags().GetString("after"); after != "" {
-				return handleClassifiedRespectJSON(newCLIError(kindInvalidArgs, "--after is not supported under --proxied-server; use --offset"))
-			}
-			// --claim consumes exactly one row, same reasoning as the
-			// direct-path fix in issueops/claim.go: a rig-wide cap sized
-			// for bulk list/ready reads must not block a single-row claim.
-			// Only the bulk (non-claim) proxied ready listing rejects an
-			// active cap.
-			if !claimReady {
-				if err := rejectMaxRowsUnderProxiedServer(cmd); err != nil {
-					return err
-				}
-			} else {
-				// Still validate --max-rows/BEADS_MAX_ROWS here even though
-				// the resolved cap is ignored below: resolveMaxRows is also
-				// where a malformed value (e.g. --max-rows -1) is rejected
-				// with exit 1, and skipping it entirely for the claim-exempt
-				// branch would silently accept a usage error that every
-				// other command (direct or proxied) rejects.
-				if _, _, err := resolveMaxRows(cmd); err != nil {
-					return err
-				}
-			}
-			return runReadyProxiedServer(cmd, rootCtx)
-		}
-
 		if offset, _ := cmd.Flags().GetInt("offset"); offset > 0 {
-			return HandleErrorRespectJSON("--offset is only supported under --proxied-server")
+			return HandleErrorRespectJSON("--offset is not supported: page with --limit")
 		}
 		if after, _ := cmd.Flags().GetString("after"); after != "" {
 			gatedFlag, _ := cmd.Flags().GetBool("gated")
@@ -175,12 +147,6 @@ This is useful for agents executing molecules to see which steps can run next.`,
 				return nil
 			}
 			claimed := res.Claimed
-			if err := commitPendingIfEmbedded(ctx, activeStore, actor, doltAutoCommitParams{
-				Command:  "ready",
-				IssueIDs: []string{claimed.ID},
-			}); err != nil {
-				return HandleErrorRespectJSON("failed to commit: %v", err)
-			}
 			SetLastTouchedID(claimed.ID)
 			if jsonOutput {
 				return outputJSON([]*types.IssueWithCounts{claimed})
@@ -345,9 +311,6 @@ var blockedCmd = &cobra.Command{
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runBlockedProxiedServer(cmd, rootCtx)
-		}
 		// Use global jsonOutput set by PersistentPreRun (respects config.yaml + env vars)
 		// Use factory to respect backend configuration (bd-m2jr: SQLite fallback fix)
 		ctx := rootCtx
@@ -741,7 +704,7 @@ type MoleculeReadyOutput struct {
 func init() {
 	readyCmd.Flags().IntP("limit", "n", workapi.DefaultReadyLimit, "Maximum issues to show (use 0 for unlimited)")
 	readyCmd.Flags().String("after", "", "Keyset cursor: return the ready issues after this one (pass back pagination.next_cursor). Requires --json and --sort priority or oldest")
-	readyCmd.Flags().Int("offset", 0, "Skip the first N matching results (0-based). Only supported under --proxied-server.")
+	readyCmd.Flags().Int("offset", 0, "Not supported: any value above 0 is rejected (page with --limit).")
 	readyCmd.Flags().IntP("priority", "p", 0, "Filter by priority")
 	readyCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
 	readyCmd.Flags().BoolP("unassigned", "u", false, "Show only unassigned issues")

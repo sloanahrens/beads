@@ -68,10 +68,6 @@ By default, shows only open gates. Use --all to include closed gates.`,
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runGateListProxiedServer(cmd, rootCtx, args)
-		}
-
 		allFlag, _ := cmd.Flags().GetBool("all")
 		limit, _ := cmd.Flags().GetInt("limit")
 
@@ -233,9 +229,6 @@ This is used by 'bd done --phase-complete' to register for gate wake notificatio
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return runGateAddWaiterProxiedServer(cmd, rootCtx, args)
-		}
 		CheckReadonly("gate add-waiter")
 
 		evt := metrics.NewCommandEvent("gate-add-waiter")
@@ -318,9 +311,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return runGateCreateProxiedServer(cmd, rootCtx)
-		}
 		CheckReadonly("gate create")
 
 		evt := metrics.NewCommandEvent("gate-create")
@@ -462,9 +452,6 @@ This is similar to 'bd show' but validates that the issue is a gate.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return runGateShowProxiedServer(cmd, rootCtx, args)
-		}
 		evt := metrics.NewCommandEvent("gate-show")
 		defer func() {
 			if c := metrics.Global(); c != nil {
@@ -537,9 +524,6 @@ Use --reason to provide context for why the gate was resolved.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return runGateResolveProxiedServer(cmd, rootCtx, args)
-		}
 		CheckReadonly("gate resolve")
 
 		evt := metrics.NewCommandEvent("gate-resolve")
@@ -626,9 +610,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return runGateCheckProxiedServer(cmd, rootCtx)
-		}
 		CheckReadonly("gate check")
 
 		evt := metrics.NewCommandEvent("gate-check")

@@ -1982,8 +1982,7 @@ func ensureDoltInit(doltDir string) error {
 	if _, err := os.Stat(dotDolt); err == nil {
 		// .dolt/ exists — seed the marker if missing.
 		// This is the non-destructive path: we just mark existing databases
-		// as known. The destructive recovery path (RecoverPreV56DoltDir) is
-		// triggered separately during version upgrades.
+		// as known.
 		_ = MarkDoltDirCompatible(doltDir)
 		return nil // Already initialized
 	}
@@ -1998,42 +1997,6 @@ func ensureDoltInit(doltDir string) error {
 	_ = MarkDoltDirCompatible(doltDir)
 
 	return nil
-}
-
-// RecoverPreV56DoltDir removes and reinitializes a dolt database that was
-// created by a pre-0.56 bd version. Call this during version upgrade detection
-// (e.g., from autoMigrateOnVersionBump when previousVersion < 0.56).
-//
-// Pre-0.56 databases used embedded Dolt mode with a different Dolt library
-// version that may produce nil DoltDB values, causing panics (GH#2137).
-// The data is unrecoverable — the fix is to start fresh.
-//
-// Returns true if recovery was performed, false if not needed.
-func RecoverPreV56DoltDir(doltDir string) (bool, error) {
-	dotDolt := filepath.Join(doltDir, ".dolt")
-	if _, err := os.Stat(dotDolt); os.IsNotExist(err) {
-		return false, nil // No .dolt/ directory — nothing to recover
-	}
-
-	markerPath := filepath.Join(doltDir, bdDoltMarker)
-	if _, err := os.Stat(markerPath); err == nil {
-		return false, nil // Marker exists — database is from 0.56+
-	}
-
-	fmt.Fprintf(os.Stderr, "Detected dolt database from an older bd version (pre-0.56).\n")
-	fmt.Fprintf(os.Stderr, "Rebuilding dolt database at %s ...\n", doltDir)
-
-	if err := os.RemoveAll(dotDolt); err != nil {
-		return false, fmt.Errorf("cannot remove old dolt database at %s: %w\n\n"+
-			"Manually delete %s and retry", dotDolt, err, dotDolt)
-	}
-
-	// Reinitialize
-	if err := ensureDoltInit(doltDir); err != nil {
-		return true, fmt.Errorf("recovery: %w", err)
-	}
-
-	return true, nil
 }
 
 // IsPreV56DoltDir returns true if doltDir contains a .dolt/ directory that

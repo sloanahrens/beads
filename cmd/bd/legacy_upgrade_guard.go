@@ -12,7 +12,6 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/git"
-	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 	"github.com/steveyegge/beads/internal/utils"
 	"golang.org/x/mod/semver"
 )
@@ -60,9 +59,6 @@ func guardLegacyUpgradeWorkspace(beadsDir string) error {
 		return err
 	}
 	serverMode := cfg != nil && strings.EqualFold(cfg.DoltMode, configfile.DoltModeServer)
-	if embeddeddolt.HasRepository(beadsDir) && !serverMode {
-		return nil
-	}
 	version, present := legacyUpgradeVersionWitness(beadsDir)
 	if serverMode && present && legacyServerVersion(version) {
 		return legacyUpgradeRefusal(fmt.Sprintf("legacy Dolt server workspace from bd %s", version))
@@ -109,9 +105,6 @@ func guardLegacyUpgradeWorkspace(beadsDir string) error {
 
 func isHistoricalSQLiteWorkspace(beadsDir string, cfg *configfile.Config) bool {
 	if beadsDir == "" {
-		return false
-	}
-	if embeddeddolt.HasRepository(beadsDir) {
 		return false
 	}
 	if cfg != nil {

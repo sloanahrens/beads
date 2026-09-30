@@ -184,9 +184,6 @@ Examples:
 			CheckReadonly("dep --blocks")
 
 			ctx := rootCtx
-			if usesProxiedServer() {
-				return runDepBlocksProxiedServer(cmd, ctx, blockerID, blocksID)
-			}
 			depType := "blocks"
 
 			// Resolve partial IDs with routing support. The source issue's store
@@ -222,13 +219,6 @@ Examples:
 			noCycleCheck, _ := cmd.Flags().GetBool("no-cycle-check")
 			if !noCycleCheck {
 				warnIfCyclesExist(fromStore)
-			}
-
-			if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-				Command:  "dep add",
-				IssueIDs: []string{fromID, toID},
-			}); err != nil {
-				return HandleErrorRespectJSON("failed to commit: %v", err)
 			}
 
 			if jsonOutput {
@@ -331,10 +321,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runDepAddProxiedServer(cmd, rootCtx, args)
-		}
-
 		depType, _ := cmd.Flags().GetString("type")
 		file, _ := cmd.Flags().GetString("file")
 
@@ -415,13 +401,6 @@ Examples:
 		noCycleCheck, _ := cmd.Flags().GetBool("no-cycle-check")
 		if !noCycleCheck {
 			warnIfCyclesExist(fromStore)
-		}
-
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "dep add",
-			IssueIDs: []string{fromID, toID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		explicit := cmd.Flags().Changed("type") || cmd.Flags().Changed("blocked-by") || cmd.Flags().Changed("depends-on")
@@ -926,10 +905,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runDepListProxiedServer(cmd, rootCtx, args)
-		}
-
 		ctx := rootCtx
 		direction, _ := cmd.Flags().GetString("direction")
 		typeFilter, _ := cmd.Flags().GetString("type")
@@ -1104,10 +1079,6 @@ var depRemoveCmd = &cobra.Command{
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runDepRemoveProxiedServer(cmd, rootCtx, args)
-		}
-
 		ctx := rootCtx
 
 		// Resolve partial IDs with routing support. The source issue's store is
@@ -1172,13 +1143,6 @@ var depRemoveCmd = &cobra.Command{
 		})
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
-		}
-
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "dep remove",
-			IssueIDs: []string{fullFromID, fullToID},
-		}); err != nil {
-			return HandleErrorRespectJSON("failed to commit: %v", err)
 		}
 
 		if jsonOutput {
@@ -1557,7 +1521,7 @@ func init() {
 	depTreeCmd.Flags().String("format", "", "Output format: 'mermaid' for Mermaid.js flowchart")
 	// Defensive row cap (be-x42v): applied to the node count after the walk, by
 	// the role, on BOTH routes — hence the routed variant of the flag.
-	addRoutedMaxRowsFlag(depTreeCmd)
+	addMaxRowsFlag(depTreeCmd)
 	// Note: --type flag intentionally omitted from depTreeCmd — TreeNode lacks
 	// dependency type info so filtering is not possible. Use 'bd dep list --type' instead.
 

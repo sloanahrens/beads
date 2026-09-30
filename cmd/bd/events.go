@@ -13,7 +13,6 @@ import (
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/eventsjournal"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/uow"
 )
 
 // eventFollowPollInterval is how often `bd events tail --follow` polls the
@@ -345,45 +344,19 @@ func journalAccessor() (storage.EventsJournalAccessor, error) {
 // for why there is exactly one.
 func readJournal(ctx context.Context, since int64, limit int) ([]eventsjournal.Record, error) {
 	var rows []storage.EventsJournalRow
-	if usesProxiedServer() {
-		if uowProvider == nil {
-			return nil, fmt.Errorf("no proxied-server unit-of-work provider available")
-		}
-		uw, err := uowProvider.NewUOW(ctx)
-		if err != nil {
-			return nil, err
-		}
-		defer uw.Close(ctx)
-		rows, err = uw.EventsJournalUseCase().Read(ctx, since, limit)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		acc, err := journalAccessor()
-		if err != nil {
-			return nil, err
-		}
-		rows, err = acc.ReadEventsJournal(ctx, since, limit)
-		if err != nil {
-			return nil, err
-		}
+	acc, err := journalAccessor()
+	if err != nil {
+		return nil, err
+	}
+	rows, err = acc.ReadEventsJournal(ctx, since, limit)
+	if err != nil {
+		return nil, err
 	}
 	return eventsjournal.Records(rows), nil
 }
 
 // pruneJournal deletes records below before honoring the retain floors.
 func pruneJournal(ctx context.Context, before int64, retainDays, retainRows int) (int64, error) {
-	if usesProxiedServer() {
-		if uowProvider == nil {
-			return 0, fmt.Errorf("no proxied-server unit-of-work provider available")
-		}
-		// The journal table is dolt_ignored, so the delete must persist into the
-		// working set WITHOUT minting a Dolt commit — the same ephemeral commit
-		// discipline lease writes use.
-		return uow.RunTxEphemeral(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (int64, error) {
-			return uw.EventsJournalUseCase().Prune(ctx, before, retainDays, retainRows)
-		})
-	}
 	acc, err := journalAccessor()
 	if err != nil {
 		return 0, err

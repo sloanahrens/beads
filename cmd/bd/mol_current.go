@@ -76,10 +76,6 @@ Use --limit or --range to view specific steps:
 			agent = actor
 		}
 
-		if usesProxiedServer() {
-			return runMolCurrentProxiedServer(rootCtx, args, agent, limit, rangeStr)
-		}
-
 		ctx := rootCtx
 
 		if store == nil {

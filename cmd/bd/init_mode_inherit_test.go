@@ -98,7 +98,7 @@ func TestInitModeExplicitlyRequested(t *testing.T) {
 		}
 	})
 
-	for _, flag := range []string{"server", "shared-server", "proxied-server"} {
+	for _, flag := range []string{"server", "shared-server"} {
 		t.Run("--"+flag+" is explicit", func(t *testing.T) {
 			clearModeEnv(t)
 			c := newModeFlagCmd()
@@ -126,7 +126,6 @@ func TestInitModeExplicitlyRequested(t *testing.T) {
 	for _, env := range []string{
 		"BEADS_DOLT_SERVER_MODE",
 		"BEADS_DOLT_SHARED_SERVER",
-		"BEADS_DOLT_PROXIED_SERVER",
 	} {
 		t.Run(env+" is explicit", func(t *testing.T) {
 			clearModeEnv(t)
@@ -140,10 +139,8 @@ func TestInitModeExplicitlyRequested(t *testing.T) {
 
 // TestInheritWorkspaceDoltMode covers the decision the RunE inheritance block
 // applies — the composition a helper-only test suite would miss (#3885 review).
-// The proxied-server case is the load-bearing one: the proxied init path
-// dispatches on the explicit flag before the inheritance point, so "inherit"
-// there would build embedded data under proxied-server metadata. It must
-// refuse instead.
+// A proxied-server workspace must refuse: that mode was removed, and inheriting
+// anything from it would rebuild the workspace in a different mode.
 func TestInheritWorkspaceDoltMode(t *testing.T) {
 	t.Run("server mode is inherited", func(t *testing.T) {
 		writeWorkspaceMode(t, configfile.DoltModeServer)
@@ -172,16 +169,16 @@ func TestInheritWorkspaceDoltMode(t *testing.T) {
 		}
 	})
 
-	t.Run("proxied-server refuses rather than silently building embedded", func(t *testing.T) {
+	t.Run("proxied-server refuses because the mode was removed", func(t *testing.T) {
 		writeWorkspaceMode(t, configfile.DoltModeProxiedServer)
 		inheritServer, err := inheritWorkspaceDoltMode()
 		if inheritServer {
 			t.Fatal("proxied-server workspace was inherited as server mode")
 		}
 		if err == nil {
-			t.Fatal("proxied-server workspace did not refuse; a bare re-init would build embedded data under proxied-server metadata")
+			t.Fatal("proxied-server workspace did not refuse")
 		}
-		if !strings.Contains(err.Error(), "--proxied-server") {
+		if !strings.Contains(err.Error(), "proxied-server mode was removed") {
 			t.Errorf("refusal does not tell the user how to proceed: %v", err)
 		}
 	})

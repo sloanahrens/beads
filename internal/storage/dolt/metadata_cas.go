@@ -69,7 +69,7 @@ func (m *metadataCAS) CompareAndSetKey(ctx context.Context, req issueops.Compare
 		}
 		// The swap routes through UpdateIssueInTx, which also writes an
 		// EventUpdated row, so stage both tables (mirrors MergeMetadata).
-		return m.store.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"},
+		return m.store.doltAddAndCommitInTx(ctx, tx, []string{"issues"},
 			fmt.Sprintf("bd: compare-and-set metadata %s.%s", plan.IssueID, plan.Key))
 	}); err != nil {
 		return issueops.CompareAndSetKeyResult{}, err

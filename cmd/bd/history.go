@@ -42,13 +42,6 @@ Examples:
 
 		issueID := args[0]
 
-		if usesProxiedServer() {
-			// Proxied mode has no local store to resolve against, so partial-ID
-			// resolution is unavailable here -- pass the raw ID through and let
-			// the proxied server's own lookup handle it.
-			return runHistoryProxiedServer(rootCtx, issueID, historyLimit, historyEvents)
-		}
-
 		if resolved, err := utils.ResolvePartialID(rootCtx, store, issueID); err == nil {
 			issueID = resolved
 		} else if errors.Is(err, utils.ErrAmbiguousID) {

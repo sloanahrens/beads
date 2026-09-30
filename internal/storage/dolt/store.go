@@ -428,14 +428,6 @@ type Config struct {
 	// on metadata.json dolt_mode or BEADS_DOLT_SERVER_MODE env var.
 	ServerMode bool
 
-	// ProxiedServer indicates this config targets a per-workspace proxied
-	// dolt sql-server (a parent proxy + a child dolt sql-server, both rooted
-	// at <BeadsDir>/dolt). Mutually exclusive with ServerMode: the
-	// proxied path owns its own connection details and does not consult
-	// ServerHost/Port/Socket/User. Set by the store factory based on
-	// metadata.json dolt_mode=proxied-server.
-	ProxiedServer bool
-
 	// Gateway indicates the server is an authenticating gateway server: a credential
 	// command supplies a short-lived token as the connection username. bd treats such a
 	// server as owning database routing and schema, so it connects with the project
@@ -1590,7 +1582,7 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 // servers may leave unrelated client-local directories at those locations.
 func resolveLocalActiveDatabaseDir(cfg *Config) string {
 	if cfg == nil || cfg.BeadsDir == "" || cfg.Database == "" ||
-		cfg.Gateway || cfg.ProxiedServer || cfg.ServerSocket != "" ||
+		cfg.Gateway || cfg.ServerSocket != "" ||
 		cfg.ServerTLS || !isLocalHost(cfg.ServerHost) {
 		return ""
 	}
@@ -4847,7 +4839,9 @@ func (s *DoltStore) Branch(ctx context.Context, name string) (retErr error) {
 	return versioncontrolops.CreateBranch(ctx, conn, name)
 }
 
-// Checkout switches to the specified branch
+// Checkout switches to the specified branch. It is not part of
+// storage.VersionControl: no command switches branches; tests use it to build
+// branch fixtures.
 func (s *DoltStore) Checkout(ctx context.Context, branch string) (retErr error) {
 	ctx, span := doltTracer.Start(ctx, "dolt.checkout",
 		trace.WithSpanKind(trace.SpanKindClient),
@@ -4976,11 +4970,6 @@ func (s *DoltStore) RecomputeBlockedAfterMerge(ctx context.Context, fromCommit s
 // CurrentBranch returns the current branch name
 func (s *DoltStore) CurrentBranch(ctx context.Context) (string, error) {
 	return versioncontrolops.CurrentBranch(ctx, s.db)
-}
-
-// DeleteBranch deletes a branch (used to clean up import branches)
-func (s *DoltStore) DeleteBranch(ctx context.Context, branch string) error {
-	return versioncontrolops.DeleteBranch(ctx, s.db, branch)
 }
 
 // Log returns recent commit history

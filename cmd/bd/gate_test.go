@@ -3,12 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -179,19 +177,6 @@ func TestCheckBeadGate_CrossRigUsesBeadIDForRoutedLookup(t *testing.T) {
 	}
 	if st.gotID != "gt-abc" {
 		t.Fatalf("routed lookup ID = %q, want %q", st.gotID, "gt-abc")
-	}
-}
-
-func TestProxiedFreshReadGetterPreservesLocalNotFoundWhenRoutingUnavailable(t *testing.T) {
-	withStubbedProxiedLookup(t, nil)
-
-	oldDBPath := dbPath
-	dbPath = filepath.Join(t.TempDir(), ".beads", "dolt")
-	t.Cleanup(func() { dbPath = oldDBPath })
-
-	_, err := (proxiedFreshReadGetter{}).GetIssue(context.Background(), "bd-missing")
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("GetIssue error = %v, want original local not-found", err)
 	}
 }
 

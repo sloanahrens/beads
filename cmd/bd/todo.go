@@ -59,10 +59,6 @@ var addTodoCmd = &cobra.Command{
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runTodoAddProxiedServer(cmd, rootCtx, args)
-		}
-
 		title := strings.Join(args, " ")
 
 		priority, _ := cmd.Flags().GetInt("priority")
@@ -136,18 +132,10 @@ func runTodoListCore(cmd *cobra.Command, _ []string) error {
 	}
 
 	var issues []*types.Issue
-	if usesProxiedServer() {
-		var err error
-		issues, err = todoListProxied(ctx, filter)
-		if err != nil {
-			return err
-		}
-	} else {
-		var err error
-		issues, err = getStore().SearchIssues(ctx, "", filter)
-		if err != nil {
-			return HandleError("failed to list TODOs: %v", err)
-		}
+	var err error
+	issues, err = getStore().SearchIssues(ctx, "", filter)
+	if err != nil {
+		return HandleError("failed to list TODOs: %v", err)
 	}
 
 	if jsonOutput {
@@ -194,10 +182,6 @@ var doneTodoCmd = &cobra.Command{
 				c.CloseEventAndAdd(evt)
 			}
 		}()
-
-		if usesProxiedServer() {
-			return runTodoDoneProxiedServer(cmd, rootCtx, args)
-		}
 
 		ctx := rootCtx
 

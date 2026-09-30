@@ -18,7 +18,6 @@ var freshnessDocuments = []struct {
 }{
 	{"docs/reference/configuration.md", []string{"cmd/bd/main.go", "cmd/bd/config.go", "internal/configfile/"}},
 	{"docs/getting-started/ide-setup.md", []string{"cmd/bd/setup*.go", "internal/recipes/"}},
-	{"docs/integrations/azure-devops.md", []string{"cmd/bd/ado*.go", "internal/ado/"}},
 	{"docs/reference/json-schema.md", []string{"cmd/bd/output.go", "cmd/bd/errors.go", "cmd/bd/protocol/json_contract_test.go"}},
 	{"docs/recovery/init-safety.md", []string{"cmd/bd/init.go", "cmd/bd/init_safety.go", "cmd/bd/init_safety_test.go"}},
 	{"engdocs/ERROR_HANDLING.md", []string{"cmd/bd/*.go", "cmd/bd/errors.go"}},

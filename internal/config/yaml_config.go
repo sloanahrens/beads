@@ -93,17 +93,6 @@ var YamlOnlyKeys = map[string]bool{
 	"dolt.pool-read-timeout":  true, // Pool per-I/O read deadline override (default 10s, bd-vz0y9)
 	"dolt.pool-write-timeout": true, // Pool per-I/O write deadline override (default 10s, bd-vz0y9)
 	"dolt.debug":              true, // Debug-mode dolt sql-server: --loglevel=debug + --prof cpu
-
-	// Secrets: tokens and API keys must NOT be stored in the Dolt database
-	// because that data is pushed to remotes, triggering secret-scanning
-	// blocks on GitHub. Store them in local config.yaml instead.
-	"github.token":               true,
-	"linear.api_key":             true,
-	"linear.oauth_client_id":     true,
-	"linear.oauth_client_secret": true,
-	"jira.api_token":             true,
-	"gitlab.token":               true,
-	"ado.pat":                    true,
 }
 
 // IsYamlOnlyKey returns true if the given key should be stored in config.yaml
@@ -193,13 +182,11 @@ var secretKeyEnvVarHints = map[string]string{ //nolint:gosec // Values are envir
 	// `export %s="..."` shell template, where "A or B" would silently
 	// assign to B alone. ANTHROPIC_API_KEY is the primary; MiniMax users
 	// can export MINIMAX_API_KEY instead (same resolution chain).
-	"ai.api_key":     "ANTHROPIC_API_KEY",
-	"github.token":   "GITHUB_TOKEN",
-	"linear.api_key": "LINEAR_API_KEY",
+	"ai.api_key": "ANTHROPIC_API_KEY",
 }
 
 // secretKeyEnvVarHint returns a suggested environment variable name for a
-// secret config key, e.g. "linear.api_key" -> "LINEAR_API_KEY".
+// secret config key, e.g. "ai.api_key" -> "ANTHROPIC_API_KEY".
 func secretKeyEnvVarHint(key string) string {
 	if envVar, ok := secretKeyEnvVarHints[key]; ok {
 		return envVar

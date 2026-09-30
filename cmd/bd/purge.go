@@ -90,9 +90,6 @@ EXAMPLES:
 // openSweeper hands back the bulk-clearance role for whichever route this
 // invocation is on.
 func openSweeper() (issueops.Sweeper, error) {
-	if usesProxiedServer() {
-		return proxiedSweeper()
-	}
 	if store == nil {
 		if err := ensureStoreActive(); err != nil {
 			return nil, err

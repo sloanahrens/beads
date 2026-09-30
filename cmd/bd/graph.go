@@ -103,12 +103,6 @@ in total before any individual status trips it.`,
 		}
 
 		out := cmd.OutOrStdout()
-		if usesProxiedServer() {
-			if err := rejectMaxRowsUnderProxiedServer(cmd); err != nil {
-				return err
-			}
-			return runGraphProxiedServer(rootCtx, out, args)
-		}
 
 		ctx := rootCtx
 		if store == nil {
@@ -282,10 +276,6 @@ Returns exit code 0 if the graph is clean, 1 if issues are found.`,
 				c.CloseEventAndAdd(evt)
 			}
 		}()
-
-		if usesProxiedServer() {
-			return runGraphCheckProxiedServer(rootCtx)
-		}
 
 		cycles, err := store.DetectCycles(rootCtx)
 		if err != nil {

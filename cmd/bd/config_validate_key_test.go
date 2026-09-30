@@ -3,21 +3,15 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"github.com/steveyegge/beads/internal/tracker"
 )
 
 func TestIsRecognizedConfigKey(t *testing.T) {
 	recognized := []string{
-		"export.auto", "dolt.auto-push", "jira.url", "custom.anything",
+		"export.auto", "dolt.auto-push", "custom.anything",
 		"doctor.suppress.git-hooks", "no-git-ops", "beads.role",
 		"status.custom", "types.custom", "types.infra", "ai.model",
 		"backup.enabled", "import.path", "dolt.local-only", "agent.profile",
 		"claim.pools",
-		// Tracker namespaces are derived from the registry (GH#4427); cover
-		// ado (the original bug) plus the others removed from the static list.
-		"ado.org", "ado.project", "github.token", "linear.api-key",
-		"gitlab.url", "notion.token",
 	}
 	for _, key := range recognized {
 		if !isRecognizedConfigKey(key) {
@@ -27,26 +21,14 @@ func TestIsRecognizedConfigKey(t *testing.T) {
 
 	unrecognized := []string{
 		"totally.bogus", "exprot.auto", "xport.path", "nodb",
+		// The tracker integrations are gone (be-xu2.1), so their namespaces
+		// are no longer recognized.
+		"jira.url", "ado.org", "github.token", "linear.api-key",
+		"gitlab.url", "notion.token",
 	}
 	for _, key := range unrecognized {
 		if isRecognizedConfigKey(key) {
 			t.Errorf("isRecognizedConfigKey(%q) = true, want false", key)
-		}
-	}
-}
-
-// TestTrackerConfigPrefixesRecognized guards against the recognizer drifting
-// out of sync with the tracker registry (GH#4427): every registered tracker's
-// config namespace must be recognized, without being hand-listed.
-func TestTrackerConfigPrefixesRecognized(t *testing.T) {
-	names := tracker.List()
-	if len(names) == 0 {
-		t.Fatal("no trackers registered; tracker adapters not linked into the test binary")
-	}
-	for _, name := range names {
-		key := name + ".some-setting"
-		if !isRecognizedConfigKey(key) {
-			t.Errorf("config key %q for registered tracker %q not recognized", key, name)
 		}
 	}
 }
@@ -65,9 +47,6 @@ func TestSuggestConfigKey(t *testing.T) {
 		{"exprot.auto", "export.auto"},
 		{"exoprt.path", "export.path"},
 		{"totally.bogus", ""},
-		// Tracker prefixes participate in suggestions too (GH#4427): a near-miss
-		// of "ado" should suggest the registry-derived "ado." namespace.
-		{"add.org", "ado.org"},
 	}
 	for _, tt := range tests {
 		got := suggestConfigKey(tt.input)

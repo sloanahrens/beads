@@ -2,16 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
-	"github.com/steveyegge/beads/internal/utils"
 	"github.com/steveyegge/beads/issueops"
 )
 
@@ -35,9 +32,6 @@ type treeTarget struct {
 // lookup that finds nothing must report the lookup failure, not a missing
 // surface the command never got to use.
 func resolveTreeTarget(ctx context.Context, arg string) (treeTarget, error) {
-	if usesProxiedServer() {
-		return proxiedTreeTarget(ctx, arg)
-	}
 	rootID, treeStore, cleanup, err := resolveIDWithRouting(ctx, store, arg)
 	if err != nil {
 		return treeTarget{}, err
@@ -48,36 +42,6 @@ func resolveTreeTarget(ctx context.Context, arg string) (treeTarget, error) {
 		return treeTarget{}, err
 	}
 	return treeTarget{rootID: rootID, walker: walker, cleanup: cleanup}, nil
-}
-
-// proxiedTreeTarget resolves the argument against the proxied server and hands
-// back the provider's tree surface.
-//
-// THIS ROUTE GAINS PARTIAL-ID RESOLUTION, which it has never had: it passed the
-// argument to the use case verbatim, so `bd dep tree a1b2` worked on a direct
-// workspace and failed on a team server.
-func proxiedTreeTarget(ctx context.Context, arg string) (treeTarget, error) {
-	uw, err := proxiedOpenReadUOW(ctx)
-	if err != nil {
-		return treeTarget{}, err
-	}
-	rootID, err := utils.ResolvePartialID(ctx, uowMolReader{uw: uw}, arg)
-	uw.Close(ctx)
-	if err != nil {
-		return treeTarget{}, fmt.Errorf("resolving issue ID %s: %w", arg, err)
-	}
-	if uowProvider == nil {
-		return treeTarget{}, errors.New("proxied-server UOW provider not initialized")
-	}
-	src, ok := uowProvider.(uow.TreeWalkerSource)
-	if !ok {
-		return treeTarget{}, fmt.Errorf("proxied-server provider %T does not offer the dependency-tree surface", uowProvider)
-	}
-	walker, err := src.TreeWalker()
-	if err != nil {
-		return treeTarget{}, err
-	}
-	return treeTarget{rootID: rootID, walker: walker, cleanup: func() {}}, nil
 }
 
 // runDepTree is the whole of `bd dep tree` on both routes.

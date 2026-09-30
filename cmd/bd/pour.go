@@ -97,10 +97,6 @@ func runPour(cmd *cobra.Command, args []string) error {
 
 	in := gatherPourInput(cmd, args)
 
-	if usesProxiedServer() {
-		return runPourProxiedServer(rootCtx, in)
-	}
-
 	ctx := rootCtx
 
 	if store == nil {

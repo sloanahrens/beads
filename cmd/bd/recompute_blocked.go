@@ -44,10 +44,6 @@ Examples:
 
 		ctx := rootCtx
 
-		if usesProxiedServer() {
-			return runRecomputeBlockedProxiedServer(ctx)
-		}
-
 		recomputer, ok := storage.UnwrapStore(store).(storage.BlockedRecomputer)
 		if !ok {
 			return HandleError("storage backend does not support is_blocked recompute")

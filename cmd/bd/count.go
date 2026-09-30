@@ -61,9 +61,6 @@ Examples:
 // on, each through its own capability accessor. Neither branch builds a filter,
 // loads config or opens a unit of work.
 func openCounter() (issueops.Counter, error) {
-	if usesProxiedServer() {
-		return proxiedCounter()
-	}
 	return store.Counter()
 }
 
