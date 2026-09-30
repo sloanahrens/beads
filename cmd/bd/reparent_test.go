@@ -46,7 +46,7 @@ func TestCLI_ReparentDottedIDExcludesOldParent(t *testing.T) {
 		"dotted child should appear under parentA via prefix match before reparenting")
 
 	// Reparent: add explicit parent-child dep to parentB
-	runBD(t, tmpDir, "dep", "add", dottedChildID, parentB, "--type", "parent-child")
+	runBDReparent(t, tmpDir, "dep", "add", dottedChildID, parentB, "--type", "parent-child")
 
 	// After reparenting: child should NOT appear under parentA
 	assertParentLists(t, tmpDir, parentA, dottedChildID, false,
@@ -79,7 +79,7 @@ func createExecTestIssueWithID(t *testing.T, tmpDir, title, id string) string {
 }
 
 // runBD runs a bd command and fails the test on error.
-func runBD(t *testing.T, tmpDir string, args ...string) []byte {
+func runBDReparent(t *testing.T, tmpDir string, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command(testBD, args...)
 	cmd.Dir = tmpDir
