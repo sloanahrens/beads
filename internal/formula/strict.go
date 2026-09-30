@@ -107,8 +107,7 @@ func DecodeTOMLStrict(data []byte) (*Formula, []Problem, error) {
 	undecoded := map[string]bool{}
 	for _, k := range md.Undecoded() {
 		path := strings.Join(k, ".")
-		parent := strings.Join(k[:len(k)-1], ".")
-		if len(k) > 1 && undecoded[parent] {
+		if hasUndecodedAncestor(k, undecoded) {
 			lines.next(path) // consume the occurrence
 			continue
 		}
@@ -149,6 +148,15 @@ func DecodeTOMLStrict(data []byte) (*Formula, []Problem, error) {
 		f.Type = TypeWorkflow
 	}
 	return &f, problems, nil
+}
+
+func hasUndecodedAncestor(k toml.Key, undecoded map[string]bool) bool {
+	for n := 1; n < len(k); n++ {
+		if undecoded[strings.Join(k[:n], ".")] {
+			return true
+		}
+	}
+	return false
 }
 
 // validGateType reports whether a gate type is one bd can resolve: the

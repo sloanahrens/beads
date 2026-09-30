@@ -263,3 +263,14 @@ func TestLoadByName_NotFoundIsTyped(t *testing.T) {
 		t.Fatalf("want ErrFormulaNotFound, got %v", err)
 	}
 }
+
+func TestDecodeTOMLStrict_FoldsUnderAnyUnknownAncestor(t *testing.T) {
+	src := "formula = \"c\"\nversion = 1\n[inputs.branch]\ndescription = \"b\"\n[[steps]]\nid = \"a\"\ntitle = \"A\"\n"
+	_, problems, err := DecodeTOMLStrict([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 1 || problems[0].Key != "inputs.branch" {
+		t.Fatalf("want one problem for inputs.branch, got %+v", problems)
+	}
+}
