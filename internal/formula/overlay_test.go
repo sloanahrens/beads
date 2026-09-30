@@ -72,3 +72,24 @@ func TestLoadOverlay(t *testing.T) {
 		}
 	}
 }
+
+// Skipping two chained steps leaves the survivor needing the first
+// survivor upstream of both.
+func TestApplyOverlay_ChainedSkips(t *testing.T) {
+	f := overlayFormula()
+	ApplyOverlay(f, &Overlay{StepOverrides: []StepOverride{
+		{StepID: "a", Mode: OverlaySkip},
+		{StepID: "b", Mode: OverlaySkip},
+	}})
+	if len(f.Steps) != 1 || f.Steps[0].ID != "c" || len(f.Steps[0].Needs) != 0 || len(f.Steps[0].DependsOn) != 0 {
+		t.Fatalf("after skipping a then b, c must stand alone: %+v", f.Steps)
+	}
+	f = overlayFormula()
+	ApplyOverlay(f, &Overlay{StepOverrides: []StepOverride{
+		{StepID: "b", Mode: OverlaySkip},
+		{StepID: "a", Mode: OverlaySkip},
+	}})
+	if len(f.Steps) != 1 || len(f.Steps[0].Needs) != 0 {
+		t.Fatalf("after skipping b then a, c must stand alone: %+v", f.Steps)
+	}
+}

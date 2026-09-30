@@ -748,9 +748,13 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 		return nil, fmt.Errorf("loading formula %q: %w", formulaName, err)
 	}
 
-	resolved, _, err := cookPipeline(parser, f, conditionVars, formulaOverlayDir())
+	resolved, cooked, err := cookPipeline(parser, f, conditionVars, formulaOverlayDir())
 	if err != nil {
 		return nil, err
+	}
+	// A stale override is not fatal, but it must not be invisible either.
+	for _, w := range cooked.warnings {
+		fmt.Fprintf(os.Stderr, "Warning: formula %s: %s (%s)\n", resolved.Formula, w, cooked.overlay.Path)
 	}
 
 	// Cook to in-memory subgraph, including variable definitions for default handling
@@ -765,14 +769,15 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 // Order: extends, --var validation, control flow, advice, inline expansion,
 // compose expand/map, aspects, the overlay from overlayDir (if any), step
 // conditions, standalone expansion templates. conditionVars nil skips var
-// validation and condition filtering. It returns the overlay warnings.
-func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[string]string, overlayDir string) (*formula.Formula, []string, error) {
+// validation and condition filtering.
+func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[string]string, overlayDir string) (*formula.Formula, cookedExtras, error) {
+	var none cookedExtras
 	formulaName := f.Formula
 
 	// Resolve inheritance
 	resolved, err := parser.Resolve(f)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolving formula %q: %w", formulaName, err)
+		return nil, none, fmt.Errorf("resolving formula %q: %w", formulaName, err)
 	}
 
 	// Validate any caller-provided variable values against enum/pattern/
@@ -784,14 +789,14 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 	// machine-mode cook) (mybd-u2r6).
 	if conditionVars != nil {
 		if err := formula.ValidateProvidedVars(resolved, conditionVars); err != nil {
-			return nil, nil, fmt.Errorf("formula %q: %w", formulaName, err)
+			return nil, none, fmt.Errorf("formula %q: %w", formulaName, err)
 		}
 	}
 
 	// Apply control flow operators - loops, branches, gates
 	controlFlowSteps, err := formula.ApplyControlFlow(resolved.Steps, resolved.Compose)
 	if err != nil {
-		return nil, nil, fmt.Errorf("applying control flow to %q: %w", formulaName, err)
+		return nil, none, fmt.Errorf("applying control flow to %q: %w", formulaName, err)
 	}
 	resolved.Steps = controlFlowSteps
 
@@ -803,7 +808,7 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 	// Apply inline step expansions
 	inlineExpandedSteps, err := formula.ApplyInlineExpansions(resolved.Steps, parser)
 	if err != nil {
-		return nil, nil, fmt.Errorf("applying inline expansions to %q: %w", formulaName, err)
+		return nil, none, fmt.Errorf("applying inline expansions to %q: %w", formulaName, err)
 	}
 	resolved.Steps = inlineExpandedSteps
 
@@ -811,7 +816,7 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 	if resolved.Compose != nil && (len(resolved.Compose.Expand) > 0 || len(resolved.Compose.Map) > 0) {
 		expandedSteps, err := formula.ApplyExpansions(resolved.Steps, resolved.Compose, parser)
 		if err != nil {
-			return nil, nil, fmt.Errorf("applying expansions to %q: %w", formulaName, err)
+			return nil, none, fmt.Errorf("applying expansions to %q: %w", formulaName, err)
 		}
 		resolved.Steps = expandedSteps
 	}
@@ -821,10 +826,10 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 		for _, aspectName := range resolved.Compose.Aspects {
 			aspectFormula, err := parser.LoadByName(aspectName)
 			if err != nil {
-				return nil, nil, fmt.Errorf("loading aspect %q: %w", aspectName, err)
+				return nil, none, fmt.Errorf("loading aspect %q: %w", aspectName, err)
 			}
 			if aspectFormula.Type != formula.TypeAspect {
-				return nil, nil, fmt.Errorf("%q is not an aspect formula (type=%s)", aspectName, aspectFormula.Type)
+				return nil, none, fmt.Errorf("%q is not an aspect formula (type=%s)", aspectName, aspectFormula.Type)
 			}
 			if len(aspectFormula.Advice) > 0 {
 				resolved.Steps = formula.ApplyAdvice(resolved.Steps, aspectFormula.Advice)
@@ -836,9 +841,9 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 	// every expansion so it targets the final step ids.
 	overlay, err := formula.LoadOverlay(overlayDir, resolved.Formula)
 	if err != nil {
-		return nil, nil, err
+		return nil, none, err
 	}
-	warnings := formula.ApplyOverlay(resolved, overlay)
+	extras := cookedExtras{overlay: overlay, warnings: formula.ApplyOverlay(resolved, overlay)}
 
 	// Apply step condition filtering if vars provided (bd-7zka.1)
 	// This filters out steps whose conditions evaluate to false
@@ -856,7 +861,7 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 
 		filteredSteps, err := formula.FilterStepsByCondition(resolved.Steps, mergedVars)
 		if err != nil {
-			return nil, nil, fmt.Errorf("filtering steps by condition: %w", err)
+			return nil, none, fmt.Errorf("filtering steps by condition: %w", err)
 		}
 		resolved.Steps = filteredSteps
 	}
@@ -878,11 +883,18 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 			}
 		}
 		if err := formula.MaterializeExpansion(resolved, "main", expansionVars); err != nil {
-			return nil, nil, fmt.Errorf("standalone expansion %q: %w", formulaName, err)
+			return nil, none, fmt.Errorf("standalone expansion %q: %w", formulaName, err)
 		}
 	}
 
-	return resolved, warnings, nil
+	return resolved, extras, nil
+}
+
+// cookedExtras is what cookPipeline learned besides the formula: the overlay
+// it applied (nil when none) and that overlay's stale-override warnings.
+type cookedExtras struct {
+	overlay  *formula.Overlay
+	warnings []string
 }
 
 // formulaOverlayDir is the one directory overlays are read from: config

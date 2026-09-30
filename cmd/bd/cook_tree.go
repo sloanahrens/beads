@@ -83,7 +83,7 @@ func cookTreeFor(nameOrPath string, searchPaths []string, vars map[string]string
 	if err != nil {
 		return nil, err
 	}
-	resolved, warnings, err := cookPipeline(parser, f, vars, overlayDir)
+	resolved, cooked, err := cookPipeline(parser, f, vars, overlayDir)
 	if err != nil {
 		return nil, err
 	}
@@ -96,13 +96,13 @@ func cookTreeFor(nameOrPath string, searchPaths []string, vars map[string]string
 		Mode:           "runtime",
 		Vars:           []cookTreeVar{},
 		UnresolvedVars: []string{},
-		Warnings:       warnings,
+		Warnings:       cooked.warnings,
 	}
 	if tree.Warnings == nil {
 		tree.Warnings = []string{}
 	}
-	if overlay, _ := formula.LoadOverlay(overlayDir, resolved.Formula); overlay != nil {
-		tree.Overlay = &cookTreeSource{Path: overlay.Path}
+	if cooked.overlay != nil {
+		tree.Overlay = &cookTreeSource{Path: cooked.overlay.Path}
 	}
 
 	values := formula.ApplyDefaults(resolved, vars)
