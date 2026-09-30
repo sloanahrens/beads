@@ -1,4 +1,4 @@
-//go:build cgo
+//go:build cgo && integration
 
 // Cgo-tagged regression tests for the externalRefChangedAfter fast-path gate
 // (GH#4549), exercised against the real Dolt-backed stores. Pure-Go tests

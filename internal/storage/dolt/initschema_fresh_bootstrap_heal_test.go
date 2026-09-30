@@ -13,6 +13,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 // TestFreshBootstrapHealSelfHealsAfterMidPassFailure is the server-mode
@@ -131,7 +132,7 @@ func TestFreshBootstrapHealNotArmedWhenDatabasePreexists(t *testing.T) {
 	t.Cleanup(releaseTestSlot)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	dbName := uniqueTestDBName(t)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 // TestMigrateCommand removed: detectDatabases, getDBVersion, formatDBList, dbInfo
@@ -58,7 +59,7 @@ func TestMigrateRespectsConfigJSON(t *testing.T) {
 	oldDBPath := filepath.Join(beadsDir, "beady.db")
 	store, err := dolt.New(context.Background(), &dolt.Config{Path: oldDBPath})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	ctx := context.Background()
 	if err := store.SetLocalMetadata(ctx, "bd_version", "0.21.1"); err != nil {

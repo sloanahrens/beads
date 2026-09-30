@@ -82,3 +82,40 @@ echo "metrics:BEADS_TEST_MODE=${BEADS_TEST_MODE-<unset>}"
 		}
 	}
 }
+
+// TestHermeticEnvExportsTestTier pins be-b23: beads_test_env_enter exports
+// BD_TEST_TIER after the BD_ sweep. The default (Dolt skipped) is the unit
+// tier, which arms the migration and server-start tripwires (internal/
+// testtier); BEADS_TEST_ENV_RUN_DOLT=1 is the integration tier. A tier the
+// caller exported before entering is swept like every other BD_ variable.
+func TestHermeticEnvExportsTestTier(t *testing.T) {
+	for _, tt := range []struct {
+		runDolt string
+		want    string
+	}{
+		{runDolt: "0", want: "unit"},
+		{runDolt: "1", want: "integration"},
+	} {
+		t.Run("run_dolt="+tt.runDolt, func(t *testing.T) {
+			const script = `
+set -euo pipefail
+source ci/lib/test-env.sh
+unset BEADS_TEST_ENV_ACTIVE BEADS_TEST_ENV_DISABLE BEADS_TEST_ENV_KEEP
+beads_test_env_enter
+echo "BD_TEST_TIER=${BD_TEST_TIER-<unset>}"
+`
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Env = append(os.Environ(),
+				"BEADS_TEST_ENV_RUN_DOLT="+tt.runDolt,
+				"BD_TEST_TIER=leaked-from-caller",
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("beads_test_env_enter failed: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != "BD_TEST_TIER="+tt.want {
+				t.Fatalf("got %q, want BD_TEST_TIER=%s", got, tt.want)
+			}
+		})
+	}
+}

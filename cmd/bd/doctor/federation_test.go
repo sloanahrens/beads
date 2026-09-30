@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 func TestCheckFederationRemotesAPI_NonDoltBackend(t *testing.T) {
@@ -492,7 +493,7 @@ func TestDoltServerConfig_PopulatesFromConfig(t *testing.T) {
 func TestCheckLegacyCLIRemotesDetectsServerRootOnlyRemote(t *testing.T) {
 	port := doctorTestServerPort()
 	if port == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if _, err := exec.LookPath("dolt"); err != nil {
 		t.Skipf("dolt binary not available: %v", err)
@@ -598,7 +599,7 @@ func TestCheckFederationRemotesAPI_ServerRunningNoPeers(t *testing.T) {
 
 	port := doctorTestServerPort()
 	if port == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 
 	tmpDir := t.TempDir()

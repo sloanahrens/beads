@@ -29,10 +29,10 @@ import (
 // Requires a live Dolt test server/container (cgo build); skips otherwise.
 func TestMissingJSONLIssueIDsInStore_IgnoresCompactedWisp(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ensureTestMode(t)

@@ -1,6 +1,6 @@
 //go:build cgo
 
-package utils
+package utils_test
 
 import (
 	"fmt"

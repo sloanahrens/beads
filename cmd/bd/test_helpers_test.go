@@ -94,10 +94,10 @@ func newTestStoreIsolatedDB(t *testing.T, dbPath string, prefix string) *dolt.Do
 	ensureTestMode(t)
 
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testStoreOpenTimeout)
@@ -146,10 +146,10 @@ func newTestStoreWithPrefix(t *testing.T, dbPath string, prefix string) *dolt.Do
 	ensureTestMode(t)
 
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	// Fast path: use shared DB with branch-per-test isolation (bd-xmf)
@@ -295,10 +295,10 @@ func newTestStoreWithPrefixAndReadTimeout(t *testing.T, dbPath string, prefix st
 	ensureTestMode(t)
 
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	// Fast path: use shared DB with branch-per-test isolation (bd-xmf)
@@ -360,10 +360,10 @@ func tryNewTestStoreWithReadTimeout(t *testing.T, dbPath string, readTimeout tim
 	ensureTestMode(t)
 
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testStoreOpenTimeout)

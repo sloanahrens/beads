@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -22,7 +23,7 @@ func TestUpdateMetadataInlineJSON(t *testing.T) {
 	ctx := context.Background()
 	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	defer store.Close()
 

@@ -320,21 +320,25 @@ func ensureSharedContainer() {
 // EnsureDoltContainerForTestMain starts a shared Dolt container for use in
 // TestMain functions. Call TerminateDoltContainer() after m.Run() to clean up.
 // Sets BEADS_DOLT_PORT and BEADS_DOLT_SERVER_PORT process-wide.
+//
+// In the integration tier (BD_TEST_TIER=integration) a failure exits the test
+// binary with status 1 (require-mode, be-b23.3) instead of returning.
 func EnsureDoltContainerForTestMain() error {
 	if state := checkDolt(); state != doltReady {
-		return fmt.Errorf("%s", state)
+		return requireModeTestMainGate(fmt.Errorf("%s", state))
 	}
 
 	ensureSharedContainer()
-	return doltServerErr
+	return requireModeTestMainGate(doltServerErr)
 }
 
 // RequireDoltContainer ensures a shared Dolt container is running. Skips the
-// test if Docker is not available.
+// test if Docker is not available, and fails it in the integration tier
+// (require-mode, see SkipOrFailUnavailable).
 func RequireDoltContainer(t *testing.T) {
 	t.Helper()
 	if state := checkDolt(); state != doltReady {
-		t.Skipf("skipping test: %s", state)
+		SkipOrFailUnavailable(t, "skipping test: %s", state)
 	}
 
 	ensureSharedContainer()

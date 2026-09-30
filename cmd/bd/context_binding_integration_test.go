@@ -13,6 +13,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -44,7 +45,7 @@ func filteredEnvForContextBinding(keys ...string) []string {
 
 func TestListExplicitDBPathRebindsTargetContext(t *testing.T) {
 	if testDoltServerPort == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 
 	tmpDir := t.TempDir()

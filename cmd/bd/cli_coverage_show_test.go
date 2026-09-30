@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -274,7 +275,7 @@ func TestCoverage_TemplateAndPinnedProtections(t *testing.T) {
 	dbFile := filepath.Join(dir, ".beads", "beads.db")
 	s, err := dolt.New(context.Background(), &dolt.Config{Path: dbFile})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	ctx := context.Background()
 	template := &types.Issue{
@@ -311,7 +312,7 @@ func TestCoverage_TemplateAndPinnedProtections(t *testing.T) {
 	// Re-open the DB after running the CLI to confirm is_template persisted.
 	s2, err := dolt.New(context.Background(), &dolt.Config{Path: dbFile})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	postShow, err := s2.GetIssue(context.Background(), template.ID)
 	_ = s2.Close()
@@ -347,7 +348,7 @@ func TestCoverage_ShowThread(t *testing.T) {
 	dbFile := filepath.Join(dir, ".beads", "beads.db")
 	s, err := dolt.New(context.Background(), &dolt.Config{Path: dbFile})
 	if err != nil {
-		t.Skipf("skipping: Dolt server not available: %v", err)
+		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
 	ctx := context.Background()
 

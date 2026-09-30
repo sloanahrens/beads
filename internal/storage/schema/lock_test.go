@@ -42,6 +42,7 @@ func TestIsMigrationLockError(t *testing.T) {
 }
 
 func TestMigrateUpRunsWithoutAdvisoryLock(t *testing.T) {
+	allowMockedMigration(t)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("create sql mock: %v", err)
@@ -63,6 +64,7 @@ func TestMigrateUpRunsWithoutAdvisoryLock(t *testing.T) {
 }
 
 func TestMigrateUpWithLockUsesDatabaseScopedLockOnly(t *testing.T) {
+	allowMockedMigration(t)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("create sql mock: %v", err)
@@ -568,6 +570,7 @@ func expectFreshBootstrapIdentityMatch(mock sqlmock.Sqlmock) {
 // as *DirtyTablesError and no DOLT_RESET runs (sqlmock's ordered expectations
 // fail the test on any unexpected reset call).
 func TestMigrateUpWithLockDirtyGuardStaysFatalWithoutHeal(t *testing.T) {
+	allowMockedMigration(t)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("create sql mock: %v", err)
@@ -611,6 +614,7 @@ func TestMigrateUpWithLockDirtyGuardStaysFatalWithoutHeal(t *testing.T) {
 // interrupted bootstrap's working-set debris and the pass re-runs to
 // completion on the same session.
 func TestMigrateUpWithLockFreshBootstrapHealResetsAndRetries(t *testing.T) {
+	allowMockedMigration(t)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("create sql mock: %v", err)
@@ -676,6 +680,7 @@ func expectIgnoredSentinelProbes(mock sqlmock.Sqlmock, present bool) {
 }
 
 func TestMigrateUpWithLockFreshBootstrapHealProbeFailuresStayFatal(t *testing.T) {
+	allowMockedMigration(t)
 	tests := []struct {
 		name        string
 		endpoint    string
@@ -788,6 +793,7 @@ func TestMigrateUpWithLockFreshBootstrapHealProbeFailuresStayFatal(t *testing.T)
 }
 
 func TestMigrateUpWithLockFreshBootstrapHealCapabilityIsOneShot(t *testing.T) {
+	allowMockedMigration(t)
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("create sql mock: %v", err)

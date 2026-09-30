@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -639,7 +640,7 @@ func TestCheckTestPollution_NoTestIssues_NoServer(t *testing.T) {
 // "query failed" code path). Only runs when TestMain started a Dolt container.
 func TestCheckTestPollution_NoTestIssues_EmptyDB(t *testing.T) {
 	if doctorTestServerPort() == 0 {
-		t.Skip("Dolt test server not available")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available")
 	}
 
 	tmpDir := t.TempDir()

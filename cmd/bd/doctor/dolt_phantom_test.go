@@ -24,10 +24,10 @@ func openSharedDoltForPhantom(t *testing.T) *sql.DB {
 
 	port := doctorTestServerPort()
 	if port == 0 {
-		t.Skip("Dolt test server not available, skipping phantom test")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping phantom test")
 	}
 	if testutil.DoltContainerCrashed() {
-		t.Skipf("Dolt test server crashed: %v", testutil.DoltContainerCrashError())
+		testutil.SkipOrFailUnavailable(t, "Dolt test server crashed: %v", testutil.DoltContainerCrashError())
 	}
 
 	// Ensure a "beads" database exists on the shared server for phantom tests.

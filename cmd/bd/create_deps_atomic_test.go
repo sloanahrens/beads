@@ -1,3 +1,5 @@
+//go:build integration
+
 package main
 
 // Regression tests for create-time dependency atomicity.

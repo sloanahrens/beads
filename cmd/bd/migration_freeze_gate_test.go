@@ -1,3 +1,5 @@
+//go:build integration
+
 // Tests for the MIGRATION-FREEZE write gate (dc-6jaq): bd write commands must
 // refuse to run while a MIGRATION-FREEZE sentinel sits at the town root, the
 // same gate the gt CLI already applies to gt mail send/nudge/sling/assign.

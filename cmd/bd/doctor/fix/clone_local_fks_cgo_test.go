@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -26,7 +27,7 @@ import (
 func TestRelinkSeveredCloneLocalFKs_AfterHardReset(t *testing.T) {
 	port := fixTestServerPort()
 	if port == 0 {
-		t.Skip("Dolt test server not available, skipping")
+		testutil.SkipOrFailUnavailable(t, "Dolt test server not available, skipping")
 	}
 
 	tmpDir := t.TempDir()

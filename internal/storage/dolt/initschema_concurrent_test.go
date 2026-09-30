@@ -14,6 +14,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 // TestConcurrentInitSchema verifies that concurrent initSchemaOnDB calls on a
@@ -25,7 +26,7 @@ func TestConcurrentInitSchema(t *testing.T) {
 	t.Cleanup(releaseAllTestSlots)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -126,7 +127,7 @@ func TestInitSchemaBlocksOnMigrationLock(t *testing.T) {
 	t.Cleanup(releaseAllTestSlots)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -210,7 +211,7 @@ func TestInitSchemaCanceledLockWaitDoesNotBlockFutureInit(t *testing.T) {
 	t.Cleanup(releaseAllTestSlots)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -307,7 +308,7 @@ func TestMigrationLockReleaseIgnoresCanceledCallerContext(t *testing.T) {
 	t.Cleanup(releaseAllTestSlots)
 
 	if testServerPort == 0 {
-		t.Skip("no Dolt test server available")
+		testutil.SkipOrFailUnavailable(t, "no Dolt test server available")
 	}
 
 	setupCtx, setupCancel := context.WithTimeout(context.Background(), 30*time.Second)

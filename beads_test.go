@@ -50,12 +50,12 @@ func skipIfNoDolt(t *testing.T) {
 func skipIfNoDoltServer(t *testing.T) {
 	t.Helper()
 	if testServerPort == 0 {
-		t.Skip("Test Dolt server not available, skipping test")
+		testutil.SkipOrFailUnavailable(t, "Test Dolt server not available, skipping test")
 	}
 	addr := fmt.Sprintf("127.0.0.1:%d", testServerPort)
 	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 	if err != nil {
-		t.Skipf("Dolt server not running on %s, skipping test", addr)
+		testutil.SkipOrFailUnavailable(t, "Dolt server not running on %s, skipping test", addr)
 	}
 	_ = conn.Close()
 }

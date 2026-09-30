@@ -41,6 +41,7 @@ import (
 	"github.com/steveyegge/beads/internal/gittraceenv"
 	"github.com/steveyegge/beads/internal/lockfile"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
+	"github.com/steveyegge/beads/internal/testtier"
 )
 
 // ErrServerNotRunning is returned by Stop when the Dolt server is not running.
@@ -1258,6 +1259,10 @@ func buildDoltServerArgsWithConfig(configPath string, debug bool, profDir string
 // Start explicitly starts a dolt sql-server for the project.
 // Returns the State of the started server, or an error.
 func Start(beadsDir string) (*State, error) {
+	// be-b23: the unit test tier never starts a Dolt server.
+	if err := testtier.Refuse("dolt sql-server start"); err != nil {
+		return nil, err
+	}
 	cfg := DefaultConfig(beadsDir)
 	doltDir := ResolveDoltDir(beadsDir)
 

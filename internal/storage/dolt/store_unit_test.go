@@ -12,6 +12,7 @@ import (
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 // newTestDoltDB creates a temporary database on the test Dolt server.
@@ -20,7 +21,7 @@ import (
 func newTestDoltDB(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 	if testServerPort == 0 {
-		t.Skip("Test Dolt server not running, skipping test")
+		testutil.SkipOrFailUnavailable(t, "Test Dolt server not running, skipping test")
 	}
 	acquireTestSlot()
 	t.Cleanup(releaseTestSlot)

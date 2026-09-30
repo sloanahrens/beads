@@ -254,6 +254,7 @@ func TestMigrateUpWithLockSkipsLockOnAnUnselectedSession(t *testing.T) {
 // the full pass. Without this, a fast path that answered "converged"
 // unconditionally would still pass the test above.
 func TestMigrateUpWithLockTakesLockWhenBehind(t *testing.T) {
+	allowMockedMigration(t)
 	conn, mock, cleanup := newMockConn(t)
 	defer cleanup()
 
@@ -288,6 +289,7 @@ func TestMigrateUpWithLockTakesLockWhenBehind(t *testing.T) {
 // statement it issues is GET_LOCK, so the #5012 bootstrap sequence is
 // byte-identical to what it was before the probe existed.
 func TestMigrateUpWithLockKeepsLockWithBootstrapHeal(t *testing.T) {
+	allowMockedMigration(t)
 	conn, mock, cleanup := newMockConn(t)
 	defer cleanup()
 
