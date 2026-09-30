@@ -81,6 +81,13 @@ Examples:
 Output (default):
   JSON representation of the resolved formula with all steps.
 
+Output (machine mode, BD_MACHINE=1 or --machine, without --persist/--dry-run):
+  The cooked step tree bd would pour: extends, expansions, aspects, the
+  overlay from formula.overlay-dir and step conditions applied, vars
+  substituted (defaults plus --var; --mode=compile keeps placeholders).
+  Invalid formulas are error.kind invalid_args (exit 27) with file, key and
+  line; an unknown formula is not_found (exit 20). No database is opened.
+
 Output (--persist):
   Creates a proto bead in the database with:
   - ID matching the formula name (e.g., mol-feature)
