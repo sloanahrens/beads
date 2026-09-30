@@ -13,7 +13,8 @@ Sets `issue_prefix` without touching any id.
   unset, equal, or stale while the rows already match. Writes the config cell.
   An equal prefix is a no-op that still succeeds (`changed: false`).
 - Refused (`refused`, exit 21) when any row would need rewriting. Nothing is
-  written. `error.detail` = `{current_prefix, new_prefix, mismatched}`.
+  written. `error.detail` =
+  `{current_prefix, new_prefix, mismatched_count, mismatched}` (first five ids).
 - `--dry-run` reports the same answer without writing.
 - Data: `{old_prefix, new_prefix, changed, issues_count, dry_run}`.
 
@@ -46,7 +47,11 @@ already use; the contract lists guard refusals under that kind, not
 - close: `BatchCloseItem` gains `ExpectedStatus`/`ExpectedAssignee`, checked in
   the batch transaction before the item closes (`CheckExpectedFieldsInTx`, and
   the loaded row on the unit-of-work leg). A mismatched id is skipped, the rest
-  close, batch rule gives `partial` (22) or `guard_not_held` (13).
+  close. A guard that already fails on the resolved snapshot outranks close
+  policy. Batch rule: only guard failures gives `guard_not_held` (13) even
+  beside successes; mixed failure kinds beside a success give `partial` (22).
+  Guards do not waive close policy, so closing another actor's claim still
+  needs `--force`.
 - delete: `DeleteRequest` gains the same two guards, checked for every named
   id inside the delete transaction. Delete is all-or-nothing by its role
   contract, so any mismatch refuses the whole request, lists every mismatched
@@ -68,14 +73,21 @@ bd land-record <id> --reject --kind K [--gate-tail T | --gate-tail-file F] \
 
 - Landing writes metadata key `landing` =
   `{patch_id, landed_commit, gate_result, om_verdict, om_score, route,
-  recorded_at}` and removes the `rework` label.
+  recorded_at, recorded_by}` and removes the `rework` label.
 - Rejection writes metadata key `landing_rejection` =
-  `{kind, gate_tail, om_findings, conflicting_files, recorded_at}` and adds
+  `{kind, gate_tail, om_findings, conflicting_files, recorded_at,
+  recorded_by}` and adds
   the `rework` label.
 - One `Update` request: metadata and label edits land in one transaction.
 - `bd show --json` returns them as `metadata.landing` and
   `metadata.landing_rejection`. No schema migration.
 - Data: the updated issue.
+- Charter note: the orchestration boundary prefers metadata over commands.
+  The record lives in metadata, and the same write is expressible without
+  this verb as `bd update <id> --metadata '{"landing":{...}}'
+  --remove-label rework` (pinned by `TestProtocol_LandingRecordViaUpdate`).
+  The verb is its own commit so it can be dropped if the named contract is
+  not wanted in core.
 
 ## Gates
 

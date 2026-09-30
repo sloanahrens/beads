@@ -162,6 +162,16 @@ func TestProtocol_DepPruneOrphans(t *testing.T) {
 	// Remove the wisp row underneath the edge: dependencies.depends_on_wisp_id
 	// has no foreign key, so this leaves exactly one orphan.
 	w.storeExec(t, "DELETE FROM wisps WHERE id = '"+wisp+"'")
+	// A wisp-to-wisp edge lives in wisp_dependencies, whose foreign keys
+	// cascade; turn them off so the delete leaves the edge behind, the way
+	// rows orphaned while the constraints were missing look.
+	w1 := w.create("--title", "wisp source", "--type", "task", "--ephemeral")
+	w2 := w.create("--title", "wisp target gone", "--type", "task", "--ephemeral")
+	w.run("dep", "add", w1, w2)
+	w.storeExec(t, "SET FOREIGN_KEY_CHECKS = 0; DELETE FROM wisps WHERE id = '"+w2+"'")
+	if got := w.sqlScalar("SELECT COUNT(*) FROM wisp_dependencies WHERE issue_id = '" + w1 + "'"); got != "1" {
+		t.Fatalf("setup: %s wisp_dependencies rows for %s, want 1", got, w1)
+	}
 
 	countDeps := func() string { return w.sqlScalar("SELECT COUNT(*) FROM dependencies") }
 	if got := countDeps(); got != "2" {
@@ -182,8 +192,8 @@ func TestProtocol_DepPruneOrphans(t *testing.T) {
 	if err := json.Unmarshal(env.Data, &got); err != nil {
 		t.Fatalf("data: %v (%s)", err, env.Data)
 	}
-	if !got.DryRun || got.Dependencies != 1 || got.Total != 1 {
-		t.Fatalf("dry run counts = %+v, want 1 orphan", got)
+	if !got.DryRun || got.Dependencies != 1 || got.WispDependencies != 1 || got.Total != 2 {
+		t.Fatalf("dry run counts = %+v, want 1 + 1 orphans", got)
 	}
 	if n := countDeps(); n != "2" {
 		t.Fatalf("dry run deleted rows: %s left", n)
@@ -195,8 +205,11 @@ func TestProtocol_DepPruneOrphans(t *testing.T) {
 	}
 	got = counts{}
 	_ = json.Unmarshal(env.Data, &got)
-	if got.DryRun || got.Dependencies != 1 || got.Total != 1 {
+	if got.DryRun || got.Dependencies != 1 || got.WispDependencies != 1 || got.Total != 2 {
 		t.Fatalf("prune counts = %+v", got)
+	}
+	if n := w.sqlScalar("SELECT COUNT(*) FROM wisp_dependencies WHERE issue_id = '" + w1 + "'"); n != "0" {
+		t.Fatalf("after prune: %s wisp_dependencies rows for %s, want 0", n, w1)
 	}
 	if n := countDeps(); n != "1" {
 		t.Fatalf("after prune: %s rows, want the live edge only", n)
@@ -346,6 +359,27 @@ func TestProtocol_LandRecord(t *testing.T) {
 	}
 	if _, code, _ := w.runMachine("land-record", w.prefix+"-nope", "--reject", "--kind", "x"); code != 20 {
 		t.Fatalf("unknown id: exit %d, want 20", code)
+	}
+}
+
+// TestProtocol_LandingRecordViaUpdate pins the generic surface that can carry
+// the same record without land-record: one bd update merges a metadata key
+// and edits a label in one write.
+func TestProtocol_LandingRecordViaUpdate(t *testing.T) {
+	t.Parallel()
+	w := newWorkspace(t)
+	id := w.create("--title", "work bead", "--type", "task")
+	env, code, stderr := w.runMachine("update", id,
+		"--metadata", `{"landing_rejection":{"kind":"conflict","conflicting_files":["a.go"]}}`,
+		"--add-label", "rework")
+	if code != 0 {
+		t.Fatalf("update: exit %d error %+v\n%s", code, env.Error, stderr)
+	}
+	shown := w.showJSON(id)
+	meta, _ := shown["metadata"].(map[string]any)
+	rej, _ := meta["landing_rejection"].(map[string]any)
+	if rej["kind"] != "conflict" || !hasLabel(shown, "rework") {
+		t.Fatalf("metadata = %v labels = %v", meta, shown["labels"])
 	}
 }
 
