@@ -1,3 +1,5 @@
+//go:build integration
+
 // Tests for multi-ID `bd update` exit-code semantics (GH audit: multi-ID
 // update exits 0 after a mid-batch failure, so callers cannot detect that
 // some IDs were not updated).
