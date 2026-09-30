@@ -69,5 +69,5 @@ func newPreviewStoreFromConfig(ctx context.Context, beadsDir string) (storage.Do
 const embeddedRemovedErrMsg = `embedded Dolt was removed; bd runs only against a dolt sql-server.
 
 Initialize this workspace in server mode:
-  bd init --server
+  bd init
 Requires a running 'dolt sql-server'. See docs/architecture/dolt.md.`

@@ -65,6 +65,7 @@ func loadDoltBackendConfig(beadsDir string) (*configfile.Config, error) {
 // bd opens nothing rather than guessing at a server-mode equivalent.
 func errProxiedServerModeRemoved() error {
 	return fmt.Errorf("dolt_mode %q in metadata.json is no longer supported: proxied-server mode was removed; %s; "+
-		"convert the workspace to server mode with an older bd (bd migrate from-proxied-server-to-server) and retry",
+		"convert the workspace to server mode with a bd built from beads commit 92d15f7 or earlier "+
+		"(bd migrate from-proxied-server-to-server), then retry",
 		configfile.DoltModeProxiedServer, configfile.BackendNotOpenedGuarantee)
 }

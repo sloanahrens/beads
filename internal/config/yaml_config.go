@@ -182,13 +182,11 @@ var secretKeyEnvVarHints = map[string]string{ //nolint:gosec // Values are envir
 	// `export %s="..."` shell template, where "A or B" would silently
 	// assign to B alone. ANTHROPIC_API_KEY is the primary; MiniMax users
 	// can export MINIMAX_API_KEY instead (same resolution chain).
-	"ai.api_key":     "ANTHROPIC_API_KEY",
-	"github.token":   "GITHUB_TOKEN",
-	"linear.api_key": "LINEAR_API_KEY",
+	"ai.api_key": "ANTHROPIC_API_KEY",
 }
 
 // secretKeyEnvVarHint returns a suggested environment variable name for a
-// secret config key, e.g. "linear.api_key" -> "LINEAR_API_KEY".
+// secret config key, e.g. "ai.api_key" -> "ANTHROPIC_API_KEY".
 func secretKeyEnvVarHint(key string) string {
 	if envVar, ok := secretKeyEnvVarHints[key]; ok {
 		return envVar

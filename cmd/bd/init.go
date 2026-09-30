@@ -340,9 +340,9 @@ With --stealth: configures per-repository git settings for invisible beads usage
   Perfect for personal use without affecting repo collaborators.
   To set up a specific AI tool, run: bd setup <claude|cursor|aider|...> --stealth
 
-By default, beads uses an embedded Dolt engine (no external server needed).
-Pass --server to use an external dolt sql-server instead. In server mode,
-set connection details with --server-host, --server-port, and --server-user.
+beads runs against a dolt sql-server (server mode is the default; --server
+is accepted for compatibility). Set connection details with --server-host,
+--server-port, and --server-user.
 Password should be set via BEADS_DOLT_PASSWORD environment variable.
 
 Auto-export is optional. When enabled, bd exports issues to
@@ -540,11 +540,15 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
-		// Embedded Dolt was removed: with no server mode selected by a flag,
-		// env var, inherited metadata, or config.yaml, there is nothing to
-		// initialize. Refuse before any directory or file is written.
+		// Embedded Dolt was removed, so server mode is the only mode: a bare
+		// `bd init` with no flag, env var, inherited metadata, or config.yaml
+		// selecting it gets server mode by default.
 		if !initServerMode {
-			return fmt.Errorf("%s", embeddedRemovedErrMsg)
+			initServerMode = true
+			serverMode = true
+			if cmdCtx != nil {
+				cmdCtx.ServerMode = true
+			}
 		}
 
 		// Explicit connection flags outrank stale BEADS_DOLT_SERVER_* values
@@ -2093,7 +2097,7 @@ func init() {
 	}
 
 	// Dolt server connection flags
-	initCmd.Flags().Bool("server", false, "Use external dolt sql-server instead of embedded engine")
+	initCmd.Flags().Bool("server", false, "Use a dolt sql-server (the default; kept for compatibility)")
 	initCmd.Flags().String("server-host", "", "Dolt server host (default: 127.0.0.1)")
 	initCmd.Flags().Bool("server-tls", false, "Require TLS for the init-time Dolt server connection (overrides BEADS_DOLT_SERVER_TLS for this run; not persisted - set the env var or credentials file for later commands)")
 	initCmd.Flags().Int("server-port", 0, "Dolt server port (default: 3307)")

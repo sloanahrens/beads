@@ -197,9 +197,7 @@ func init() {
 }
 
 // contextInfoView projects a workspace snapshot onto what `bd context` prints
-// and marshals. BOTH routes reach it — the proxied one above and the direct
-// one in context_cmd.go — so there is one answer to "what does bd context
-// say", assembled once.
+// and marshals.
 //
 // The workspace identity half comes from domain.PublishedContext, the same
 // projection GET /v0/beads/context serves, so the two surfaces cannot name the

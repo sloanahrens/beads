@@ -56,9 +56,6 @@ SEE ALSO:
 			}
 		}()
 
-		if err := requireServerMode("cleanup"); err != nil {
-			return HandleError("%v", err)
-		}
 		force, _ := cmd.Flags().GetBool("force")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		cascade, _ := cmd.Flags().GetBool("cascade")
