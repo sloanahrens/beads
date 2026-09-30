@@ -1,3 +1,5 @@
+//go:build integration
+
 package main
 
 // End-to-end cover for `bd create --file` on the DIRECT route, which is where
