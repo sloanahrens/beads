@@ -154,8 +154,7 @@ title = "Manager approval"
 type = "human"
 
 [steps.gate]
-type = "human"
-approvers = ["manager"]
+type = "human"   # closed by a person; also gh:run, gh:pr, timer, bead, mail
 
 [[steps]]
 id = "deploy"
@@ -178,6 +177,45 @@ target = "*.deploy"  # Match all deploy steps
 id = "security-scan-{step.id}"
 title = "Security scan before {step.title}"
 ```
+
+## Strict Decoding
+
+bd decodes formulas strictly. A key bd does not know, a `[vars.<name>]`
+field it ignores, or a gate type nothing resolves is an error, not a silent
+drop: `bd cook`, `bd mol pour` and `bd mol wisp` fail with one line naming the
+file, the line and the key. List every problem in a file or directory with:
+
+```bash
+bd formula lint .beads/formulas
+bd formula lint mol-release.formula.toml --json
+```
+
+Valid gate types are `gh:run`, `gh:pr` (and their `gh:run:`/`gh:pr:` forms),
+`timer`, `bead`, `human` and `mail`; a `{{var}}` type is checked after
+substitution. A var cannot be both `required = true` and have a `default`.
+
+## Overlays
+
+A rig can adjust a formula's step text without editing the formula. Set one
+overlay directory in `.beads/config.yaml`:
+
+```yaml
+formula:
+  overlay-dir: /path/to/formula-overlays   # or BD_FORMULA_OVERLAY_DIR
+```
+
+bd then reads `<overlay-dir>/<formula>.toml` whenever it cooks, pours or wisps
+that formula:
+
+```toml
+[[step-overrides]]
+step_id = "quality-review"
+mode = "append"          # replace | append | skip
+description = "Rig-specific instructions."
+```
+
+`skip` removes the step; its dependents inherit its `needs`/`depends_on`. An
+override naming a step the formula lacks is a warning (a stale override).
 
 ## Formula Locations
 

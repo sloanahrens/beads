@@ -1,13 +1,11 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/formula"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
@@ -119,12 +117,12 @@ func runPour(cmd *cobra.Command, args []string) error {
 		if sg.Phase == "vapor" {
 			warnPourVaporFormula(in.protoArg, in.varFlags)
 		}
-	} else if errors.Is(err, formula.ErrVarValidation) {
-		// in.protoArg IS a formula; the --var values it was given fail
+	} else if isFormulaUserError(err) {
+		// in.protoArg IS a formula that is invalid, or the --var values it was given fail
 		// enum/pattern/required-empty constraints. Report that directly
 		// instead of falling through to the proto-ID lookup below, which
 		// would otherwise mask this as "not found as formula or proto ID".
-		return HandleError("%v", err)
+		return reportFormulaError(err)
 	}
 
 	if subgraph == nil {
@@ -314,6 +312,7 @@ func renderPourResult(result *InstantiateResult, totalAttached, attachCount int)
 func init() {
 	// Pour command flags
 	pourCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
+	pourCmd.Flags().BoolVar(&formulaStrictFlag, "strict", false, "Reject formula keys bd would drop instead of warning")
 	pourCmd.Flags().Bool("dry-run", false, "Preview what would be created")
 	pourCmd.Flags().String("assignee", "", "Assign the root issue to this agent/user")
 	pourCmd.Flags().StringSlice("attach", []string{}, "Proto to attach after spawning (repeatable)")

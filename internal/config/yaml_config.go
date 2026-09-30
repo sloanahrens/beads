@@ -63,6 +63,12 @@ var YamlOnlyKeys = map[string]bool{
 	// Create command settings
 	"create.require-description": true,
 
+	// Formula overlays: the one directory bd cook/pour/wisp read
+	// <formula>.toml overlays from (D6/D5). Read through viper before any
+	// store is open.
+	"formula.overlay-dir": true,
+	"formula.strict":      true,
+
 	// Prime memory-injection caps (read at session start, possibly before
 	// the database is reachable, so they must live in yaml)
 	"prime.max-memories":     true,

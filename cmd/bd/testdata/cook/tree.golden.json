@@ -1,0 +1,639 @@
+{
+  "aspect-audit": {
+    "formula": "aspect-audit",
+    "source": "aspect-audit.formula.toml",
+    "type": "aspect",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": []
+  },
+  "exp-draft": {
+    "formula": "exp-draft",
+    "source": "exp-draft.formula.toml",
+    "type": "expansion",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "main.draft",
+        "title": "Draft: exp-draft",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "exp-draft",
+        "source_location": "template[0]",
+        "children": []
+      },
+      {
+        "id": "main.refine",
+        "title": "Refine: exp-draft",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "main.draft"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "exp-draft",
+        "source_location": "template[1]",
+        "children": []
+      }
+    ]
+  },
+  "wf-aspected": {
+    "formula": "wf-aspected",
+    "source": "wf-aspected.formula.toml",
+    "type": "workflow",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "plan",
+        "title": "Plan",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-parent",
+        "source_location": "steps[0]",
+        "children": []
+      },
+      {
+        "id": "audit-implement",
+        "title": "Audit before implement",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-parent",
+        "source_location": "advice",
+        "children": []
+      },
+      {
+        "id": "implement",
+        "title": "Implement",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "plan",
+          "audit-implement"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-parent",
+        "source_location": "steps[1]",
+        "children": []
+      }
+    ]
+  },
+  "wf-basic": {
+    "formula": "wf-basic",
+    "source": "wf-basic.formula.toml",
+    "type": "workflow",
+    "description": "Ship {{component}} to staging",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [
+      {
+        "name": "ci_workflow",
+        "description": "",
+        "required": false,
+        "default": "ci.yml",
+        "enum": [],
+        "pattern": "",
+        "type": "",
+        "value": "ci.yml",
+        "provided": false
+      },
+      {
+        "name": "component",
+        "description": "Component name",
+        "required": true,
+        "default": null,
+        "enum": [],
+        "pattern": "",
+        "type": "",
+        "value": null,
+        "provided": false
+      },
+      {
+        "name": "env",
+        "description": "Target environment",
+        "required": false,
+        "default": "staging",
+        "enum": [
+          "staging",
+          "prod"
+        ],
+        "pattern": "",
+        "type": "",
+        "value": "staging",
+        "provided": false
+      }
+    ],
+    "unresolved_vars": [
+      "component"
+    ],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "design",
+        "title": "Design {{component}}",
+        "description": "Write the design for {{component}}.",
+        "notes": "",
+        "type": "task",
+        "priority": 1,
+        "assignee": "",
+        "labels": [
+          "design"
+        ],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-basic",
+        "source_location": "steps[0]",
+        "children": []
+      },
+      {
+        "id": "build",
+        "title": "Build {{component}}",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "builder",
+        "labels": [],
+        "needs": [
+          "design"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {
+          "owner": "ci",
+          "tier": 2
+        },
+        "source_formula": "wf-basic",
+        "source_location": "steps[1]",
+        "children": []
+      },
+      {
+        "id": "release",
+        "title": "Release to staging",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "build"
+        ],
+        "waits_for": "",
+        "gate": {
+          "type": "gh:run",
+          "await_id": "ci.yml",
+          "timeout": "1h"
+        },
+        "metadata": {},
+        "source_formula": "wf-basic",
+        "source_location": "steps[2]",
+        "children": []
+      }
+    ]
+  },
+  "wf-child": {
+    "formula": "wf-child",
+    "source": "wf-child.formula.toml",
+    "type": "workflow",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "plan",
+        "title": "Plan (child override)",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-child",
+        "source_location": "steps[0]",
+        "children": []
+      },
+      {
+        "id": "implement",
+        "title": "Implement",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "plan"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-parent",
+        "source_location": "steps[1]",
+        "children": []
+      },
+      {
+        "id": "verify",
+        "title": "Verify",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "implement"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-child",
+        "source_location": "steps[1]",
+        "children": []
+      }
+    ]
+  },
+  "wf-children": {
+    "formula": "wf-children",
+    "source": "wf-children.formula.toml",
+    "type": "workflow",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "prep",
+        "title": "Prep",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-children",
+        "source_location": "steps[0]",
+        "children": []
+      },
+      {
+        "id": "fanout",
+        "title": "Fan out",
+        "description": "",
+        "notes": "",
+        "type": "epic",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "prep"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-children",
+        "source_location": "steps[1]",
+        "children": [
+          {
+            "id": "left",
+            "title": "Left",
+            "description": "",
+            "notes": "",
+            "type": "task",
+            "priority": 2,
+            "assignee": "",
+            "labels": [],
+            "needs": [],
+            "waits_for": "",
+            "gate": null,
+            "metadata": {},
+            "source_formula": "wf-children",
+            "source_location": "steps[1].children[0]",
+            "children": []
+          },
+          {
+            "id": "right",
+            "title": "Right",
+            "description": "",
+            "notes": "",
+            "type": "bug",
+            "priority": 2,
+            "assignee": "",
+            "labels": [],
+            "needs": [],
+            "waits_for": "",
+            "gate": null,
+            "metadata": {},
+            "source_formula": "wf-children",
+            "source_location": "steps[1].children[1]",
+            "children": []
+          }
+        ]
+      },
+      {
+        "id": "join",
+        "title": "Join",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "fanout"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-children",
+        "source_location": "steps[2]",
+        "children": []
+      }
+    ]
+  },
+  "wf-conditional": {
+    "formula": "wf-conditional",
+    "source": "wf-conditional.formula.toml",
+    "type": "workflow",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [
+      {
+        "name": "docs",
+        "description": "",
+        "required": false,
+        "default": "false",
+        "enum": [],
+        "pattern": "",
+        "type": "",
+        "value": "false",
+        "provided": false
+      }
+    ],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "code",
+        "title": "Code",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-conditional",
+        "source_location": "steps[0]",
+        "children": []
+      }
+    ]
+  },
+  "wf-expanded": {
+    "formula": "wf-expanded",
+    "source": "wf-expanded.formula.toml",
+    "type": "workflow",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "spec",
+        "title": "Write spec",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-expanded",
+        "source_location": "steps[0]",
+        "children": []
+      },
+      {
+        "id": "code.draft",
+        "title": "Draft: Write code",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "spec"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "exp-draft",
+        "source_location": "template[0]",
+        "children": []
+      },
+      {
+        "id": "code.refine",
+        "title": "Refine: Write code",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "code.draft"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "exp-draft",
+        "source_location": "template[1]",
+        "children": []
+      }
+    ]
+  },
+  "wf-overlaid": {
+    "formula": "wf-overlaid",
+    "source": "wf-overlaid.formula.toml",
+    "type": "workflow",
+    "description": "",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": {
+      "path": "wf-overlaid.toml"
+    },
+    "warnings": [
+      "overlay references unknown step \"gone\" (stale override)"
+    ],
+    "steps": [
+      {
+        "id": "prepare",
+        "title": "Prepare",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-overlaid",
+        "source_location": "steps[0]",
+        "children": []
+      },
+      {
+        "id": "merge",
+        "title": "Merge",
+        "description": "Merge it.\nRig note: run the gate first.",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "prepare"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-overlaid",
+        "source_location": "steps[2]",
+        "children": []
+      }
+    ]
+  },
+  "wf-parent": {
+    "formula": "wf-parent",
+    "source": "wf-parent.formula.toml",
+    "type": "workflow",
+    "description": "Base workflow",
+    "phase": "",
+    "mode": "runtime",
+    "vars": [],
+    "unresolved_vars": [],
+    "overlay": null,
+    "warnings": [],
+    "steps": [
+      {
+        "id": "plan",
+        "title": "Plan",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-parent",
+        "source_location": "steps[0]",
+        "children": []
+      },
+      {
+        "id": "implement",
+        "title": "Implement",
+        "description": "",
+        "notes": "",
+        "type": "task",
+        "priority": 2,
+        "assignee": "",
+        "labels": [],
+        "needs": [
+          "plan"
+        ],
+        "waits_for": "",
+        "gate": null,
+        "metadata": {},
+        "source_formula": "wf-parent",
+        "source_location": "steps[1]",
+        "children": []
+      }
+    ]
+  }
+}

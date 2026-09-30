@@ -1,0 +1,7 @@
+# extends + compose.aspects: the aspect's advice inserts a step.
+formula = "wf-aspected"
+version = 1
+extends = ["wf-parent"]
+
+[compose]
+aspects = ["aspect-audit"]

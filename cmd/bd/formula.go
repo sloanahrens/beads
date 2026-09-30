@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,7 @@ Search paths (in order):
 Commands:
   list    List available formulas from all search paths
   show    Show formula details, steps, and composition rules
+  lint    Report keys, gate types and vars a formula would silently drop
   schema  Show the formula schema index (alias: primitives)
 
 Discovering primitives:
@@ -380,6 +382,7 @@ func scanFormulaDir(dir string) ([]*formula.Formula, error) {
 	}
 
 	parser := formula.NewParser(dir)
+	parser.Strict = formulaStrictMode()
 	var formulas []*formula.Formula
 
 	for _, entry := range entries {
@@ -395,6 +398,11 @@ func scanFormulaDir(dir string) ([]*formula.Formula, error) {
 		path := filepath.Join(dir, name)
 		f, err := parser.ParseFile(path)
 		if err != nil {
+			if errors.Is(err, formula.ErrInvalidFormula) {
+				// Still skipped, but never silently: strict decode is new,
+				// and a formula vanishing from the list is how that shows.
+				fmt.Fprintf(os.Stderr, "Warning: not listed: %v (bd formula lint %s shows every problem)\n", err, dir)
+			}
 			continue // Skip invalid formulas
 		}
 		formulas = append(formulas, f)

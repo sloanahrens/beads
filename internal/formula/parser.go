@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/git"
 )
@@ -45,7 +45,21 @@ type Parser struct {
 
 	// resolvingChain tracks the order of formulas being resolved (for error messages).
 	resolvingChain []string
+
+	// Strict makes a key bd would drop, or an unresolvable gate type, a cook
+	// error. When false (the staged default, see StrictDecode) each such
+	// problem is one warning line on Warn and the formula still cooks.
+	Strict bool
+
+	// Warn receives the non-strict warnings (default os.Stderr).
+	Warn io.Writer
 }
+
+// StrictDecode is the default for Parser.Strict. It is false while the
+// live town's formulas still carry dropped keys (gastown gt-fd2cu.3); the
+// flip to strict everywhere is this one line. bd cook under machine mode,
+// bd formula lint, --strict and config formula.strict=true are strict now.
+var StrictDecode = false
 
 // NewParser creates a new formula parser.
 // searchPaths are directories to search for formulas when resolving extends.
@@ -58,6 +72,8 @@ func NewParser(searchPaths ...string) *Parser {
 	}
 	return &Parser{
 		searchPaths:    paths,
+		Strict:         StrictDecode,
+		Warn:           os.Stderr,
 		cache:          make(map[string]*Formula),
 		resolvingSet:   make(map[string]bool),
 		resolvingChain: nil,
@@ -143,7 +159,20 @@ func (p *Parser) ParseFile(path string) (*Formula, error) {
 		formula, err = p.Parse(data)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		var fe *FormulaError
+		if errors.As(err, &fe) {
+			fe.File = absPath
+			if p.Strict {
+				return nil, fe
+			}
+			for _, pr := range fe.Problems {
+				fmt.Fprintf(p.Warn, "Warning: %s:%d: %s: %s; accepted for now, strict decode will reject it (bd formula lint)\n",
+					absPath, pr.Line, pr.Key, pr.Message)
+			}
+			formula = fe.decoded
+		} else {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
 	}
 
 	formula.Source = absPath
@@ -177,22 +206,18 @@ func (p *Parser) Parse(data []byte) (*Formula, error) {
 	return &formula, nil
 }
 
-// ParseTOML parses a formula from TOML bytes.
+// ParseTOML parses a formula from TOML bytes. Decoding is strict: a key bd
+// does not know, or a gate type nothing resolves, is a *FormulaError
+// (errors.Is ErrInvalidFormula) listing each problem with its line.
 func (p *Parser) ParseTOML(data []byte) (*Formula, error) {
-	var formula Formula
-	if err := toml.Unmarshal(data, &formula); err != nil {
-		return nil, fmt.Errorf("toml: %w", err)
+	formula, problems, err := DecodeTOMLStrict(data)
+	if err != nil {
+		return nil, err
 	}
-
-	// Set defaults
-	if formula.Version == 0 {
-		formula.Version = 1
+	if len(problems) > 0 {
+		return nil, &FormulaError{Problems: problems, decoded: formula}
 	}
-	if formula.Type == "" {
-		formula.Type = TypeWorkflow
-	}
-
-	return &formula, nil
+	return formula, nil
 }
 
 // Resolve fully resolves a formula, processing extends and expansions.
@@ -213,7 +238,7 @@ func (p *Parser) Resolve(formula *Formula) (*Formula, error) {
 
 	// If no extends, just validate and return
 	if len(formula.Extends) == 0 {
-		if err := formula.Validate(); err != nil {
+		if err := validationError(formula); err != nil {
 			return nil, err
 		}
 		return formula, nil
@@ -274,7 +299,7 @@ func (p *Parser) Resolve(formula *Formula) (*Formula, error) {
 		merged.Description = formula.Description
 	}
 
-	if err := merged.Validate(); err != nil {
+	if err := validationError(merged); err != nil {
 		return nil, err
 	}
 
@@ -300,7 +325,29 @@ func (p *Parser) loadFormula(name string) (*Formula, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("formula %q not found in search paths", name)
+	return nil, fmt.Errorf("%w: %q not found in search paths", ErrFormulaNotFound, name)
+}
+
+// validationError runs Validate and reports its failures as a one-line
+// *FormulaError naming the formula's file.
+func validationError(f *Formula) error {
+	msgs := f.validationProblems()
+	if len(msgs) == 0 {
+		return nil
+	}
+	fe := &FormulaError{File: f.Source}
+	if fe.File == "" {
+		fe.File = f.Formula
+	}
+	for _, m := range msgs {
+		key := ""
+		if i := strings.Index(m, ": "); i > 0 && !strings.Contains(m[:i], " ") {
+			key = m[:i]
+			m = m[i+2:]
+		}
+		fe.Problems = append(fe.Problems, Problem{Kind: ProblemValidation, Key: key, Message: m})
+	}
+	return fe
 }
 
 // LoadByName loads a formula by name from search paths.

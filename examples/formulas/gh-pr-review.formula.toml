@@ -130,7 +130,7 @@ PAGER SAFETY: Use GH_PAGER=cat for ALL gh commands in this workflow.
    - Existing reviews
    - Head SHA (for stale-head checks)
    - maintainerCanModify (boolean)"""
-acceptance = "PR metadata fetched, head SHA recorded, author association determined, CI/merge status captured, linked issues identified"
+# Acceptance (not a formula key; bd never read it): PR metadata fetched, head SHA recorded, author association determined, CI/merge status captured, linked issues identified
 
 [[steps]]
 id = "classify"
@@ -202,7 +202,7 @@ Record:
 - Rationale (one paragraph)
 - If fix-merge: what specifically needs fixing
 - If needs-review: what concerns need deeper investigation"""
-acceptance = "PR classified into triage group with confidence level, preliminary outcome, and rationale"
+# Acceptance (not a formula key; bd never read it): PR classified into triage group with confidence level, preliminary outcome, and rationale
 
 [[steps]]
 id = "gate-check"
@@ -241,7 +241,7 @@ description = """Check conditions that should stop the workflow before investing
      CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE).
 
 If all checks pass, proceed to review."""
-acceptance = "All abort conditions checked, head SHA verified current, author association determined"
+# Acceptance (not a formula key; bd never read it): All abort conditions checked, head SHA verified current, author association determined
 
 [[steps]]
 id = "review"
@@ -463,7 +463,7 @@ Deep review requiring human judgment.
    ```
 
 → Proceed to human gate."""
-acceptance = "Review completed for the appropriate path: easy-win approved, fix-merge fixes prepared, or needs-review report generated"
+# Acceptance (not a formula key; bd never read it): Review completed for the appropriate path: easy-win approved, fix-merge fixes prepared, or needs-review report generated
 
 [[steps]]
 id = "human-gate"
@@ -498,7 +498,7 @@ The maintainer will:
 - **Choose a different outcome**: Provide the outcome and any notes
 - **Request more investigation**: Return to review step with guidance
 - **Abort**: Clean up and stop"""
-acceptance = "Maintainer provided a decision (outcome + any notes)"
+# Acceptance (not a formula key; bd never read it): Maintainer provided a decision (outcome + any notes)
 
 [[steps]]
 id = "act"
@@ -608,7 +608,7 @@ For ALL outcomes:
 - Preserve contributor attribution where applicable
 - Thank the contributor
 - Reference linked issues where relevant"""
-acceptance = "Chosen outcome executed: review posted, comments made, fixes pushed (if fix-merge), attribution preserved"
+# Acceptance (not a formula key; bd never read it): Chosen outcome executed: review posted, comments made, fixes pushed (if fix-merge), attribution preserved
 
 [[steps]]
 id = "cleanup"
@@ -646,4 +646,4 @@ WORKING DIRECTORY: Return to the main repo root for this step.
    should still be called to avoid leaking worktrees.
 
 5. Burn the wisp (the ephemeral tracking bead for this workflow run)."""
-acceptance = "Worktree removed (if created), temp branches deleted, wisp burned, no leaked artifacts"
+# Acceptance (not a formula key; bd never read it): Worktree removed (if created), temp branches deleted, wisp burned, no leaked artifacts

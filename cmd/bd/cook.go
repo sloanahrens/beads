@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/beads"
+	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/formula"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
@@ -75,6 +81,13 @@ Examples:
 Output (default):
   JSON representation of the resolved formula with all steps.
 
+Output (machine mode, BD_MACHINE=1 or --machine, without --persist/--dry-run):
+  The cooked step tree bd would pour: extends, expansions, aspects, the
+  overlay from formula.overlay-dir and step conditions applied, vars
+  substituted (defaults plus --var; --mode=compile keeps placeholders).
+  Invalid formulas are error.kind invalid_args (exit 27) with file, key and
+  line; an unknown formula is not_found (exit 20). No database is opened.
+
 Output (--persist):
   Creates a proto bead in the database with:
   - ID matching the formula name (e.g., mol-feature)
@@ -105,7 +118,9 @@ type cookFlags struct {
 	prefix      string
 	inputVars   map[string]string
 	runtimeMode bool
-	formulaPath string
+	// explicitMode is --mode as given ("" when unset).
+	explicitMode string
+	formulaPath  string
 }
 
 // parseCookFlags parses and validates cook command flags
@@ -137,14 +152,15 @@ func parseCookFlags(cmd *cobra.Command, args []string) (*cookFlags, error) {
 	runtimeMode := mode == "runtime" || len(inputVars) > 0
 
 	return &cookFlags{
-		dryRun:      dryRun,
-		persist:     persist,
-		force:       force,
-		searchPaths: searchPaths,
-		prefix:      prefix,
-		inputVars:   inputVars,
-		runtimeMode: runtimeMode,
-		formulaPath: args[0],
+		dryRun:       dryRun,
+		persist:      persist,
+		force:        force,
+		searchPaths:  searchPaths,
+		prefix:       prefix,
+		inputVars:    inputVars,
+		runtimeMode:  runtimeMode,
+		explicitMode: mode,
+		formulaPath:  args[0],
 	}, nil
 }
 
@@ -153,15 +169,11 @@ func parseCookFlags(cmd *cobra.Command, args []string) (*cookFlags, error) {
 // and falls back to parsing as a file path if that fails.
 func loadAndResolveFormula(formulaPath string, searchPaths []string) (*formula.Formula, error) {
 	parser := formula.NewParser(searchPaths...)
+	parser.Strict = formulaStrictMode()
 
-	// Try to load by name first (from .beads/formulas/ registry)
-	f, err := parser.LoadByName(formulaPath)
+	f, err := loadFormulaByNameOrPath(parser, formulaPath)
 	if err != nil {
-		// Fall back to parsing as a file path
-		f, err = parser.ParseFile(formulaPath)
-		if err != nil {
-			return nil, fmt.Errorf("parsing formula: %w", err)
-		}
+		return nil, err
 	}
 
 	// Resolve inheritance
@@ -215,6 +227,30 @@ func loadAndResolveFormula(formulaPath string, searchPaths []string) (*formula.F
 	}
 
 	return resolved, nil
+}
+
+// loadFormulaByNameOrPath loads a formula by registry name, falling back to
+// a file path only when no formula of that name exists. A named formula that
+// fails to parse reports its own error instead of a misleading "no such file".
+func loadFormulaByNameOrPath(parser *formula.Parser, nameOrPath string) (*formula.Formula, error) {
+	f, err := parser.LoadByName(nameOrPath)
+	if err == nil {
+		return f, nil
+	}
+	if !errors.Is(err, formula.ErrFormulaNotFound) {
+		return nil, err
+	}
+	f, perr := parser.ParseFile(nameOrPath)
+	if perr != nil {
+		if errors.Is(perr, fs.ErrNotExist) {
+			return nil, err // the name lookup's not-found is the useful error
+		}
+		if isFormulaUserError(perr) {
+			return nil, perr
+		}
+		return nil, fmt.Errorf("parsing formula: %w", perr)
+	}
+	return f, nil
 }
 
 // outputCookDryRun displays a dry-run preview of what would be cooked
@@ -370,9 +406,13 @@ func runCook(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if machineModeActive() && !flags.persist && !flags.dryRun {
+		return runCookTree(flags)
+	}
+
 	resolved, err := loadAndResolveFormula(flags.formulaPath, flags.searchPaths)
 	if err != nil {
-		return HandleError("%v", err)
+		return reportFormulaError(err)
 	}
 	if flags.runtimeMode {
 		if err := formula.ValidateVars(resolved, flags.inputVars); err != nil {
@@ -699,6 +739,7 @@ func resolveAndCookFormula(formulaName string, searchPaths []string) (*TemplateS
 func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, conditionVars map[string]string) (*TemplateSubgraph, error) {
 	// Create parser with search paths
 	parser := formula.NewParser(searchPaths...)
+	parser.Strict = formulaStrictMode()
 
 	// Load formula by name
 	f, err := parser.LoadByName(formulaName)
@@ -706,10 +747,36 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 		return nil, fmt.Errorf("loading formula %q: %w", formulaName, err)
 	}
 
+	resolved, cooked, err := cookPipeline(parser, f, conditionVars, formulaOverlayDir())
+	if err != nil {
+		return nil, err
+	}
+	// A stale override is not fatal, but it must not be invisible either.
+	for _, w := range cooked.warnings {
+		fmt.Fprintf(os.Stderr, "Warning: formula %s: %s (%s)\n", resolved.Formula, w, cooked.overlay.Path)
+	}
+
+	// Cook to in-memory subgraph, including variable definitions for default handling
+	return cookFormulaToSubgraphWithVars(resolved, resolved.Formula, resolved.Vars)
+}
+
+// cookPipeline is the one transformation sequence every cook of a loaded
+// formula goes through: pour, wisp, mol bond/seed and the machine-mode
+// bd cook tree. Keeping it single is what makes the tree gastown renders
+// and the beads bd pours the same steps.
+//
+// Order: extends, --var validation, control flow, advice, inline expansion,
+// compose expand/map, aspects, the overlay from overlayDir (if any), step
+// conditions, standalone expansion templates. conditionVars nil skips var
+// validation and condition filtering.
+func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[string]string, overlayDir string) (*formula.Formula, cookedExtras, error) {
+	var none cookedExtras
+	formulaName := f.Formula
+
 	// Resolve inheritance
 	resolved, err := parser.Resolve(f)
 	if err != nil {
-		return nil, fmt.Errorf("resolving formula %q: %w", formulaName, err)
+		return nil, none, fmt.Errorf("resolving formula %q: %w", formulaName, err)
 	}
 
 	// Validate any caller-provided variable values against enum/pattern/
@@ -717,20 +784,18 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 	// a var missing entirely is left to the caller's own UX (e.g. bd mol
 	// pour/wisp's missing-var hint), but a var explicitly provided with a
 	// value that violates its constraints must error here so it reaches
-	// every caller of this shared path (pour, wisp, mol bond, mol seed) —
-	// runCook does not go through this helper; it validates separately via
-	// its own formula.ValidateVars call under --mode=runtime. Previously
-	// only that `bd cook --mode=runtime` path enforced these (mybd-u2r6).
+	// every caller of this shared path (pour, wisp, mol bond, mol seed,
+	// machine-mode cook) (mybd-u2r6).
 	if conditionVars != nil {
 		if err := formula.ValidateProvidedVars(resolved, conditionVars); err != nil {
-			return nil, fmt.Errorf("formula %q: %w", formulaName, err)
+			return nil, none, fmt.Errorf("formula %q: %w", formulaName, err)
 		}
 	}
 
 	// Apply control flow operators - loops, branches, gates
 	controlFlowSteps, err := formula.ApplyControlFlow(resolved.Steps, resolved.Compose)
 	if err != nil {
-		return nil, fmt.Errorf("applying control flow to %q: %w", formulaName, err)
+		return nil, none, fmt.Errorf("applying control flow to %q: %w", formulaName, err)
 	}
 	resolved.Steps = controlFlowSteps
 
@@ -742,7 +807,7 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 	// Apply inline step expansions
 	inlineExpandedSteps, err := formula.ApplyInlineExpansions(resolved.Steps, parser)
 	if err != nil {
-		return nil, fmt.Errorf("applying inline expansions to %q: %w", formulaName, err)
+		return nil, none, fmt.Errorf("applying inline expansions to %q: %w", formulaName, err)
 	}
 	resolved.Steps = inlineExpandedSteps
 
@@ -750,7 +815,7 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 	if resolved.Compose != nil && (len(resolved.Compose.Expand) > 0 || len(resolved.Compose.Map) > 0) {
 		expandedSteps, err := formula.ApplyExpansions(resolved.Steps, resolved.Compose, parser)
 		if err != nil {
-			return nil, fmt.Errorf("applying expansions to %q: %w", formulaName, err)
+			return nil, none, fmt.Errorf("applying expansions to %q: %w", formulaName, err)
 		}
 		resolved.Steps = expandedSteps
 	}
@@ -760,16 +825,24 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 		for _, aspectName := range resolved.Compose.Aspects {
 			aspectFormula, err := parser.LoadByName(aspectName)
 			if err != nil {
-				return nil, fmt.Errorf("loading aspect %q: %w", aspectName, err)
+				return nil, none, fmt.Errorf("loading aspect %q: %w", aspectName, err)
 			}
 			if aspectFormula.Type != formula.TypeAspect {
-				return nil, fmt.Errorf("%q is not an aspect formula (type=%s)", aspectName, aspectFormula.Type)
+				return nil, none, fmt.Errorf("%q is not an aspect formula (type=%s)", aspectName, aspectFormula.Type)
 			}
 			if len(aspectFormula.Advice) > 0 {
 				resolved.Steps = formula.ApplyAdvice(resolved.Steps, aspectFormula.Advice)
 			}
 		}
 	}
+
+	// Apply the overlay from the one declared overlay directory (D5), after
+	// every expansion so it targets the final step ids.
+	overlay, err := formula.LoadOverlay(overlayDir, resolved.Formula)
+	if err != nil {
+		return nil, none, err
+	}
+	extras := cookedExtras{overlay: overlay, warnings: formula.ApplyOverlay(resolved, overlay)}
 
 	// Apply step condition filtering if vars provided (bd-7zka.1)
 	// This filters out steps whose conditions evaluate to false
@@ -787,7 +860,7 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 
 		filteredSteps, err := formula.FilterStepsByCondition(resolved.Steps, mergedVars)
 		if err != nil {
-			return nil, fmt.Errorf("filtering steps by condition: %w", err)
+			return nil, none, fmt.Errorf("filtering steps by condition: %w", err)
 		}
 		resolved.Steps = filteredSteps
 	}
@@ -809,12 +882,49 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 			}
 		}
 		if err := formula.MaterializeExpansion(resolved, "main", expansionVars); err != nil {
-			return nil, fmt.Errorf("standalone expansion %q: %w", formulaName, err)
+			return nil, none, fmt.Errorf("standalone expansion %q: %w", formulaName, err)
 		}
 	}
 
-	// Cook to in-memory subgraph, including variable definitions for default handling
-	return cookFormulaToSubgraphWithVars(resolved, resolved.Formula, resolved.Vars)
+	return resolved, extras, nil
+}
+
+// cookedExtras is what cookPipeline learned besides the formula: the overlay
+// it applied (nil when none) and that overlay's stale-override warnings.
+type cookedExtras struct {
+	overlay  *formula.Overlay
+	warnings []string
+}
+
+// formulaStrictFlag is --strict on cook, pour and wisp.
+var formulaStrictFlag bool
+
+// formulaStrictMode reports whether the legacy cook/pour/wisp/mol paths
+// reject dropped keys: --strict or config formula.strict=true. Otherwise
+// each dropped key is one warning line (staged until gastown gt-fd2cu.3).
+func formulaStrictMode() bool {
+	return formula.StrictDecode || formulaStrictFlag || config.GetBool("formula.strict")
+}
+
+// formulaOverlayDir is the one directory overlays are read from: config
+// formula.overlay-dir (config.yaml, or BD_FORMULA_OVERLAY_DIR). Empty means
+// no overlays. A relative path is resolved against the beads directory.
+func formulaOverlayDir() string {
+	dir := strings.TrimSpace(config.GetString("formula.overlay-dir"))
+	if dir == "" {
+		return ""
+	}
+	if strings.HasPrefix(dir, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = filepath.Join(home, dir[2:])
+		}
+	}
+	if !filepath.IsAbs(dir) {
+		if beadsDir := beads.FindBeadsDir(); beadsDir != "" {
+			dir = filepath.Join(beadsDir, dir)
+		}
+	}
+	return dir
 }
 
 // cookFormulaToSubgraphWithVars creates an in-memory subgraph with variable info attached
@@ -1142,6 +1252,7 @@ func init() {
 	cookCmd.Flags().String("prefix", "", "Prefix to prepend to proto ID (e.g., 'gt-' creates 'gt-mol-feature')")
 	cookCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value), enables runtime mode")
 	cookCmd.Flags().String("mode", "", "Cooking mode: compile (keep placeholders) or runtime (substitute vars)")
+	cookCmd.Flags().BoolVar(&formulaStrictFlag, "strict", false, "Reject formula keys bd would drop (always on under machine mode)")
 
 	rootCmd.AddCommand(cookCmd)
 }

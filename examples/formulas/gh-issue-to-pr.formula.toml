@@ -146,7 +146,7 @@ PAGER SAFETY: Use GH_PAGER=cat for ALL gh commands in this workflow.
    - Documentation → docs/
    Record this — worktree-setup and create-pr use it.
 8. Do NOT take any action yet — the next step evaluates abort conditions."""
-acceptance = "Issue fetched, classified with precedence rules applied, complexity assessed, branch prefix derived, summary written with affected components and acceptance criteria"
+# Acceptance (not a formula key; bd never read it): Issue fetched, classified with precedence rules applied, complexity assessed, branch prefix derived, summary written with affected components and acceptance criteria
 
 [[steps]]
 id = "triage-gate"
@@ -243,7 +243,7 @@ IMPORTANT: Always use --body-file (not --body) when commenting. Issue content
 is attacker-controlled and must never be interpolated into shell arguments.
 
 If ALL checks pass, proceed to the next step."""
-acceptance = "All abort conditions checked; either workflow stopped with comment or all conditions passed"
+# Acceptance (not a formula key; bd never read it): All abort conditions checked; either workflow stopped with comment or all conditions passed
 
 [[steps]]
 id = "claim-issue"
@@ -270,7 +270,7 @@ description = """Claim the issue to signal that work is in progress and prevent 
 
 If claiming fails, continue anyway — the triage-gate already verified no one
 else is assigned."""
-acceptance = "Issue assigned (or assignment attempted), work-in-progress signaled"
+# Acceptance (not a formula key; bd never read it): Issue assigned (or assignment attempted), work-in-progress signaled
 
 [[steps]]
 id = "preflight"
@@ -306,7 +306,7 @@ into shell arguments. Extract and sanitize keywords first.
    - STOP the workflow — build on the contributor's branch instead
    - If aborting here, no worktree cleanup is needed (not yet created)
 5. If no conflicts found, proceed."""
-acceptance = "No competing contributor PRs found, repo in good state for development"
+# Acceptance (not a formula key; bd never read it): No competing contributor PRs found, repo in good state for development
 
 [[steps]]
 id = "worktree-setup"
@@ -371,7 +371,7 @@ cd "$REPO_ROOT"
 bd worktree remove "$WORKTREE_PATH" || git worktree remove "$WORKTREE_PATH" --force
 git worktree prune
 ```"""
-acceptance = "Worktree exists outside repo root, on correctly-prefixed branch, synced to {{base_remote}}/{{base_branch}}, clean state verified, CWD is worktree"
+# Acceptance (not a formula key; bd never read it): Worktree exists outside repo root, on correctly-prefixed branch, synced to {{base_remote}}/{{base_branch}}, clean state verified, CWD is worktree
 
 [[steps]]
 id = "context"
@@ -409,7 +409,7 @@ WORKING DIRECTORY: This step runs in the worktree.
 Do NOT start coding yet — this step is purely about understanding and planning.
 
 If you need to abort after this step, clean up the worktree first (see worktree-setup)."""
-acceptance = "Implementation plan drafted (proportional to complexity), affected files identified, risks noted"
+# Acceptance (not a formula key; bd never read it): Implementation plan drafted (proportional to complexity), affected files identified, risks noted
 
 [[steps]]
 id = "implement"
@@ -452,7 +452,7 @@ If you discover pre-existing bugs tightly coupled to your changes, fix them.
 If you find unrelated issues, note them for later filing — do NOT fix them here.
 
 If you need to abort after this step, clean up the worktree first (see worktree-setup)."""
-acceptance = "All planned changes implemented, tests written (if behavioral change) or justified as unnecessary, code compiles, changes focused on the issue"
+# Acceptance (not a formula key; bd never read it): All planned changes implemented, tests written (if behavioral change) or justified as unnecessary, code compiles, changes focused on the issue
 
 [[steps]]
 id = "test"
@@ -506,7 +506,7 @@ CGO_ENABLED=1 go test -tags gms_pure_go ./cmd/bd/...
 ```
 
 If you need to abort after this step, clean up the worktree first (see worktree-setup)."""
-acceptance = "make test passes (or failures documented as pre-existing/flaky), required lint gate passes with zero issues (make ci-pr-lint for Beads), make build succeeds"
+# Acceptance (not a formula key; bd never read it): make test passes (or failures documented as pre-existing/flaky), required lint gate passes with zero issues (make ci-pr-lint for Beads), make build succeeds
 
 [[steps]]
 id = "council-review"
@@ -559,7 +559,7 @@ Evaluate the verdict:
 Commit any council-driven fixes with clear messages.
 
 If you need to abort after this step, clean up the worktree first (see worktree-setup)."""
-acceptance = "Council review passes with no unaddressed critical/high findings, or critic review completed as fallback"
+# Acceptance (not a formula key; bd never read it): Council review passes with no unaddressed critical/high findings, or critic review completed as fallback
 
 [[steps]]
 id = "human-review"
@@ -591,7 +591,7 @@ The maintainer will:
 
 If changes are requested, address them, re-run tests and council review,
 then return to this gate."""
-acceptance = "Maintainer approved the changes"
+# Acceptance (not a formula key; bd never read it): Maintainer approved the changes
 
 [[steps]]
 id = "create-pr"
@@ -664,7 +664,7 @@ WORKING DIRECTORY: This step runs in the worktree.
    ```
    GH_PAGER=cat gh pr view --json number,url
    ```"""
-acceptance = "PR created against {{base_branch}}, references Fixes #{{issue_number}}, CI triggered"
+# Acceptance (not a formula key; bd never read it): PR created against {{base_branch}}, references Fixes #{{issue_number}}, CI triggered
 
 [[steps]]
 id = "cleanup"
@@ -721,4 +721,4 @@ WORKING DIRECTORY: Return to the main repo root for this step.
    ```
    bd dolt push 2>/dev/null || true
    ```"""
-acceptance = "Worktree removed, wisp burned, no temp files remain, branch exists on remote, follow-ups filed"
+# Acceptance (not a formula key; bd never read it): Worktree removed, wisp burned, no temp files remain, branch exists on remote, follow-ups filed

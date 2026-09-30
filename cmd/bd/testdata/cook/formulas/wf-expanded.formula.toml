@@ -1,0 +1,17 @@
+# compose.expand replaces a step with an expansion template.
+formula = "wf-expanded"
+version = 1
+
+[[steps]]
+id = "spec"
+title = "Write spec"
+
+[[steps]]
+id = "code"
+title = "Write code"
+needs = ["spec"]
+
+[compose]
+[[compose.expand]]
+target = "code"
+with = "exp-draft"
