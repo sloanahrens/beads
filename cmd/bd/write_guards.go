@@ -39,11 +39,20 @@ func writeGuardsFromFlags(cmd *cobra.Command) (writeGuards, error) {
 	}
 	if cmd.Flags().Changed("if-status") {
 		v, _ := cmd.Flags().GetString("if-status")
-		var customStatuses []string
-		if store != nil {
-			if cs, err := store.GetCustomStatuses(rootCtx); err == nil {
-				customStatuses = cs
+		// Custom statuses live in the store, so open it before validating: a
+		// valid custom --if-status must not be refused as a typo.
+		if store == nil {
+			if err := ensureStoreActive(); err != nil {
+				return writeGuards{}, handleClassifiedRespectJSON(err)
 			}
+		}
+		var customStatuses []string
+		if !types.Status(v).IsValidWithCustom(nil) {
+			cs, err := store.GetCustomStatuses(rootCtx)
+			if err != nil {
+				return writeGuards{}, handleClassifiedRespectJSON(fmt.Errorf("reading custom statuses for --if-status: %w", err))
+			}
+			customStatuses = cs
 		}
 		if !types.Status(v).IsValidWithCustom(customStatuses) {
 			return writeGuards{}, failKind(kindInvalidArgs, "invalid --if-status %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or configure custom statuses via 'bd config set status.custom')", v)

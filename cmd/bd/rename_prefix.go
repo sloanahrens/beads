@@ -239,15 +239,25 @@ func runRenamePrefixConfigOnly(ctx context.Context, newPrefix string, dryRun boo
 	if err != nil {
 		return handleClassifiedRespectJSON(fmt.Errorf("failed to read current prefix: %w", err))
 	}
-	issues, err := store.SearchIssues(ctx, "", types.IssueFilter{})
-	if err != nil {
-		return handleClassifiedRespectJSON(fmt.Errorf("failed to list issues: %w", err))
+	// Both planes: an empty filter searches the durable issues (closed ones
+	// included), and Ephemeral=true routes the search to the wisps table. A
+	// wisp with another prefix would be split from the config just the same.
+	ephemeral := true
+	ids := map[string]bool{}
+	for _, filter := range []types.IssueFilter{{}, {Ephemeral: &ephemeral}} {
+		found, err := store.SearchIssues(ctx, "", filter)
+		if err != nil {
+			return handleClassifiedRespectJSON(fmt.Errorf("failed to list issues: %w", err))
+		}
+		for _, issue := range found {
+			ids[issue.ID] = true
+		}
 	}
 
 	var mismatched []string
-	for _, issue := range issues {
-		if !strings.HasPrefix(issue.ID, newPrefix+"-") {
-			mismatched = append(mismatched, issue.ID)
+	for id := range ids {
+		if !strings.HasPrefix(id, newPrefix+"-") {
+			mismatched = append(mismatched, id)
 		}
 	}
 	if len(mismatched) > 0 {
@@ -284,16 +294,16 @@ func runRenamePrefixConfigOnly(ctx context.Context, newPrefix string, dryRun boo
 			"new_prefix":   newPrefix,
 			"changed":      changed,
 			"dry_run":      dryRun,
-			"issues_count": len(issues),
+			"issues_count": len(ids),
 		})
 	}
 	switch {
 	case !changed:
 		fmt.Printf("Issue prefix is already %s; nothing to do\n", ui.RenderAccent(newPrefix))
 	case dryRun:
-		fmt.Printf("DRY RUN: would set issue prefix '%s' -> '%s' (%d issue ids already carry it, none rewritten)\n", oldPrefix, newPrefix, len(issues))
+		fmt.Printf("DRY RUN: would set issue prefix '%s' -> '%s' (%d issue ids already carry it, none rewritten)\n", oldPrefix, newPrefix, len(ids))
 	default:
-		fmt.Printf("%s Set issue prefix '%s' -> '%s' (%d issue ids already carry it, none rewritten)\n", ui.RenderPass("✓"), oldPrefix, ui.RenderAccent(newPrefix), len(issues))
+		fmt.Printf("%s Set issue prefix '%s' -> '%s' (%d issue ids already carry it, none rewritten)\n", ui.RenderPass("✓"), oldPrefix, ui.RenderAccent(newPrefix), len(ids))
 	}
 	return nil
 }

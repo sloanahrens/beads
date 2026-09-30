@@ -60,18 +60,34 @@ func (w *workspace) runMachine(args ...string) (machineEnvelope, int, string) {
 	return env, code, stderr.String()
 }
 
-// sqlScalar reads one value from the workspace's embedded database behind
-// bd's back (see storeExec).
-func (w *workspace) sqlScalar(query string) string {
+// doltSQL runs one statement against the workspace's embedded database
+// behind bd's back, like storeExec, but with a DOLT_ROOT_PATH whose cleanup is
+// best effort: the dolt CLI can still be writing under it when the test ends,
+// and t.TempDir fails the test on a non-empty directory.
+func (w *workspace) doltSQL(args ...string) []byte {
 	w.t.Helper()
+	root, err := os.MkdirTemp("", "bd-machine-dolt-root-*")
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(func() { _ = os.RemoveAll(root) })
 	dbDir := filepath.Join(w.dir, ".beads", "embeddeddolt", w.storeDatabase(w.t))
-	cmd := exec.Command("dolt", "sql", "-r", "csv", "-q", query)
+	cmd := exec.Command("dolt", append([]string{"sql"}, args...)...)
 	cmd.Dir = dbDir
-	cmd.Env = append(os.Environ(), "DOLT_ROOT_PATH="+w.t.TempDir())
+	cmd.Env = append(os.Environ(), "DOLT_ROOT_PATH="+root)
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
-		w.t.Fatalf("dolt sql -q %q: %v\n%s", query, err, raw)
+		w.t.Fatalf("dolt sql %v: %v\n%s", args, err, raw)
 	}
+	return raw
+}
+
+func (w *workspace) doltExec(query string) { w.t.Helper(); w.doltSQL("-q", query) }
+
+// sqlScalar reads one value from the workspace's embedded database.
+func (w *workspace) sqlScalar(query string) string {
+	w.t.Helper()
+	raw := w.doltSQL("-r", "csv", "-q", query)
 	out := string(raw)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 2 {
@@ -94,7 +110,7 @@ func errKind(env machineEnvelope) string {
 func TestProtocol_RenamePrefixConfigOnly(t *testing.T) {
 	t.Parallel()
 	w := newWorkspace(t)
-	w.create("--title", "row one", "--type", "task")
+	rowOne := w.create("--title", "row one", "--type", "task")
 	storedPrefix := func() string {
 		return w.sqlScalar("SELECT value FROM config WHERE `key` = 'issue_prefix'")
 	}
@@ -117,7 +133,7 @@ func TestProtocol_RenamePrefixConfigOnly(t *testing.T) {
 	}
 
 	// Unset prefix with matching rows: the cell is written, no id rewritten.
-	w.storeExec(t, "DELETE FROM config WHERE `key` = 'issue_prefix'")
+	w.doltExec("DELETE FROM config WHERE `key` = 'issue_prefix'")
 	env, code, stderr = w.runMachine("rename-prefix", w.prefix, "--config-only")
 	if code != 0 {
 		t.Fatalf("unset prefix: exit %d, error %+v\n%s", code, env.Error, stderr)
@@ -127,7 +143,7 @@ func TestProtocol_RenamePrefixConfigOnly(t *testing.T) {
 	}
 
 	// Stale prefix with matching rows: repaired.
-	w.storeExec(t, "UPDATE config SET value = 'stale' WHERE `key` = 'issue_prefix'")
+	w.doltExec("UPDATE config SET value = 'stale' WHERE `key` = 'issue_prefix'")
 	env, code, _ = w.runMachine("rename-prefix", w.prefix, "--config-only")
 	if code != 0 {
 		t.Fatalf("stale prefix: exit %d, error %+v", code, env.Error)
@@ -136,13 +152,27 @@ func TestProtocol_RenamePrefixConfigOnly(t *testing.T) {
 		t.Fatalf("stale prefix: stored = %q, want %q", got, w.prefix)
 	}
 
-	// A prefix the rows do not carry would need id rewriting: refused, nothing written.
+	// A prefix the rows do not carry would need id rewriting: refused, nothing
+	// written. The only durable row is closed, so the scan must see closed rows.
+	w.run("close", rowOne)
 	env, code, _ = w.runMachine("rename-prefix", "other", "--config-only")
 	if code != 21 || errKind(env) != "refused" {
 		t.Fatalf("mismatch: exit %d kind %q, want 21 refused", code, errKind(env))
 	}
 	if got := storedPrefix(); got != w.prefix {
 		t.Fatalf("mismatch wrote the prefix: stored = %q", got)
+	}
+
+	// A wisp carrying another prefix counts too: the scan covers both planes.
+	wisp := w.create("--title", "stray wisp", "--type", "task", "--ephemeral")
+	w.doltExec("UPDATE wisps SET id = 'zz-wisp-stray' WHERE id = '" + wisp + "'")
+	w.doltExec("UPDATE config SET value = 'stale' WHERE `key` = 'issue_prefix'")
+	env, code, _ = w.runMachine("rename-prefix", w.prefix, "--config-only")
+	if code != 21 || errKind(env) != "refused" {
+		t.Fatalf("stray wisp: exit %d kind %q, want 21 refused", code, errKind(env))
+	}
+	if got := storedPrefix(); got != "stale" {
+		t.Fatalf("stray wisp: stored = %q, want it untouched", got)
 	}
 }
 
@@ -161,14 +191,14 @@ func TestProtocol_DepPruneOrphans(t *testing.T) {
 	w.run("dep", "add", c, wisp)
 	// Remove the wisp row underneath the edge: dependencies.depends_on_wisp_id
 	// has no foreign key, so this leaves exactly one orphan.
-	w.storeExec(t, "DELETE FROM wisps WHERE id = '"+wisp+"'")
+	w.doltExec("DELETE FROM wisps WHERE id = '" + wisp + "'")
 	// A wisp-to-wisp edge lives in wisp_dependencies, whose foreign keys
 	// cascade; turn them off so the delete leaves the edge behind, the way
 	// rows orphaned while the constraints were missing look.
 	w1 := w.create("--title", "wisp source", "--type", "task", "--ephemeral")
 	w2 := w.create("--title", "wisp target gone", "--type", "task", "--ephemeral")
 	w.run("dep", "add", w1, w2)
-	w.storeExec(t, "SET FOREIGN_KEY_CHECKS = 0; DELETE FROM wisps WHERE id = '"+w2+"'")
+	w.doltExec("SET FOREIGN_KEY_CHECKS = 0; DELETE FROM wisps WHERE id = '" + w2 + "'")
 	if got := w.sqlScalar("SELECT COUNT(*) FROM wisp_dependencies WHERE issue_id = '" + w1 + "'"); got != "1" {
 		t.Fatalf("setup: %s wisp_dependencies rows for %s, want 1", got, w1)
 	}
