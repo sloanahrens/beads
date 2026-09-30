@@ -100,6 +100,16 @@ beads_test_env_enter() {
     export BD_DISABLE_METRICS=1
     export BEADS_TEST_MODE=1
 
+    # be-b23: the test tier, also exported after the sweep. The unit tier
+    # (Dolt skipped, the default) arms the internal/testtier tripwires: a
+    # schema migration or a dolt sql-server start fails the test, in-process
+    # and in every spawned bd (the cmd/bd helpers strip BEADS_* but keep BD_*).
+    if [[ "${BEADS_TEST_ENV_RUN_DOLT:-0}" == "1" ]]; then
+        export BD_TEST_TIER=integration
+    else
+        export BD_TEST_TIER=unit
+    fi
+
     if command -v dolt >/dev/null 2>&1; then
         dolt config --global --add user.name "beads-test" >/dev/null 2>&1 || true
         dolt config --global --add user.email "test@beads.local" >/dev/null 2>&1 || true

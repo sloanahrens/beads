@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage/dberrors"
+	"github.com/steveyegge/beads/internal/testtier"
 	"golang.org/x/term"
 )
 
@@ -588,6 +589,11 @@ func MigrateUp(ctx context.Context, db DBConn) (int, error) {
 			}
 		}
 		return 0, nil
+	}
+	// be-b23: the unit test tier never pays for migrations (one fsync'd
+	// DOLT_COMMIT per step). Production never sets BD_TEST_TIER.
+	if err := testtier.Refuse("schema migration"); err != nil {
+		return 0, err
 	}
 
 	dirtyBeforeAll, err := dirtyTables(ctx, db, false)
