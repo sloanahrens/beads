@@ -235,7 +235,7 @@ func (s *DoltStore) updateIssue(ctx context.Context, id string, updates map[stri
 		}
 
 		commitMsg := fmt.Sprintf("bd: update %s", id)
-		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 	})
 }
 
@@ -312,7 +312,7 @@ func (s *DoltStore) updateIssueChecked(ctx context.Context, id string, updates m
 			}
 
 			commitMsg := fmt.Sprintf("bd: update %s", id)
-			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 		})
 	}
 
@@ -362,7 +362,7 @@ func (s *DoltStore) claimIssue(ctx context.Context, id string, actor string) err
 			}
 
 			commitMsg := fmt.Sprintf("bd: claim %s", id)
-			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 		})
 	})
 }
@@ -397,7 +397,7 @@ func (s *DoltStore) ClaimReadyIssue(ctx context.Context, filter types.WorkFilter
 				}
 
 				commitMsg := fmt.Sprintf("bd: claim ready %s", got.ID)
-				return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+				return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 			})
 			return got, werr
 		}
@@ -478,7 +478,7 @@ func (s *DoltStore) ReclaimExpiredLeases(ctx context.Context, olderThan time.Dur
 			return nil
 		}
 		commitMsg := fmt.Sprintf("bd: reclaim %d expired lease(s)", len(reclaimed))
-		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 	})
 	if err != nil {
 		return nil, err
@@ -510,7 +510,7 @@ func (s *DoltStore) UnclaimIssue(ctx context.Context, id string, actor string, f
 				}
 
 				commitMsg := fmt.Sprintf("bd: unclaim %s", id)
-				return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+				return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 			})
 		})
 	})
@@ -536,7 +536,7 @@ func (s *DoltStore) UnclaimIssueIfAssignee(ctx context.Context, id string, actor
 				}
 
 				commitMsg := fmt.Sprintf("bd: unclaim %s", id)
-				return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+				return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 			})
 		})
 	})
@@ -555,7 +555,7 @@ func (s *DoltStore) ReopenIssue(ctx context.Context, id string, reason string, a
 		}
 		switch {
 		case !res.IsWisp:
-			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, fmt.Sprintf("bd: reopen %s", id))
+			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, fmt.Sprintf("bd: reopen %s", id))
 		case res.IssueRowsChanged:
 			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, fmt.Sprintf("bd: reopen %s", id))
 		default:
@@ -598,7 +598,7 @@ func (s *DoltStore) closeIssue(ctx context.Context, id string, reason string, ac
 		}
 
 		commitMsg := fmt.Sprintf("bd: close %s", id)
-		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 	})
 }
 
@@ -641,7 +641,7 @@ func (s *DoltStore) closeIssueChecked(ctx context.Context, id string, actor stri
 		result = storage.CloseIssueResult{Unchanged: res.AlreadyClosed, OpenChildren: res.OpenChildren}
 
 		commitMsg := fmt.Sprintf("bd: close %s", id)
-		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+		return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 	}); err != nil {
 		return storage.CloseIssueResult{}, err
 	}

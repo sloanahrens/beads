@@ -608,25 +608,10 @@ func (s *InstrumentedStorage) ListWisps(ctx context.Context, filter types.WispFi
 // require a wrapper type that ends a long-lived span on Close; that
 // optimization is intentionally deferred until callers need it.
 
-func (s *InstrumentedStorage) IterIssues(ctx context.Context, query string, filter types.IssueFilter) (storage.Iter[types.Issue], error) {
-	ctx, span, t := s.op(ctx, "IterIssues")
-	it, err := s.inner.IterIssues(ctx, query, filter)
-	s.done(ctx, span, t, err)
-	return it, err
-}
-
 func (s *InstrumentedStorage) IterDependentsWithMetadata(ctx context.Context, issueID string) (storage.Iter[types.IssueWithDependencyMetadata], error) {
 	attrs := []attribute.KeyValue{attribute.String("bd.issue.id", issueID)}
 	ctx, span, t := s.op(ctx, "IterDependentsWithMetadata", attrs...)
 	it, err := s.inner.IterDependentsWithMetadata(ctx, issueID)
-	s.done(ctx, span, t, err, attrs...)
-	return it, err
-}
-
-func (s *InstrumentedStorage) IterDependenciesWithMetadata(ctx context.Context, issueID string) (storage.Iter[types.IssueWithDependencyMetadata], error) {
-	attrs := []attribute.KeyValue{attribute.String("bd.issue.id", issueID)}
-	ctx, span, t := s.op(ctx, "IterDependenciesWithMetadata", attrs...)
-	it, err := s.inner.IterDependenciesWithMetadata(ctx, issueID)
 	s.done(ctx, span, t, err, attrs...)
 	return it, err
 }
@@ -644,35 +629,6 @@ func (s *InstrumentedStorage) IterEvents(ctx context.Context, issueID string, li
 	ctx, span, t := s.op(ctx, "IterEvents", attrs...)
 	it, err := s.inner.IterEvents(ctx, issueID, limit)
 	s.done(ctx, span, t, err, attrs...)
-	return it, err
-}
-
-func (s *InstrumentedStorage) IterAllEventsSince(ctx context.Context, since time.Time) (storage.Iter[types.Event], error) {
-	attrs := []attribute.KeyValue{attribute.String("bd.since", since.Format(time.RFC3339))}
-	ctx, span, t := s.op(ctx, "IterAllEventsSince", attrs...)
-	it, err := s.inner.IterAllEventsSince(ctx, since)
-	s.done(ctx, span, t, err, attrs...)
-	return it, err
-}
-
-func (s *InstrumentedStorage) IterReadyWork(ctx context.Context, filter types.WorkFilter) (storage.Iter[types.Issue], error) {
-	ctx, span, t := s.op(ctx, "IterReadyWork")
-	it, err := s.inner.IterReadyWork(ctx, filter)
-	s.done(ctx, span, t, err)
-	return it, err
-}
-
-func (s *InstrumentedStorage) IterBlockedIssues(ctx context.Context, filter types.WorkFilter) (storage.Iter[types.BlockedIssue], error) {
-	ctx, span, t := s.op(ctx, "IterBlockedIssues")
-	it, err := s.inner.IterBlockedIssues(ctx, filter)
-	s.done(ctx, span, t, err)
-	return it, err
-}
-
-func (s *InstrumentedStorage) IterWisps(ctx context.Context, filter types.WispFilter) (storage.Iter[types.Issue], error) {
-	ctx, span, t := s.op(ctx, "IterWisps")
-	it, err := s.inner.IterWisps(ctx, filter)
-	s.done(ctx, span, t, err)
 	return it, err
 }
 

@@ -69,7 +69,7 @@ func ExecuteClaimNext(ctx context.Context, tx *sql.Tx, actor string, filter type
 		return publicops.ClaimNextResult{}, nil, err
 	}
 	tables := ChangedTables{}
-	tables.Add("issues", "events")
+	tables.Add("issues")
 	return publicops.ClaimNextResult{Claimed: hydrated}, tables, nil
 }
 

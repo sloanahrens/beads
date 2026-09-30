@@ -257,7 +257,6 @@ func RunAll(t *testing.T, factory Factory) {
 	t.Run("Audit", func(t *testing.T) { RunAudit(t, factory) })
 
 	// Iterators
-	t.Run("IterIssues", func(t *testing.T) { testIterIssues(t, factory) })
 	t.Run("IterComments", func(t *testing.T) { testIterComments(t, factory) })
 
 	// Transaction
@@ -1014,29 +1013,6 @@ func testStaleIssues(t *testing.T, f Factory) {
 }
 
 // --- Iterators ---
-
-func testIterIssues(t *testing.T, f Factory) {
-	s := f(t)
-	seedStore(t, s)
-	it, err := s.IterIssues(ctx(), "", types.IssueFilter{})
-	if err != nil {
-		t.Fatalf("IterIssues: %v", err)
-	}
-	defer func() { _ = it.Close() }()
-	count := 0
-	for it.Next(ctx()) {
-		count++
-		if it.Value().ID == "" {
-			t.Error("empty ID from iterator")
-		}
-	}
-	if err := it.Err(); err != nil {
-		t.Fatalf("Iter error: %v", err)
-	}
-	if count != 4 {
-		t.Errorf("iterated %d, want 4", count)
-	}
-}
 
 func testIterComments(t *testing.T, f Factory) {
 	s := f(t)

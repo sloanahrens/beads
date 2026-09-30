@@ -9,7 +9,6 @@ package dolt
 
 import (
 	"context"
-	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
@@ -36,68 +35,4 @@ func (s *DoltStore) IterEvents(ctx context.Context, issueID string, limit int) (
 		return nil, err
 	}
 	return storage.NewSliceIter(ev), nil
-}
-
-// IterAllEventsSince streams every audit-trail event newer than `since`.
-//
-// TODO(be-yinl4d-iter): replace with a fully streaming implementation.
-func (s *DoltStore) IterAllEventsSince(ctx context.Context, since time.Time) (storage.Iter[types.Event], error) {
-	ev, err := s.GetAllEventsSince(ctx, since)
-	if err != nil {
-		return nil, err
-	}
-	return storage.NewSliceIter(ev), nil
-}
-
-// IterReadyWork streams ready-work issues.
-//
-// TODO(be-yinl4d-iter): replace with a fully streaming implementation.
-func (s *DoltStore) IterReadyWork(ctx context.Context, filter types.WorkFilter) (storage.Iter[types.Issue], error) {
-	is, err := s.GetReadyWork(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	return storage.NewSliceIter(is), nil
-}
-
-// IterBlockedIssues streams blocked issues.
-//
-// TODO(be-yinl4d-iter): replace with a fully streaming implementation.
-func (s *DoltStore) IterBlockedIssues(ctx context.Context, filter types.WorkFilter) (storage.Iter[types.BlockedIssue], error) {
-	bs, err := s.GetBlockedIssues(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	return storage.NewSliceIter(bs), nil
-}
-
-// IterWisps streams ephemeral issues matching the filter.
-//
-// TODO(be-yinl4d-iter): replace with a fully streaming implementation.
-func (s *DoltStore) IterWisps(ctx context.Context, filter types.WispFilter) (storage.Iter[types.Issue], error) {
-	ws, err := s.ListWisps(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	return storage.NewSliceIter(ws), nil
-}
-
-// IterAllDependencyRecords streams every dependency edge as a flat
-// sequence of *types.Dependency rows. Stub-then-slice; follow-up child
-// of be-yinl4d will replace this with a streaming implementation.
-//
-// TODO(be-yinl4d-iter): replace with a fully streaming implementation.
-func (s *DoltStore) IterAllDependencyRecords(ctx context.Context) (storage.Iter[types.Dependency], error) {
-	all, err := s.GetAllDependencyRecords(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Flatten the map[string][]*types.Dependency back into a slice. The
-	// streaming impl will read directly from the dependencies table in a
-	// single query without the map round-trip.
-	var flat []*types.Dependency
-	for _, deps := range all {
-		flat = append(flat, deps...)
-	}
-	return storage.NewSliceIter(flat), nil
 }

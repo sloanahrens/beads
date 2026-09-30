@@ -152,9 +152,7 @@ type StrategicPuller interface {
 // VersionControl provides branch, commit, merge, and status operations.
 type VersionControl interface {
 	Branch(ctx context.Context, name string) error
-	Checkout(ctx context.Context, branch string) error
 	CurrentBranch(ctx context.Context) (string, error)
-	DeleteBranch(ctx context.Context, branch string) error
 	ListBranches(ctx context.Context) ([]string, error)
 	Commit(ctx context.Context, message string) error
 	// CommitWithConfig is like Commit but includes the config table.

@@ -518,24 +518,6 @@ func externalTitle(ref reference) string {
 	return ref.raw
 }
 
-// IterReadyWork preserves the decorator semantics for iterator callers.
-func (s *Store) IterReadyWork(ctx context.Context, filter types.WorkFilter) (storage.Iter[types.Issue], error) {
-	issues, err := s.GetReadyWork(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	return storage.NewSliceIter(issues), nil
-}
-
-// IterBlockedIssues preserves the decorator semantics for iterator callers.
-func (s *Store) IterBlockedIssues(ctx context.Context, filter types.WorkFilter) (storage.Iter[types.BlockedIssue], error) {
-	issues, err := s.GetBlockedIssues(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	return storage.NewSliceIter(issues), nil
-}
-
 func appendUnique(values []string, value string) []string {
 	if slices.Contains(values, value) {
 		return values

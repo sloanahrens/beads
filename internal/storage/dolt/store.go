@@ -4839,7 +4839,9 @@ func (s *DoltStore) Branch(ctx context.Context, name string) (retErr error) {
 	return versioncontrolops.CreateBranch(ctx, conn, name)
 }
 
-// Checkout switches to the specified branch
+// Checkout switches to the specified branch. It is not part of
+// storage.VersionControl: no command switches branches; tests use it to build
+// branch fixtures.
 func (s *DoltStore) Checkout(ctx context.Context, branch string) (retErr error) {
 	ctx, span := doltTracer.Start(ctx, "dolt.checkout",
 		trace.WithSpanKind(trace.SpanKindClient),
@@ -4968,11 +4970,6 @@ func (s *DoltStore) RecomputeBlockedAfterMerge(ctx context.Context, fromCommit s
 // CurrentBranch returns the current branch name
 func (s *DoltStore) CurrentBranch(ctx context.Context) (string, error) {
 	return versioncontrolops.CurrentBranch(ctx, s.db)
-}
-
-// DeleteBranch deletes a branch (used to clean up import branches)
-func (s *DoltStore) DeleteBranch(ctx context.Context, branch string) error {
-	return versioncontrolops.DeleteBranch(ctx, s.db, branch)
 }
 
 // Log returns recent commit history

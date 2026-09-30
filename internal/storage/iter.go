@@ -47,12 +47,12 @@ import (
 //
 // Usage:
 //
-//	it, err := store.IterIssues(ctx, query, filter)
+//	it, err := store.IterEvents(ctx, issueID, 0)
 //	if err != nil { return err }
 //	defer it.Close()
 //	for it.Next(ctx) {
-//	    issue := it.Value()
-//	    // ... use issue ...
+//	    event := it.Value()
+//	    // ... use event ...
 //	}
 //	if err := it.Err(); err != nil { return err }
 type Iter[T any] interface {

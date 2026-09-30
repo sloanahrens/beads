@@ -150,7 +150,7 @@ func TestReopenIssuePromotionRaceUsesTransactionRouting(t *testing.T) {
 	if !routingDriver.issueUpdated {
 		t.Fatal("promoted permanent issue was not updated")
 	}
-	if got, want := routingDriver.doltAddTables, []string{"issues", "events"}; !reflect.DeepEqual(got, want) {
+	if got, want := routingDriver.doltAddTables, []string{"issues"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("DOLT_ADD tables = %v, want %v for promoted permanent issue", got, want)
 	}
 	if !routingDriver.doltCommitCalled {

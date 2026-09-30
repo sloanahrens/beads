@@ -42,7 +42,7 @@ func (s *DoltStore) MergeMetadata(ctx context.Context, issueID, key string, valu
 			// UpdateIssueInTx, which also writes an EventUpdated row into events, so
 			// stage both tables before committing (mirrors CloseIssue).
 			commitMsg := fmt.Sprintf("bd: merge metadata %s.%s", issueID, key)
-			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 		})
 	})
 }
@@ -144,7 +144,7 @@ func (s *DoltStore) SlotClear(ctx context.Context, issueID, key, actor string) e
 			// so stage both before committing. A no-op clear writes nothing, which
 			// DOLT_COMMIT reports as nothing-to-commit (handled by the helper).
 			commitMsg := fmt.Sprintf("bd: clear metadata %s.%s", issueID, key)
-			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues", "events"}, commitMsg)
+			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 		})
 	})
 }

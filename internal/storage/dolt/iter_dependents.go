@@ -71,20 +71,6 @@ func depTargetExprWithAlias(alias string) string {
 	return fmt.Sprintf("COALESCE(%s.depends_on_issue_id, %s.depends_on_wisp_id, %s.depends_on_external)", alias, alias, alias)
 }
 
-// IterDependenciesWithMetadata streams dependencies (issues issueID depends
-// on) with the relationship type attached. It delegates to the slice path
-// GetDependenciesWithMetadata (which resolves targets across both `issues`
-// and `wisps`) rather than a streaming join, because a dependency's target
-// table cannot be determined from the edge table alone. There is no streaming
-// caller for this direction today; revisit if one appears.
-func (s *DoltStore) IterDependenciesWithMetadata(ctx context.Context, issueID string) (storage.Iter[types.IssueWithDependencyMetadata], error) {
-	deps, err := s.GetDependenciesWithMetadata(ctx, issueID)
-	if err != nil {
-		return nil, err
-	}
-	return storage.NewSliceIter(deps), nil
-}
-
 func (s *DoltStore) iterIssuesWithDepType(ctx context.Context, q string, args ...any) (storage.Iter[types.IssueWithDependencyMetadata], error) {
 	if s.closed.Load() {
 		return nil, ErrStoreClosed

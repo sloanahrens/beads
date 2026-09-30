@@ -573,10 +573,10 @@ func testAuditCreateInBatchCycle(t *testing.T, f Factory) {
 	}
 }
 
-// --- ListWisps / IterWisps ---
+// --- ListWisps ---
 
-// ListWisps hides closed wisps by default and orders by priority ASC; IterWisps
-// returns the identical ordered set (wisp_filter_convert.go, sqlbuild/sort.go).
+// ListWisps hides closed wisps by default and orders by priority ASC
+// (wisp_filter_convert.go, sqlbuild/sort.go).
 func testAuditListWisps(t *testing.T, f Factory) {
 	s := f(t)
 	c := ctx()
@@ -596,14 +596,6 @@ func testAuditListWisps(t *testing.T, f Factory) {
 	must(t, err)
 	if !contains(orderedIDs(withClosed), "test-wclosed") {
 		t.Errorf("IncludeClosed ListWisps = %v, want to include test-wclosed", orderedIDs(withClosed))
-	}
-
-	it, err := s.IterWisps(c, types.WispFilter{})
-	must(t, err)
-	iterated, err := storage.Collect(c, it)
-	must(t, err)
-	if got := orderedIDs(iterated); !slices.Equal(got, orderedIDs(def)) {
-		t.Errorf("IterWisps order = %v, want same as ListWisps %v", got, orderedIDs(def))
 	}
 }
 

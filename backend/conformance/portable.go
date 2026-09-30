@@ -34,8 +34,6 @@ func RunPortableMethods(t *testing.T, factory Factory) {
 	t.Run("RepoMtime", func(t *testing.T) { testRepoMtime(t, factory) })
 	t.Run("AllEventsSince", func(t *testing.T) { testGetAllEventsSince(t, factory) })
 	t.Run("AllDependencyRecords", func(t *testing.T) { testGetAllDependencyRecords(t, factory) })
-	t.Run("IterAllDependencyRecords", func(t *testing.T) { testIterAllDependencyRecords(t, factory) })
-	t.Run("IterAllEventsSince", func(t *testing.T) { testIterAllEventsSince(t, factory) })
 	t.Run("CountDependentsByStatus", func(t *testing.T) { testCountDependentsByStatus(t, factory) })
 	t.Run("FindWispDependentsRecursive", func(t *testing.T) { testFindWispDependentsRecursive(t, factory) })
 	t.Run("AddComment", func(t *testing.T) { testAddComment(t, factory) })
@@ -244,29 +242,6 @@ func testGetAllEventsSince(t *testing.T, f Factory) {
 	}
 }
 
-func testIterAllEventsSince(t *testing.T, f Factory) {
-	s := f(t)
-	c := ctx()
-	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-1", Title: "one"}), "a"))
-
-	it, err := s.IterAllEventsSince(c, time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
-	must(t, err)
-	evs, err := storage.Collect(c, it)
-	must(t, err)
-	if !contains(eventTypes(evs, "test-1"), "created") {
-		t.Errorf("stream missing created event for test-1; types=%v", eventTypes(evs, "test-1"))
-	}
-
-	// Future since: empty stream, clean lifecycle.
-	it2, err := s.IterAllEventsSince(c, time.Now().UTC().Add(time.Hour))
-	must(t, err)
-	empty, err := storage.Collect(c, it2)
-	must(t, err)
-	if len(empty) != 0 {
-		t.Errorf("future stream = %d events, want 0", len(empty))
-	}
-}
-
 // --- Dependency records ---
 
 func testGetAllDependencyRecords(t *testing.T, f Factory) {
@@ -312,38 +287,6 @@ func testGetAllDependencyRecords(t *testing.T, f Factory) {
 	must(t, err)
 	if len(m["test-b"]) != 0 {
 		t.Errorf("after remove, test-b still has %v", depTargets(m["test-b"]))
-	}
-}
-
-func testIterAllDependencyRecords(t *testing.T, f Factory) {
-	s := f(t)
-	c := ctx()
-
-	// Empty store: immediate exhaustion.
-	it, err := s.IterAllDependencyRecords(c)
-	must(t, err)
-	if empty, err := storage.Collect(c, it); err != nil || len(empty) != 0 {
-		t.Fatalf("empty stream = (%d,%v), want (0,nil)", len(empty), err)
-	}
-
-	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-a", Title: "a"}), "a"))
-	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-b", Title: "b"}), "a"))
-	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-w", Title: "w", Ephemeral: true}), "a"))
-	must(t, s.AddDependency(c, &types.Dependency{IssueID: "test-b", DependsOnID: "test-a", Type: types.DepBlocks}, "actor"))
-	must(t, s.AddDependency(c, &types.Dependency{IssueID: "test-w", DependsOnID: "test-a", Type: types.DepBlocks}, "actor"))
-
-	// The stream is the flattened multiset of GetAllDependencyRecords (order unspecified).
-	it, err = s.IterAllDependencyRecords(c)
-	must(t, err)
-	streamed, err := storage.Collect(c, it)
-	must(t, err)
-	got := make([]string, 0, len(streamed))
-	for _, d := range streamed {
-		got = append(got, d.IssueID+"->"+d.DependsOnID)
-	}
-	sort.Strings(got)
-	if want := []string{"test-b->test-a", "test-w->test-a"}; !slices.Equal(got, want) {
-		t.Errorf("streamed edges = %v, want %v (as a set)", got, want)
 	}
 }
 
