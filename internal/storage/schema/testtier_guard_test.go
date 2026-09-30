@@ -33,3 +33,12 @@ func TestMigrateUpRefusesPendingMigrationsInUnitTier(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+// allowMockedMigration clears BD_TEST_TIER for a test that drives MigrateUp
+// against sqlmock. There is no real store and no fsync'd DOLT_COMMIT, so the
+// unit-tier tripwire does not apply; the opt-out is per test so a real store
+// opened anywhere else in this package still trips it.
+func allowMockedMigration(t *testing.T) {
+	t.Helper()
+	t.Setenv(testtier.EnvVar, "")
+}
