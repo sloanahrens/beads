@@ -20,12 +20,48 @@ a unit test: use the real boundary when the defect could live there.
 | Docs-only validation | `git diff --check`, `go test -tags=gms_pure_go ./test/docsync`, and `./scripts/check-doc-freshness.sh` | For prose-only changes; add any generated-doc or surface-specific link check the changed paths require. Do not run the full Go suite merely because a Markdown file changed. |
 | Focused red/green loop | `./scripts/test.sh -run '^TestExactName$' ./path/to/package/...` | While writing or fixing one behavior. |
 | Affected-package confidence | `./scripts/test.sh ./path/to/package/...` | After the focused test passes; include directly affected neighbors when their contract changed. |
-| Final Go baseline | `make test` | Once after focused work on Go code is green. It applies the normal local build flags, coverage, and local skip handling. |
+| Final Go baseline | `make test` | Once after focused work on Go code is green. It is the unit tier (see The Two Tiers) with the normal local build flags, coverage, and local skip handling. |
+| Real-store confidence | `make test-integration` | When the change touches storage, migrations, `bd init`, or other real-store behavior. Needs Docker and `dolt`. |
 | Named CI wrapper | `make ci-pr-core`, `make ci-pr-policy`, or `make ci-pr-lint` | Run the wrapper whose risk or surface is affected, or use it to reproduce that CI check. Do not run all three routinely for every edit. |
 
 Do not replace the focused loop with repeated full-suite runs. Run the final
 `make test` once the affected Go tests are green. For docs-only changes, use
 the docs, link, and diff checks instead.
+
+## The Two Tiers
+
+`make test` is the **unit tier**: every package, no Dolt server, no Docker,
+minutes not hours. `make test-integration` is the **integration tier**: the
+unit tier plus every test that needs a real Dolt store, built with
+`-tags integration`, with embedded Dolt and the Docker Dolt container enabled
+and a 45m per-package timeout.
+
+The unit tier is enforced at runtime, not by review. The test environment
+exports `BD_TEST_TIER=unit`, and `scripts/test.sh` also links that tier into
+the `bd` it prebuilds for subprocess tests, because several helpers strip
+every `BEADS_*` and `BD_*` variable before spawning `bd`. In the unit tier a
+schema migration (`schema.MigrateUp` with work pending) or a
+`dolt sql-server` start (`doltserver.Start`) returns
+`testtier.ErrUnitTier`, in the test process and in every spawned `bd`. A
+fresh store runs one fsync'd Dolt commit per migration, about four seconds
+per store on macOS, so a unit-tier test that opens one fails with a message
+naming the tier.
+
+To move such a test, add `integration` to its file's build constraint
+(`//go:build cgo && integration`). If the file also holds unit tests, move
+only the store-opening tests, verbatim, into a sibling
+`<name>_integration_test.go`. A test that drives `MigrateUp` against sqlmock
+has no store and may clear the tier for itself with
+`t.Setenv(testtier.EnvVar, "")`.
+
+The integration tier is **require-mode** (`BD_TEST_TIER=integration`): a
+`TestMain` whose Dolt container cannot start exits 1, and
+`testutil.SkipOrFailUnavailable` fails a test whose server is unavailable or
+crashed instead of skipping it. Only a missing `dolt` binary still skips.
+Proxied-server tests stay opt-in with `BEADS_TEST_PROXIED_SERVER=1`.
+
+`TestUnitTierPolicy` (scripts) and `TestPrebuiltBDCarriesUnitTier` (cmd/bd)
+keep this wiring from drifting.
 
 ## Commands and Local Environment
 
