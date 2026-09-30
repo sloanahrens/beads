@@ -97,13 +97,13 @@ Examples:
 			if result != nil {
 				result.Close()
 			}
-			return HandleErrorRespectJSON("resolving %s: %v", issueID, err)
+			return handleClassifiedRespectJSON(fmt.Errorf("resolving %s: %w", issueID, err))
 		}
 		if result == nil || result.Issue == nil {
 			if result != nil {
 				result.Close()
 			}
-			return HandleErrorRespectJSON("issue %s not found", issueID)
+			return handleNotFoundRespectJSON("issue %s not found", issueID)
 		}
 		defer result.Close()
 		issueID = result.ResolvedID
@@ -211,13 +211,13 @@ Examples:
 			if result != nil {
 				result.Close()
 			}
-			return HandleErrorRespectJSON("resolving %s: %v", issueID, err)
+			return handleClassifiedRespectJSON(fmt.Errorf("resolving %s: %w", issueID, err))
 		}
 		if result == nil || result.Issue == nil {
 			if result != nil {
 				result.Close()
 			}
-			return HandleErrorRespectJSON("issue %s not found", issueID)
+			return handleNotFoundRespectJSON("issue %s not found", issueID)
 		}
 		defer result.Close()
 		issueID = result.ResolvedID

@@ -193,13 +193,13 @@ Examples:
 			// against its history (bd-6dnrw.32, GH#3231).
 			fromID, fromStore, fromCleanup, err := resolveIDForMutation(ctx, store, blocksID)
 			if err != nil {
-				return HandleErrorRespectJSON("%v", err)
+				return handleClassifiedRespectJSON(err)
 			}
 			defer fromCleanup()
 
 			toID, _, toCleanup, err := resolveIDWithRouting(ctx, store, blockerID)
 			if err != nil {
-				return HandleErrorRespectJSON("%v", err)
+				return handleClassifiedRespectJSON(err)
 			}
 			defer toCleanup()
 
@@ -355,7 +355,7 @@ Examples:
 		// never open a foreign project writable (bd-6dnrw.32, GH#3231).
 		fromID, fromStore, fromCleanup, err := resolveIDForMutation(ctx, store, args[0])
 		if err != nil {
-			return HandleErrorRespectJSON("%v", err)
+			return handleClassifiedRespectJSON(err)
 		}
 		defer fromCleanup()
 
@@ -373,7 +373,7 @@ Examples:
 				if srcPrefix != "" && tgtPrefix != "" && srcPrefix != tgtPrefix {
 					toID = dependsOnArg
 				} else {
-					return HandleErrorRespectJSON("resolving dependency ID %s: %v", dependsOnArg, err)
+					return handleClassifiedRespectJSON(fmt.Errorf("resolving dependency ID %s: %w", dependsOnArg, err))
 				}
 			} else {
 				defer toCleanup()
@@ -921,14 +921,14 @@ Examples:
 					fmt.Fprintf(os.Stderr, "warning: resolving %s: %v (skipped)\n", arg, err)
 					continue
 				}
-				return HandleErrorRespectJSON("resolving %s: %v", arg, err)
+				return handleClassifiedRespectJSON(fmt.Errorf("resolving %s: %w", arg, err))
 			}
 			if routedResult == nil || routedResult.Issue == nil {
 				if batchMode {
 					fmt.Fprintf(os.Stderr, "warning: no issue found: %s (skipped)\n", arg)
 					continue
 				}
-				return HandleErrorRespectJSON("no issue found: %s", arg)
+				return handleNotFoundRespectJSON("no issue found: %s", arg)
 			}
 			depStore := store
 			if routedResult.Routed && routedResult.Store != nil {
@@ -1088,7 +1088,7 @@ var depRemoveCmd = &cobra.Command{
 		var fromID, toID string
 		fromID, fromStore, fromCleanup, err := resolveIDForMutation(ctx, store, args[0])
 		if err != nil {
-			return HandleErrorRespectJSON("%v", err)
+			return handleClassifiedRespectJSON(err)
 		}
 		defer fromCleanup()
 
@@ -1114,7 +1114,7 @@ var depRemoveCmd = &cobra.Command{
 				if srcPrefix != "" && tgtPrefix != "" && srcPrefix != tgtPrefix {
 					toID = args[1]
 				} else {
-					return HandleErrorRespectJSON("resolving dependency ID %s: %v", args[1], err)
+					return handleClassifiedRespectJSON(fmt.Errorf("resolving dependency ID %s: %w", args[1], err))
 				}
 			} else {
 				defer toCleanup()

@@ -145,6 +145,15 @@ func handleClassifiedRespectJSON(err error) error {
 	return HandleErrorRespectJSON("%v", err)
 }
 
+// handleNotFoundRespectJSON reports an id that resolved to no issue: kind
+// not_found in machine mode, HandleErrorRespectJSON(format, args...) otherwise.
+func handleNotFoundRespectJSON(format string, args ...any) error {
+	if machineModeActive() {
+		return newCLIError(kindNotFound, format, args...)
+	}
+	return HandleErrorRespectJSON(format, args...)
+}
+
 // handleClassified is handleClassifiedRespectJSON for call sites that use
 // HandleError (text on stderr even under --json) outside machine mode.
 func handleClassified(err error) error {

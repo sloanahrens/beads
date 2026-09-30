@@ -306,3 +306,31 @@ func TestRouteUnreachableIsNotNotFound(t *testing.T) {
 		t.Fatalf("unrouted prefix reported as unreachable: %v", err)
 	}
 }
+
+// TestUnknownIDIsNotFound pins be-2bc: comments add and dep add report an id
+// that resolves to no issue as not_found (exit 20), the kind bd show uses,
+// not internal. The errors are the chains those commands build.
+func TestUnknownIDIsNotFound(t *testing.T) {
+	resolverMiss := errors.New(`no issue found matching "gt-nosuch"`)
+	cases := map[string]func() error{
+		"comments add resolve error": func() error {
+			return handleClassifiedRespectJSON(fmt.Errorf("resolving %s: %w", "gt-nosuch", resolverMiss))
+		},
+		"comments add nil result": func() error {
+			return handleNotFoundRespectJSON("issue %s not found", "gt-nosuch")
+		},
+		"dep add source": func() error {
+			return handleClassifiedRespectJSON(fmt.Errorf("resolving issue ID %s: %w", "gt-nosuch", resolverMiss))
+		},
+		"dep add target": func() error {
+			return handleClassifiedRespectJSON(fmt.Errorf("resolving dependency ID %s: %w", "gt-nosuch",
+				fmt.Errorf("resolving issue ID %s: %w", "gt-nosuch", resolverMiss)))
+		},
+	}
+	for name, fn := range cases {
+		env, _, _, code := runMachine(t, fn)
+		if code != 20 || env.Error == nil || env.Error.Kind != "not_found" || !strings.Contains(env.Error.Message, "gt-nosuch") {
+			t.Errorf("%s: code=%d err=%+v, want not_found (20)", name, code, env.Error)
+		}
+	}
+}
