@@ -308,6 +308,8 @@ func Initialize() error {
 
 	// Formula overlay directory (D6): empty means no overlays.
 	v.SetDefault("formula.overlay-dir", "")
+	// Formula strict decode on the legacy cook/pour/wisp paths (D6 staging).
+	v.SetDefault("formula.strict", false)
 
 	// Backup configuration defaults (JSONL export to .beads/backup/)
 	v.SetDefault("backup.enabled", false)

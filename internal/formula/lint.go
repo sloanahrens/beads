@@ -103,6 +103,7 @@ func lintFile(path string, searchPaths []string) []Problem {
 		return problems
 	}
 	parser := NewParser(append([]string{filepath.Dir(path)}, searchPaths...)...)
+	parser.Strict = true
 	parsed, err := parser.ParseFile(path)
 	if err == nil {
 		_, err = parser.Resolve(parsed)

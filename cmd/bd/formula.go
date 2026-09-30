@@ -382,6 +382,7 @@ func scanFormulaDir(dir string) ([]*formula.Formula, error) {
 	}
 
 	parser := formula.NewParser(dir)
+	parser.Strict = formulaStrictMode()
 	var formulas []*formula.Formula
 
 	for _, entry := range entries {

@@ -210,7 +210,9 @@ func TestParseFile_StrictErrorIsOneLineAndTyped(t *testing.T) {
 	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := NewParser(dir).ParseFile(path)
+	p := NewParser(dir)
+	p.Strict = true
+	_, err := p.ParseFile(path)
 	if err == nil {
 		t.Fatal("expected strict decode error")
 	}
@@ -272,5 +274,31 @@ func TestDecodeTOMLStrict_FoldsUnderAnyUnknownAncestor(t *testing.T) {
 	}
 	if len(problems) != 1 || problems[0].Key != "inputs.branch" {
 		t.Fatalf("want one problem for inputs.branch, got %+v", problems)
+	}
+}
+
+// Staged default: a non-strict parser cooks the formula as before and
+// prints one warning line per dropped key, with file, line and key.
+func TestParseFile_NonStrictWarnsPerKeyAndCooks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mol-loose.formula.toml")
+	src := "formula = \"mol-loose\"\nversion = 1\n[squash]\ntrigger = \"x\"\n[[steps]]\nid = \"a\"\ntitle = \"A\"\nneed = [\"x\"]\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var warn strings.Builder
+	p := NewParser(dir)
+	p.Strict = false
+	p.Warn = &warn
+	f, err := p.LoadByName("mol-loose")
+	if err != nil || f == nil || len(f.Steps) != 1 {
+		t.Fatalf("non-strict load must cook: %v %+v", err, f)
+	}
+	lines := strings.Split(strings.TrimSpace(warn.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], path+":3: squash:") || !strings.Contains(lines[1], path+":8: steps.need:") {
+		t.Fatalf("want one warning per dropped key with file:line key, got %q", warn.String())
+	}
+	if StrictDecode {
+		t.Fatal("StrictDecode default must stay false until gastown's formulas are clean")
 	}
 }

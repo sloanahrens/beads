@@ -169,6 +169,7 @@ func parseCookFlags(cmd *cobra.Command, args []string) (*cookFlags, error) {
 // and falls back to parsing as a file path if that fails.
 func loadAndResolveFormula(formulaPath string, searchPaths []string) (*formula.Formula, error) {
 	parser := formula.NewParser(searchPaths...)
+	parser.Strict = formulaStrictMode()
 
 	f, err := loadFormulaByNameOrPath(parser, formulaPath)
 	if err != nil {
@@ -741,6 +742,7 @@ func resolveAndCookFormula(formulaName string, searchPaths []string) (*TemplateS
 func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, conditionVars map[string]string) (*TemplateSubgraph, error) {
 	// Create parser with search paths
 	parser := formula.NewParser(searchPaths...)
+	parser.Strict = formulaStrictMode()
 
 	// Load formula by name
 	f, err := parser.LoadByName(formulaName)
@@ -895,6 +897,16 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 type cookedExtras struct {
 	overlay  *formula.Overlay
 	warnings []string
+}
+
+// formulaStrictFlag is --strict on cook, pour and wisp.
+var formulaStrictFlag bool
+
+// formulaStrictMode reports whether the legacy cook/pour/wisp/mol paths
+// reject dropped keys: --strict or config formula.strict=true. Otherwise
+// each dropped key is one warning line (staged until gastown gt-fd2cu.3).
+func formulaStrictMode() bool {
+	return formula.StrictDecode || formulaStrictFlag || config.GetBool("formula.strict")
 }
 
 // formulaOverlayDir is the one directory overlays are read from: config
@@ -1243,6 +1255,7 @@ func init() {
 	cookCmd.Flags().String("prefix", "", "Prefix to prepend to proto ID (e.g., 'gt-' creates 'gt-mol-feature')")
 	cookCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value), enables runtime mode")
 	cookCmd.Flags().String("mode", "", "Cooking mode: compile (keep placeholders) or runtime (substitute vars)")
+	cookCmd.Flags().BoolVar(&formulaStrictFlag, "strict", false, "Reject formula keys bd would drop (always on under machine mode)")
 
 	rootCmd.AddCommand(cookCmd)
 }

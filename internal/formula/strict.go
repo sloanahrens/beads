@@ -49,6 +49,10 @@ func (p Problem) String() string {
 type FormulaError struct {
 	File     string
 	Problems []Problem
+
+	// decoded is the loosely decoded formula (what bd cooked before strict
+	// decode), kept so a non-strict parser can warn and still cook it.
+	decoded *Formula
 }
 
 // maxProblemsInMessage bounds the one-line message; bd formula lint lists all.

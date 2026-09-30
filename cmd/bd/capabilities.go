@@ -34,6 +34,8 @@ type capabilitiesReport struct {
 	ContractVersion int                 `json:"contract_version"`
 	Commands        []capabilityCommand `json:"commands"`
 	ErrorKinds      map[errorKind]int   `json:"error_kinds"`
+	// Notes are one-line contract notices a caller should know about.
+	Notes []string `json:"notes"`
 }
 
 var capabilitiesCmd = &cobra.Command{
@@ -63,6 +65,9 @@ func buildCapabilities(root *cobra.Command) capabilitiesReport {
 		Commit:          resolveCommitHash(),
 		ContractVersion: JSONContractVersion,
 		ErrorKinds:      errorKindExitCodes,
+		Notes: []string{
+			"formula strict decode: on for bd cook under machine mode, bd formula lint, --strict and config formula.strict=true; legacy cook/pour/wisp/mol warn per dropped key; the default flips to strict everywhere once gastown's formulas are clean (gt-fd2cu.3)",
+		},
 	}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {

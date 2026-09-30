@@ -67,6 +67,7 @@ var YamlOnlyKeys = map[string]bool{
 	// <formula>.toml overlays from (D6/D5). Read through viper before any
 	// store is open.
 	"formula.overlay-dir": true,
+	"formula.strict":      true,
 
 	// Prime memory-injection caps (read at session start, possibly before
 	// the database is reachable, so they must live in yaml)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,7 +45,21 @@ type Parser struct {
 
 	// resolvingChain tracks the order of formulas being resolved (for error messages).
 	resolvingChain []string
+
+	// Strict makes a key bd would drop, or an unresolvable gate type, a cook
+	// error. When false (the staged default, see StrictDecode) each such
+	// problem is one warning line on Warn and the formula still cooks.
+	Strict bool
+
+	// Warn receives the non-strict warnings (default os.Stderr).
+	Warn io.Writer
 }
+
+// StrictDecode is the default for Parser.Strict. It is false while the
+// live town's formulas still carry dropped keys (gastown gt-fd2cu.3); the
+// flip to strict everywhere is this one line. bd cook under machine mode,
+// bd formula lint, --strict and config formula.strict=true are strict now.
+var StrictDecode = false
 
 // NewParser creates a new formula parser.
 // searchPaths are directories to search for formulas when resolving extends.
@@ -57,6 +72,8 @@ func NewParser(searchPaths ...string) *Parser {
 	}
 	return &Parser{
 		searchPaths:    paths,
+		Strict:         StrictDecode,
+		Warn:           os.Stderr,
 		cache:          make(map[string]*Formula),
 		resolvingSet:   make(map[string]bool),
 		resolvingChain: nil,
@@ -145,9 +162,17 @@ func (p *Parser) ParseFile(path string) (*Formula, error) {
 		var fe *FormulaError
 		if errors.As(err, &fe) {
 			fe.File = absPath
-			return nil, fe
+			if p.Strict {
+				return nil, fe
+			}
+			for _, pr := range fe.Problems {
+				fmt.Fprintf(p.Warn, "Warning: %s:%d: %s: %s; accepted for now, strict decode will reject it (bd formula lint)\n",
+					absPath, pr.Line, pr.Key, pr.Message)
+			}
+			formula = fe.decoded
+		} else {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
 	formula.Source = absPath
@@ -190,7 +215,7 @@ func (p *Parser) ParseTOML(data []byte) (*Formula, error) {
 		return nil, err
 	}
 	if len(problems) > 0 {
-		return nil, &FormulaError{Problems: problems}
+		return nil, &FormulaError{Problems: problems, decoded: formula}
 	}
 	return formula, nil
 }

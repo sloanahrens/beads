@@ -316,6 +316,7 @@ func renderPourResult(result *InstantiateResult, totalAttached, attachCount int)
 func init() {
 	// Pour command flags
 	pourCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
+	pourCmd.Flags().BoolVar(&formulaStrictFlag, "strict", false, "Reject formula keys bd would drop instead of warning")
 	pourCmd.Flags().Bool("dry-run", false, "Preview what would be created")
 	pourCmd.Flags().String("assignee", "", "Assign the root issue to this agent/user")
 	pourCmd.Flags().StringSlice("attach", []string{}, "Proto to attach after spawning (repeatable)")

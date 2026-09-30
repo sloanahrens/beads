@@ -79,6 +79,7 @@ func cookTreeFor(nameOrPath string, searchPaths []string, vars map[string]string
 		vars = map[string]string{}
 	}
 	parser := formula.NewParser(searchPaths...)
+	parser.Strict = true // the gastown renderer path is strict now (D6)
 	f, err := loadFormulaByNameOrPath(parser, nameOrPath)
 	if err != nil {
 		return nil, err

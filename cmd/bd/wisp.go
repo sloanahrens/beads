@@ -1015,6 +1015,7 @@ func runWispPurgeClosed(ctx context.Context, dryRun bool, force bool, excludeTyp
 func init() {
 	// Wisp command flags (for direct create: bd mol wisp <proto>)
 	wispCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
+	wispCmd.Flags().BoolVar(&formulaStrictFlag, "strict", false, "Reject formula keys bd would drop instead of warning")
 	wispCmd.Flags().Bool("dry-run", false, "Preview what would be created")
 	wispCmd.Flags().Bool("root-only", false, "Create only the root issue (no child step issues)")
 

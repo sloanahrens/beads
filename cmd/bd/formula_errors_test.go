@@ -23,6 +23,9 @@ func writeFormulaFile(t *testing.T, dir, name, body string) string {
 // the strict error, so callers report it instead of "not found as formula
 // or proto ID".
 func TestResolveAndCook_InvalidFormulaIsTyped(t *testing.T) {
+	old := formulaStrictFlag
+	formulaStrictFlag = true // --strict; the staged default only warns
+	t.Cleanup(func() { formulaStrictFlag = old })
 	dir := t.TempDir()
 	path := writeFormulaFile(t, dir, "mol-dropped",
 		"formula = \"mol-dropped\"\nversion = 1\n[squash]\ntrigger = \"on_complete\"\n[[steps]]\nid = \"a\"\ntitle = \"A\"\n")

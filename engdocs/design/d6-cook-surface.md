@@ -110,11 +110,18 @@ and cook alike, so the poured beads carry the overlay text. `skip` rewires
 dependents onto the skipped step's own predecessors. Gastown's rig-then-town
 overlay search is replaced by gastown setting this key per rig (D5).
 
-## Migration
+## Migration (staged)
 
-Installing this bd makes every formula that carries a dropped key fail to
-cook. In the town that is 26 of 49 formulas, including every `mol-dog-*`
-through the dead `[squash]` block. Run `bd formula lint` over each formula
-directory and clean it (gastown counterpart gt-fd2cu) before or with the
-install. There is deliberately no opt-out, because a silent drop is the
-defect.
+Strict decode is staged, because this bd is installed before gastown cleans
+its formulas (gt-fd2cu.3; 26 of 49 town formulas carry dropped keys, among
+them every `mol-dog-*` through the dead `[squash]` block).
+
+- Strict now: `bd cook` under machine mode (the gastown renderer path),
+  `bd formula lint`, `--strict` on cook/pour/wisp, config `formula.strict=true`.
+- Everywhere else (legacy cook, pour, wisp, mol bond/seed, formula list):
+  each dropped key or invalid gate type is one stderr warning,
+  `Warning: <file>:<line>: <key>: ...`, and the formula cooks as before.
+  Validation failures such as required+default were fatal before and stay so.
+- `bd capabilities --json` carries this in `notes`.
+- The flip to strict everywhere is `formula.StrictDecode = true`, one line,
+  once `bd formula lint` is clean over the town.
