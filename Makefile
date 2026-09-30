@@ -43,7 +43,7 @@ export PATH := $(GIT_WINDOWS_ROOT)/usr/bin;$(PATH)
 endif
 endif
 
-.PHONY: all build doctor-build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force safe-install check-forward-only check-on-main help check-up-to-date fmt fmt-check check-testing-short
+.PHONY: all build doctor-build test test-integration test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force safe-install check-forward-only check-on-main help check-up-to-date fmt fmt-check check-testing-short
 .PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
 .PHONY: api-gen api-check
 
@@ -171,10 +171,23 @@ doctor-build:
 			echo "        CGO_ENABLED=1 go build -tags gms_pure_go ./cmd/bd" ;; \
 	esac
 
-# Run all tests (skips known broken tests listed in .test-skip)
+# Unit tier (be-b23): every package, no Dolt server, no Docker. The test env
+# exports BD_TEST_TIER=unit, which makes a schema migration or a dolt
+# sql-server start fail the test (internal/testtier). Skips known broken
+# tests listed in .test-skip.
 test:
-	@echo "Running tests..."
+	@echo "Running tests (unit tier)..."
 	@TEST_COVER=1 ./scripts/test.sh
+
+# Integration tier (be-b23): the unit tier plus every test that needs a real
+# Dolt store (-tags integration, embedded Dolt, the Docker Dolt container).
+# BD_TEST_TIER=integration is require-mode: an unavailable Dolt server or
+# container fails the test instead of skipping it. Needs Docker and dolt.
+# Proxied-server tests stay opt-in (BEADS_TEST_PROXIED_SERVER=1).
+test-integration:
+	@echo "Running tests (integration tier)..."
+	@BEADS_TEST_ENV_RUN_DOLT=1 BEADS_TEST_EMBEDDED_DOLT=1 TEST_TAGS=integration \
+		TEST_TIMEOUT=$${TEST_TIMEOUT:-45m} ./scripts/test.sh
 
 # Run the opt-in ICU regex path test suite (no skip list).
 # This is a local developer workflow for intentionally exercising the leftover

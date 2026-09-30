@@ -2,6 +2,7 @@ package testtier
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -57,5 +58,33 @@ func TestIntegrationReportsTier(t *testing.T) {
 	t.Setenv(EnvVar, "unit")
 	if Integration() {
 		t.Fatal("Integration() = true with BD_TEST_TIER=unit")
+	}
+}
+
+// TestBuildTierAppliesWhenEnvIsAbsent pins the stripped-environment case:
+// cmd/bd helpers that drop every BEADS_* and BD_* variable before spawning
+// bd still get the tripwire, because scripts/test.sh links the tier into the
+// prebuilt bd. A present variable, even empty, wins over the linked value.
+func TestBuildTierAppliesWhenEnvIsAbsent(t *testing.T) {
+	orig := buildTier
+	t.Cleanup(func() { buildTier = orig })
+	buildTier = "unit"
+
+	t.Setenv(EnvVar, "")
+	if Unit() {
+		t.Fatal("an explicitly empty BD_TEST_TIER must override the linked tier")
+	}
+	if err := os.Unsetenv(EnvVar); err != nil {
+		t.Fatal(err)
+	}
+	if !Unit() {
+		t.Fatal("Unit() = false with BD_TEST_TIER absent and buildTier=unit")
+	}
+	if err := Refuse("schema migration"); !errors.Is(err, ErrUnitTier) {
+		t.Fatalf("Refuse() = %v, want ErrUnitTier from the linked tier", err)
+	}
+	buildTier = ""
+	if Unit() || Integration() {
+		t.Fatal("no env and no linked tier must be no tier")
 	}
 }

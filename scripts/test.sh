@@ -109,7 +109,15 @@ if [[ -z "${BEADS_TEST_BD_BINARY:-}" ]]; then
             mkdir -p "$PREBUILT_BD_DIR"
             echo "Prebuilding bd for subprocess tests..." >&2
             PREBUILT_BD_BIN="$PREBUILT_BD_DIR/bd$(go env GOEXE)"
-            if go build -o "$PREBUILT_BD_BIN" "$REPO_ROOT/cmd/bd"; then
+            # be-b23: link the test tier into the prebuilt bd. Some cmd/bd
+            # helpers strip every BEADS_* and BD_* variable before spawning
+            # it, so BD_TEST_TIER alone would not reach them; the linked
+            # value applies whenever the variable is absent.
+            PREBUILT_LDFLAGS=()
+            if [[ -n "${BD_TEST_TIER:-}" ]]; then
+                PREBUILT_LDFLAGS=(-ldflags "-X github.com/steveyegge/beads/internal/testtier.buildTier=${BD_TEST_TIER}")
+            fi
+            if go build ${PREBUILT_LDFLAGS[@]+"${PREBUILT_LDFLAGS[@]}"} -o "$PREBUILT_BD_BIN" "$REPO_ROOT/cmd/bd"; then
                 export BEADS_TEST_BD_BINARY="$PREBUILT_BD_BIN"
                 echo "Prebuilt bd: $BEADS_TEST_BD_BINARY" >&2
             else
@@ -171,6 +179,12 @@ fi
 
 # Build go test command
 CMD=(go test -p "$GO_TEST_PKG_PARALLEL" -parallel "$GO_TEST_PARALLEL" -timeout "$TIMEOUT")
+
+# TEST_TAGS adds build tags (make test-integration passes "integration").
+# An explicit -tags replaces the one GOFLAGS carries, so keep gms_pure_go.
+if [[ -n "${TEST_TAGS:-}" ]]; then
+    CMD+=(-tags "${BEADS_BUILD_TAGS},${TEST_TAGS}")
+fi
 
 if [[ -n "$VERBOSE" ]]; then
     CMD+=(-v)

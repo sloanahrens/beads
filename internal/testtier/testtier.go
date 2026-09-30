@@ -9,9 +9,12 @@
 // store or auto-starts a Dolt server fails with a message naming the tier,
 // in-process or in a spawned bd subprocess alike.
 //
-// The variable is BD_-prefixed on purpose: the cmd/bd subprocess helpers
-// strip every BEADS_* variable from the child environment but keep BD_*.
-// Production never sets it, so Refuse is a no-op outside the unit tier.
+// Some cmd/bd subprocess helpers strip every BEADS_* and BD_* variable from
+// the child environment, so the variable alone cannot reach every spawned bd.
+// scripts/test.sh therefore also links the tier into the bd it prebuilds for
+// subprocess tests (-X .../testtier.buildTier=unit); that value applies when
+// the variable is absent. Production builds never set either, so Refuse is a
+// no-op outside the test tiers.
 package testtier
 
 import (
@@ -25,18 +28,31 @@ import (
 // including unset, leaves them off.
 const EnvVar = "BD_TEST_TIER"
 
+// buildTier is the tier linked into a test-only bd binary by scripts/test.sh.
+// Empty in every production build.
+var buildTier string
+
+// tier returns the active tier: the environment variable when present (even
+// empty), otherwise the linked value.
+func tier() string {
+	if v, ok := os.LookupEnv(EnvVar); ok {
+		return strings.TrimSpace(v)
+	}
+	return buildTier
+}
+
 // ErrUnitTier is returned by Refuse in the unit tier.
 var ErrUnitTier = errors.New("operation not allowed in the unit test tier")
 
 // Unit reports whether the process runs in the unit test tier.
 func Unit() bool {
-	return strings.TrimSpace(os.Getenv(EnvVar)) == "unit"
+	return tier() == "unit"
 }
 
 // Integration reports whether the process runs in the integration test tier,
 // where infra-unavailable skips become failures (require-mode).
 func Integration() bool {
-	return strings.TrimSpace(os.Getenv(EnvVar)) == "integration"
+	return tier() == "integration"
 }
 
 // Refuse returns an error wrapping ErrUnitTier when running in the unit tier,
