@@ -1,0 +1,9 @@
+formula = "aspect-audit"
+type = "aspect"
+version = 1
+
+[[advice]]
+target = "implement"
+[advice.before]
+id = "audit-{step.id}"
+title = "Audit before {step.id}"

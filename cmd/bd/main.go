@@ -1127,6 +1127,14 @@ var rootCmd = &cobra.Command{
 			skipsStoreInit = true
 		}
 
+		// D6: bd cook only needs the store for --persist; otherwise it is a
+		// parser, and gastown's checklist render must not open Dolt.
+		if cmdName == "cook" && !isSubcommand {
+			if persist, _ := cmd.Flags().GetBool("persist"); !persist {
+				skipsStoreInit = true
+			}
+		}
+
 		// Skip for root command with no subcommand (just shows help)
 		if cmd.Parent() == nil && cmdName == cmd.Use {
 			skipsStoreInit = true

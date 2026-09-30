@@ -1,0 +1,15 @@
+# A step whose condition is false under the default is not cooked.
+formula = "wf-conditional"
+version = 1
+
+[vars.docs]
+default = "false"
+
+[[steps]]
+id = "code"
+title = "Code"
+
+[[steps]]
+id = "docs"
+title = "Docs"
+condition = "{{docs}}"

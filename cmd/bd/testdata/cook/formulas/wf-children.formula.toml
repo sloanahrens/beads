@@ -1,0 +1,25 @@
+formula = "wf-children"
+version = 1
+
+[[steps]]
+id = "prep"
+title = "Prep"
+
+[[steps]]
+id = "fanout"
+title = "Fan out"
+needs = ["prep"]
+
+[[steps.children]]
+id = "left"
+title = "Left"
+
+[[steps.children]]
+id = "right"
+title = "Right"
+type = "bug"
+
+[[steps]]
+id = "join"
+title = "Join"
+needs = ["fanout"]

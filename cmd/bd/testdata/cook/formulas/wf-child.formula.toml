@@ -1,0 +1,13 @@
+# extends: overrides a parent step in place and appends a new one.
+formula = "wf-child"
+version = 1
+extends = ["wf-parent"]
+
+[[steps]]
+id = "plan"
+title = "Plan (child override)"
+
+[[steps]]
+id = "verify"
+title = "Verify"
+needs = ["implement"]

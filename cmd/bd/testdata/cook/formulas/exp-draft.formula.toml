@@ -1,0 +1,13 @@
+# Standalone expansion: cooked by materializing its template on "main".
+formula = "exp-draft"
+type = "expansion"
+version = 1
+
+[[template]]
+id = "{target}.draft"
+title = "Draft: {target.title}"
+
+[[template]]
+id = "{target}.refine"
+title = "Refine: {target.title}"
+needs = ["{target}.draft"]

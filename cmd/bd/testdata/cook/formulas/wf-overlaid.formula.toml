@@ -1,0 +1,18 @@
+# The overlay in ../overlays skips "review" and appends to "merge".
+formula = "wf-overlaid"
+version = 1
+
+[[steps]]
+id = "prepare"
+title = "Prepare"
+
+[[steps]]
+id = "review"
+title = "Review"
+needs = ["prepare"]
+
+[[steps]]
+id = "merge"
+title = "Merge"
+description = "Merge it."
+needs = ["review"]

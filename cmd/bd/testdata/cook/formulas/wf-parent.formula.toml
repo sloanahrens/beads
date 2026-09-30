@@ -1,0 +1,12 @@
+formula = "wf-parent"
+description = "Base workflow"
+version = 1
+
+[[steps]]
+id = "plan"
+title = "Plan"
+
+[[steps]]
+id = "implement"
+title = "Implement"
+needs = ["plan"]

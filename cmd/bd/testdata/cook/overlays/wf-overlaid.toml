@@ -1,0 +1,13 @@
+[[step-overrides]]
+step_id = "review"
+mode = "skip"
+
+[[step-overrides]]
+step_id = "merge"
+mode = "append"
+description = "Rig note: run the gate first."
+
+[[step-overrides]]
+step_id = "gone"
+mode = "replace"
+description = "stale"

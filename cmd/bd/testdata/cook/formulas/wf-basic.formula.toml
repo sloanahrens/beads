@@ -1,0 +1,37 @@
+# Vars, needs/depends_on, gate with a var, labels, priority, metadata.
+formula = "wf-basic"
+description = "Ship {{component}} to {{env}}"
+version = 1
+
+[vars.component]
+description = "Component name"
+required = true
+
+[vars.env]
+description = "Target environment"
+default = "staging"
+enum = ["staging", "prod"]
+
+[vars.ci_workflow]
+default = "ci.yml"
+
+[[steps]]
+id = "design"
+title = "Design {{component}}"
+description = "Write the design for {{component}}."
+labels = ["design"]
+priority = 1
+
+[[steps]]
+id = "build"
+title = "Build {{component}}"
+needs = ["design"]
+depends_on = ["design"]
+assignee = "builder"
+metadata = { owner = "ci", tier = 2 }
+
+[[steps]]
+id = "release"
+title = "Release to {{env}}"
+needs = ["build"]
+gate = { type = "gh:run", await_id = "{{ci_workflow}}", timeout = "1h" }
