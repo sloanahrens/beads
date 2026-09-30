@@ -3,6 +3,7 @@ package dolt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -61,7 +62,6 @@ func TestDoltAddAndCommitPostSQLFailuresAreIndeterminate(t *testing.T) {
 		setup       func(sqlmock.Sqlmock)
 		closeDB     bool
 		cause       error
-		mysqlNumber uint16
 		wantContext string
 	}{
 		{
@@ -95,36 +95,6 @@ func TestDoltAddAndCommitPostSQLFailuresAreIndeterminate(t *testing.T) {
 			cause:       testConnectionLoss,
 			wantContext: "dolt commit after SQL mutation",
 		},
-		{
-			name: "typed deadlock DOLT_COMMIT",
-			setup: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(regexp.QuoteMeta("CALL DOLT_ADD(?)")).
-					WithArgs("issues").
-					WillReturnRows(sqlmock.NewRows([]string{"status"}))
-				mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM dolt_status WHERE staged = 1")).
-					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-				mock.ExpectQuery(regexp.QuoteMeta("CALL DOLT_COMMIT('-m', ?, '--author', ?)")).
-					WithArgs("bd: test commit", " <>").
-					WillReturnError(&mysql.MySQLError{Number: 1213, Message: "deadlock"})
-			},
-			mysqlNumber: 1213,
-			wantContext: "dolt commit after SQL mutation",
-		},
-		{
-			name: "typed lock wait DOLT_COMMIT",
-			setup: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(regexp.QuoteMeta("CALL DOLT_ADD(?)")).
-					WithArgs("issues").
-					WillReturnRows(sqlmock.NewRows([]string{"status"}))
-				mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM dolt_status WHERE staged = 1")).
-					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-				mock.ExpectQuery(regexp.QuoteMeta("CALL DOLT_COMMIT('-m', ?, '--author', ?)")).
-					WithArgs("bd: test commit", " <>").
-					WillReturnError(&mysql.MySQLError{Number: 1205, Message: "lock wait timeout"})
-			},
-			mysqlNumber: 1205,
-			wantContext: "dolt commit after SQL mutation",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -149,14 +119,46 @@ func TestDoltAddAndCommitPostSQLFailuresAreIndeterminate(t *testing.T) {
 			if tc.cause != nil && !errors.Is(err, tc.cause) {
 				t.Errorf("doltAddAndCommit() error = %v, want cause %v", err, tc.cause)
 			}
-			if tc.mysqlNumber != 0 {
-				var mysqlErr *mysql.MySQLError
-				if !errors.As(err, &mysqlErr) || mysqlErr.Number != tc.mysqlNumber {
-					t.Errorf("doltAddAndCommit() error = %v, want MySQL %d", err, tc.mysqlNumber)
-				}
-			}
 			if !strings.Contains(err.Error(), tc.wantContext) {
 				t.Errorf("doltAddAndCommit() error = %q, want context %q", err, tc.wantContext)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet sqlmock expectations: %v", err)
+			}
+		})
+	}
+}
+
+// TestDoltAddAndCommitReplaysSerializationFailure pins be-321: a DOLT_COMMIT
+// that loses a serialization race (1213/1205) was rolled back by Dolt, so the
+// post-SQL version commit is staged and committed again instead of failing.
+func TestDoltAddAndCommitReplaysSerializationFailure(t *testing.T) {
+	for _, number := range []uint16{1213, 1205} {
+		t.Run(fmt.Sprint(number), func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+
+			for _, commitErr := range []error{&mysql.MySQLError{Number: number, Message: "serialization failure"}, nil} {
+				mock.ExpectQuery(regexp.QuoteMeta("CALL DOLT_ADD(?)")).
+					WithArgs("issues").
+					WillReturnRows(sqlmock.NewRows([]string{"status"}))
+				mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM dolt_status WHERE staged = 1")).
+					WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+				commit := mock.ExpectQuery(regexp.QuoteMeta("CALL DOLT_COMMIT('-m', ?, '--author', ?)")).
+					WithArgs("bd: test commit", " <>")
+				if commitErr != nil {
+					commit.WillReturnError(commitErr)
+				} else {
+					commit.WillReturnRows(sqlmock.NewRows([]string{"hash"}).AddRow("abc"))
+				}
+			}
+
+			store := &DoltStore{db: db}
+			if err := store.doltAddAndCommit(context.Background(), []string{"issues"}, "bd: test commit"); err != nil {
+				t.Fatalf("doltAddAndCommit() error = %v, want replayed to success", err)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet sqlmock expectations: %v", err)
