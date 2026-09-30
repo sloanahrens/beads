@@ -18,15 +18,15 @@ import (
 func newTestStore(t *testing.T) *dolt.DoltStore {
 	t.Helper()
 	testutil.RequireDoltBinary(t)
-	if utils.DoltTestServerPort == 0 {
-		t.Skip("Test Dolt server not running, skipping test")
+	if DoltTestServerPort == 0 {
+		testutil.SkipOrFailUnavailable(t, "Test Dolt server not running, skipping test")
 	}
 	ctx := context.Background()
 	dbName := uniqueTestDBName(t)
 	store, err := dolt.New(ctx, &dolt.Config{
 		Path:            t.TempDir(),
 		Database:        dbName,
-		ServerPort:      utils.DoltTestServerPort,
+		ServerPort:      DoltTestServerPort,
 		CreateIfMissing: true, // test creates fresh database
 	})
 	if err != nil {
