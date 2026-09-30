@@ -956,7 +956,7 @@ func TestAutoExportGitAddFailureExitsNonZero(t *testing.T) {
 		return string(out)
 	}
 
-	run("init", "--prefix", "agf", "--quiet", "--non-interactive", "--skip-hooks", "--skip-agents")
+	run(append([]string{"init", "--prefix", "agf", "--quiet", "--non-interactive", "--skip-hooks", "--skip-agents"}, serverInitArgs(t)...)...)
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".beads/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1272,7 +1272,7 @@ func TestAutoExportSkipsEmptyExportOverPopulatedJSONL(t *testing.T) {
 		return string(out)
 	}
 
-	run("init", "--prefix", "dl", "--non-interactive")
+	run(append([]string{"init", "--prefix", "dl", "--non-interactive"}, serverInitArgs(t)...)...)
 	run("config", "set", "export.path", "custom.jsonl")
 
 	jsonlPath := filepath.Join(dir, ".beads", "custom.jsonl")
@@ -1316,7 +1316,7 @@ func TestAutoExportSkipsWhenExistingJSONLHasIDsMissingFromStore(t *testing.T) {
 		return string(out)
 	}
 
-	run("init", "--prefix", "dl", "--non-interactive")
+	run(append([]string{"init", "--prefix", "dl", "--non-interactive"}, serverInitArgs(t)...)...)
 	run("config", "set", "export.path", "custom.jsonl")
 	run("create", "local issue", "-p", "2")
 
@@ -1357,7 +1357,10 @@ func autoExportDataLossTestEnv(home string) []string {
 		}
 		env = append(env, e)
 	}
-	return append(env, "HOME="+home, "BEADS_DOLT_AUTO_START=0", "BEADS_NO_DAEMON=1", "BD_DISABLE_METRICS=1", "BD_DISABLE_EVENT_FLUSH=1")
+	// BEADS_TEST_SERVER lets bd connect to the shared test Dolt server that
+	// serverInitArgs points init at; without it the guard refuses test
+	// databases on any server.
+	return append(env, "HOME="+home, "BEADS_DOLT_AUTO_START=0", "BEADS_NO_DAEMON=1", "BD_DISABLE_METRICS=1", "BD_DISABLE_EVENT_FLUSH=1", "BEADS_TEST_SERVER=1")
 }
 
 // ---------------------------------------------------------------------------

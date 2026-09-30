@@ -18,7 +18,7 @@ env:
 
 jobs:
   conformance:
-    name: Storage backend conformance (embedded Dolt oracle)
+    name: Storage backend conformance (Dolt server)
     timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
@@ -29,5 +29,5 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Run conformance (embedded Dolt oracle)
+      - name: Run conformance (Dolt server)
         run: ./scripts/conformance.sh

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -128,4 +129,18 @@ func captureBootstrapStderr(t *testing.T, fn func()) string {
 	out := <-done
 	_ = r.Close()
 	return out
+}
+
+// serverInitArgs returns the `bd init` flags that point a subprocess at the
+// shared test Dolt server with a database of its own, dropped on cleanup. It
+// skips the test when no test server is running: with embedded Dolt gone, a
+// bare `bd init` needs a server.
+func serverInitArgs(t *testing.T) []string {
+	t.Helper()
+	if testDoltServerPort == 0 {
+		t.Skip("Dolt test server not available")
+	}
+	database := uniqueTestDBName(t)
+	t.Cleanup(func() { dropTestDatabase(database, testDoltServerPort) })
+	return []string{"--server-port", strconv.Itoa(testDoltServerPort), "--database", database}
 }

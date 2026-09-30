@@ -1649,20 +1649,6 @@ func TestShouldUseExternalDoltStatus(t *testing.T) {
 			want:              true,
 		},
 		{
-			// Proxied-server mode is excluded from the shared-server
-			// override (matches main.go's !psm guard): bd talks through the
-			// proxy, so keep the non-external path even if the shared-server
-			// flag is also set.
-			name: "proxied-server mode + shared-server flag stays non-external",
-			cfg: &configfile.Config{
-				Backend:  "dolt",
-				DoltMode: configfile.DoltModeProxiedServer,
-			},
-			autoStartDisabled: false,
-			sharedServerMode:  true,
-			want:              false,
-		},
-		{
 			name: "server mode + local host + auto-start disabled routes to external (be-0eyj)",
 			cfg: &configfile.Config{
 				Backend:        "dolt",

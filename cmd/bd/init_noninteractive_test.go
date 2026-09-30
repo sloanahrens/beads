@@ -135,7 +135,7 @@ func TestInitNonInteractiveAutoExportDefaultOffAndOptIn(t *testing.T) {
 	bd := buildBDForInitTests(t)
 	dir := t.TempDir()
 
-	runBDForAutoExportInitTest(t, bd, dir, "init", "--prefix", "test", "--quiet", "--non-interactive", "--skip-hooks", "--skip-agents")
+	runBDForAutoExportInitTest(t, bd, dir, append([]string{"init", "--prefix", "test", "--quiet", "--non-interactive", "--skip-hooks", "--skip-agents"}, serverInitArgs(t)...)...)
 
 	if got := strings.TrimSpace(runBDStdoutForAutoExportInitTest(t, bd, dir, "config", "get", "export.auto")); got != "false" {
 		t.Fatalf("export.auto default = %q, want false", got)
@@ -173,7 +173,11 @@ func runBDStdoutForAutoExportInitTest(t *testing.T, bd, dir string, args ...stri
 	cmd.Env = append(os.Environ(), "BD_NON_INTERACTIVE=1")
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("bd %v failed: %v", args, err)
+		var stderr []byte
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("bd %v failed: %v\n%s", args, err, stderr)
 	}
 	return string(out)
 }

@@ -1693,13 +1693,6 @@ func TestInit_WithBEADS_DIR_DoltBackend(t *testing.T) {
 		t.Fatalf("Init with BEADS_DIR and Dolt backend failed: %v", err)
 	}
 
-	// In embedded mode (default), the engine creates .beads/embeddeddolt/ —
-	// .beads/dolt/ should NOT be created (GH#2903).
-	unexpectedDoltPath := filepath.Join(beadsDirPath, "dolt")
-	if _, err := os.Stat(unexpectedDoltPath); err == nil {
-		t.Errorf("Empty .beads/dolt/ should not be created in embedded mode: %s", unexpectedDoltPath)
-	}
-
 	// Verify database was NOT created at CWD
 	cwdDoltPath := filepath.Join(cwdPath, ".beads", "dolt")
 	if _, err := os.Stat(cwdDoltPath); err == nil {

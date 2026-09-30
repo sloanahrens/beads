@@ -21,10 +21,12 @@ func TestIsBackupAutoEnabled(t *testing.T) {
 		wantResult   bool
 	}{
 		{
-			name:       "default + git remote → enabled",
+			// Embedded mode, the only place the default used to auto-enable,
+			// is gone: an unset default is off even with a git remote.
+			name:       "default + git remote → disabled",
 			envVal:     "\x00",
 			hasRemote:  true,
-			wantResult: true,
+			wantResult: false,
 		},
 		{
 			name:       "default + no git remote → disabled",
