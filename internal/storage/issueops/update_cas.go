@@ -49,8 +49,16 @@ func CheckExpectedFieldsInTx(ctx context.Context, tx DBTX, id string, expectedAs
 	if err != nil {
 		return fmt.Errorf("failed to read assignee/status for %s: %w", id, err)
 	}
-	if expectedAssignee != nil && !actorMatches(assignee.String, *expectedAssignee) {
-		return fmt.Errorf("%w: %s is held by %q, expected %q", storage.ErrAssigneeMismatch, id, assignee.String, *expectedAssignee)
+	return ExpectedFieldsMismatch(id, assignee.String, status, expectedAssignee, expectedStatus)
+}
+
+// ExpectedFieldsMismatch is the comparison half of CheckExpectedFieldsInTx, for
+// a caller that already holds the row it read inside its own transaction (the
+// batch-close and delete guards, and the unit-of-work legs that have no
+// transaction handle). It returns nil when every non-nil guard holds.
+func ExpectedFieldsMismatch(id, assignee, status string, expectedAssignee, expectedStatus *string) error {
+	if expectedAssignee != nil && !actorMatches(assignee, *expectedAssignee) {
+		return fmt.Errorf("%w: %s is held by %q, expected %q", storage.ErrAssigneeMismatch, id, assignee, *expectedAssignee)
 	}
 	if expectedStatus != nil && status != *expectedStatus {
 		return fmt.Errorf("%w: %s has status %q, expected %q", storage.ErrStatusMismatch, id, status, *expectedStatus)

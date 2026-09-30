@@ -95,6 +95,21 @@ type DeleteRequest struct {
 	// NOW, which an edge added since its read may have grown. A caller that
 	// needs the closure itself pinned wants DryRun's preview and not this.
 	ExpectedVersion *int64
+	// ExpectedStatus and ExpectedAssignee are write-time guards on EVERY named
+	// row, with UpdateRequest's semantics (a pointer to "" as ExpectedAssignee
+	// means "expected unassigned"; nil disables a guard). Unlike
+	// ExpectedVersion they are not per-row tokens, so they are legal on a
+	// batch: "delete these only while they are still open" is one question
+	// asked of each row.
+	//
+	// A MISMATCH ON ANY NAMED ROW REFUSES THE WHOLE REQUEST with a
+	// *DeleteGuardError naming every mismatched id, and NOTHING IS DELETED —
+	// the same all-or-nothing the existence probe applies. They run after the
+	// existence probe and before the dependents guard, in the deleting
+	// transaction. Neither Force nor Cascade bypasses them, and under Cascade
+	// they guard the named rows only, never the closure.
+	ExpectedStatus   *string
+	ExpectedAssignee *string
 	// Cascade also deletes the TRANSITIVE CLOSURE of everything that depends
 	// on the named rows, in both planes. It is what `bd delete --cascade`
 	// asks for.
@@ -156,6 +171,27 @@ type DeleteRequest struct {
 // EVERY NUMBER DESCRIBES THE SAME SNAPSHOT, because the guard, the cascade
 // expansion, the deletion and the reference rewrite all run in ONE
 // transaction. See Deleter.Delete.
+// DeleteGuardError refuses a deletion whose ExpectedStatus/ExpectedAssignee
+// guard failed on at least one named row. IDs and Errs are parallel, in request
+// order; each Err matches ErrStatusMismatch or ErrAssigneeMismatch.
+type DeleteGuardError struct {
+	IDs  []string
+	Errs []error
+}
+
+func (e *DeleteGuardError) Error() string {
+	msgs := make([]string, len(e.Errs))
+	for i, err := range e.Errs {
+		msgs[i] = err.Error()
+	}
+	return fmt.Sprintf("delete refused, nothing deleted: %d id(s) failed a write-time guard: %s",
+		len(e.IDs), strings.Join(msgs, "; "))
+}
+
+// Unwrap exposes every per-row mismatch, so errors.Is matches
+// ErrStatusMismatch and ErrAssigneeMismatch.
+func (e *DeleteGuardError) Unwrap() []error { return e.Errs }
+
 type DeleteResult struct {
 	// DryRun echoes the request, so a result value carries whether its numbers
 	// describe rows that are gone or rows that would go without the caller

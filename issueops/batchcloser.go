@@ -9,6 +9,15 @@ import "context"
 type BatchCloseItem struct {
 	IssueID string
 	Reason  string
+	// ExpectedStatus and ExpectedAssignee are write-time guards with
+	// UpdateRequest's semantics: checked inside the batch's transaction before
+	// this item closes, and a mismatch refuses THIS ITEM with
+	// ErrStatusMismatch/ErrAssigneeMismatch while the rest of the batch goes
+	// on. nil disables a guard; a pointer to "" as ExpectedAssignee means
+	// "expected unassigned". Force never bypasses them: they are
+	// preconditions, not policy.
+	ExpectedStatus   *string
+	ExpectedAssignee *string
 }
 
 // CloseBatchRequest describes one closure of many issues.

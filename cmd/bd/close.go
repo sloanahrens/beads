@@ -58,7 +58,15 @@ the flags appear in the command line.`,
 			}
 		}()
 
+		guards, err := writeGuardsFromFlags(cmd)
+		if err != nil {
+			return err
+		}
+
 		if usesProxiedServer() {
+			if guards.set() {
+				return failKind(kindInvalidArgs, "--if-status/--if-assignee are not supported in proxied-server mode")
+			}
 			return runCloseProxiedServer(cmd, rootCtx, args)
 		}
 
@@ -137,7 +145,7 @@ the flags appear in the command line.`,
 		// inside that transaction, and the engine's own is_blocked guard runs
 		// there too (GH#962), so there is no read-then-write TOCTOU window
 		// between the check and the close.
-		plan := closeDirectPreflight(results, resolvedIDs, reasons, force)
+		plan := closeDirectPreflight(results, resolvedIDs, reasons, force, guards)
 		outcomes, claimedNext := closeDirectRun(opsCtx, closeDirectBatches(plan.items), len(resolvedIDs),
 			session, force, postCloseStore, closeClaimNextRequest(claimNext, continueFlag))
 
@@ -157,7 +165,7 @@ the flags appear in the command line.`,
 				// The CLI's own close policy refused this argument, so the
 				// batch never saw it.
 				fmt.Fprintln(os.Stderr, plan.refusals[i])
-				closeFailures = append(closeFailures, idOutcome{ID: id, Kind: kindRefused, Message: plan.refusals[i]})
+				closeFailures = append(closeFailures, idOutcome{ID: id, Kind: plan.refusalKinds[i], Message: plan.refusals[i]})
 				continue
 			}
 			if res.Err != nil {
@@ -402,6 +410,7 @@ func init() {
 	closeCmd.Flags().Bool("no-auto", false, "With --continue, show next step but don't claim it")
 	closeCmd.Flags().Bool("suggest-next", false, "Show newly unblocked issues after closing")
 	closeCmd.Flags().Bool("claim-next", false, "Automatically claim the next highest priority available issue")
+	registerWriteGuardFlags(closeCmd, "close")
 	closeCmd.Flags().String("session", "", "Claude Code session ID (or set CLAUDE_SESSION_ID env var)")
 	closeCmd.ValidArgsFunction = issueIDCompletion
 	rootCmd.AddCommand(closeCmd)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/storage/dberrors"
 	"github.com/steveyegge/beads/internal/storage/domain"
+	storageissueops "github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/workapi"
 	publicops "github.com/steveyegge/beads/issueops"
@@ -132,6 +133,16 @@ func deleteInUOW(ctx context.Context, uw UnitOfWork, req publicops.DeleteRequest
 			return publicops.DeleteResult{}, fmt.Errorf("%w: expected %d, got %d",
 				publicops.ErrVersionMismatch, *req.ExpectedVersion, current)
 		}
+	}
+
+	// The write-time guards, over the rows the probe loaded in this unit of
+	// work: the same rule, and the same order, as the store-backed body.
+	rows := make([]*types.Issue, 0, len(present))
+	for _, row := range present {
+		rows = append(rows, row)
+	}
+	if err := storageissueops.CheckDeleteGuards(req, rows); err != nil {
+		return publicops.DeleteResult{}, err
 	}
 
 	// The guard runs only when the request did not already say what to do

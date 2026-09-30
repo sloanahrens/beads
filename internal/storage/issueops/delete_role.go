@@ -91,6 +91,10 @@ func DeleteInTx(ctx context.Context, tx *sql.Tx, req publicops.DeleteRequest) (p
 		}
 	}
 
+	if err := CheckDeleteGuards(req, found); err != nil {
+		return publicops.DeleteResult{}, err
+	}
+
 	idSet := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		idSet[id] = true
@@ -363,4 +367,35 @@ func RewriteDeletedReferencesInTx(ctx context.Context, tx DBTX, deletedIDs []str
 // `be-12`.
 func DeletedReferencePattern(id string) *regexp.Regexp {
 	return regexp.MustCompile(`(^|[^A-Za-z0-9_-])(` + regexp.QuoteMeta(id) + `)($|[^A-Za-z0-9_-])`)
+}
+
+// CheckDeleteGuards applies DeleteRequest.ExpectedStatus/ExpectedAssignee to
+// the rows the existence probe loaded in the deleting transaction, in request
+// order. It returns a *DeleteGuardError naming every mismatched id, or nil.
+// Both deletion bodies call it, so the rule has one definition.
+func CheckDeleteGuards(req publicops.DeleteRequest, rows []*types.Issue) error {
+	if req.ExpectedStatus == nil && req.ExpectedAssignee == nil {
+		return nil
+	}
+	byID := make(map[string]*types.Issue, len(rows))
+	for _, row := range rows {
+		if row != nil {
+			byID[row.ID] = row
+		}
+	}
+	var guardErr publicops.DeleteGuardError
+	for _, id := range req.IDs {
+		row := byID[id]
+		if row == nil {
+			continue // the existence probe already refused a missing id
+		}
+		if err := ExpectedFieldsMismatch(id, row.Assignee, string(row.Status), req.ExpectedAssignee, req.ExpectedStatus); err != nil {
+			guardErr.IDs = append(guardErr.IDs, id)
+			guardErr.Errs = append(guardErr.Errs, err)
+		}
+	}
+	if len(guardErr.IDs) > 0 {
+		return &guardErr
+	}
+	return nil
 }
