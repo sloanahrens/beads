@@ -562,6 +562,14 @@ type AroundAdvice struct {
 
 // Validate checks the formula for structural errors.
 func (f *Formula) Validate() error {
+	if errs := f.validationProblems(); len(errs) > 0 {
+		return fmt.Errorf("formula validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return nil
+}
+
+// validationProblems lists every structural error, one message each.
+func (f *Formula) validationProblems() []string {
 	var errs []string
 
 	if f.Formula == "" {
@@ -673,11 +681,7 @@ func (f *Formula) Validate() error {
 		}
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("formula validation failed:\n  - %s", strings.Join(errs, "\n  - "))
-	}
-
-	return nil
+	return errs
 }
 
 // collectChildIDs recursively collects step IDs from children.
