@@ -16,7 +16,6 @@ import (
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/remotecache"
-	"github.com/steveyegge/beads/internal/tracker"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/issueops"
 )
@@ -1011,11 +1010,6 @@ Examples:
 
 // recognizedConfigPrefixes lists valid top-level config namespaces.
 // Keys under custom.* are always accepted (user-extensible).
-//
-// Tracker namespaces (jira., linear., github., ado., ...) are NOT listed here:
-// they are derived from the tracker registry at runtime via
-// allRecognizedConfigPrefixes, so the recognizer cannot drift out of sync when
-// a new tracker is added (GH#4427).
 var recognizedConfigPrefixes = []string{
 	"export.", "import.", "dolt.", "custom.",
 	"status.", "types.", "doctor.suppress.", "routing.", "sync.", "git.",
@@ -1051,18 +1045,9 @@ func validateStorageClassConfig(key, value string) error {
 	return nil
 }
 
-// allRecognizedConfigPrefixes returns the static namespaces plus the prefix of
-// every registered tracker ("ado.", "jira.", ...). Deriving tracker prefixes
-// from the registry keeps config-key recognition in sync with the set of
-// trackers compiled into bd instead of a hand-maintained allowlist (GH#4427).
+// allRecognizedConfigPrefixes returns the recognized config namespaces.
 func allRecognizedConfigPrefixes() []string {
-	names := tracker.List()
-	prefixes := make([]string, 0, len(recognizedConfigPrefixes)+len(names))
-	prefixes = append(prefixes, recognizedConfigPrefixes...)
-	for _, name := range names {
-		prefixes = append(prefixes, name+".")
-	}
-	return prefixes
+	return recognizedConfigPrefixes
 }
 
 // recognizedConfigKeys lists valid non-namespaced config keys.

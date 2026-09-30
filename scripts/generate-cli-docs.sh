@@ -40,11 +40,6 @@ fails if the committed copies are stale.
 When docs/cli-docs.pin names a release tag, bd is built from that tag
 (the published docs describe the pinned release, not this checkout) and a
 supplied binary is ignored; set BD_DOCS_IGNORE_PIN=1 to bypass the pin.
-
-If the resolved bd binary is CGO-enabled it emits the full `bd federation`
-help tree that CI (CGO_ENABLED=0) stubs out; the script rebuilds a pinned
-pure-go binary to keep committed docs in sync. Set BD_DOCS_ALLOW_CGO=1 to
-bypass that rebuild and trust the supplied binary as-is.
 EOF
             exit 0
             ;;
@@ -95,36 +90,6 @@ else
     BD="$TMP_BUILD_DIR/bd"
     echo "Building temporary bd for docs generation..."
     (cd "$PROJECT_ROOT" && CGO_ENABLED=0 go build -tags gms_pure_go -o "$BD" ./cmd/bd/)
-fi
-
-# Guard against a CGO-enabled bd: it exposes the full `bd federation` subcommand tree
-# that CI never produces (scripts/ci/pr-policy.sh build_docs_binary uses env
-# CGO_ENABLED=0 go build). A CGO build therefore emits ~hundreds of lines of federation
-# help that the committed, CI-built docs stub out ("built without CGO support"), so a
-# naive regen on a machine with a C compiler produces spurious federation churn.
-#
-# The pure-go federation stub prints "Federation commands require CGO" (see
-# cmd/bd/federation_nocgo.go); a CGO build does not. If the resolved binary is missing
-# that stub marker, warn and rebuild a pinned CGO_ENABLED=0 -tags gms_pure_go binary so
-# the committed docs always match CI. Set BD_DOCS_ALLOW_CGO=1 to bypass the rebuild and
-# trust the supplied binary as-is (e.g. to deliberately regenerate the full federation
-# tree); you then own any federation churn the diff introduces.
-if [ -z "$PINNED_BD" ] && [ -x "$BD" ] && ! "$BD" federation --help 2>&1 | grep -q "Federation commands require CGO"; then
-    if [ "${BD_DOCS_ALLOW_CGO:-0}" = "1" ]; then
-        echo "WARNING: $BD looks CGO-enabled and emits the full 'bd federation' help tree," >&2
-        echo "         which CI's pure-go docs build stubs out. BD_DOCS_ALLOW_CGO=1 is set," >&2
-        echo "         using it anyway; expect federation doc churn unless that is intended." >&2
-    else
-        echo "WARNING: $BD looks CGO-enabled; its 'bd federation' help differs from CI's" >&2
-        echo "         pure-go build and would add spurious federation doc churn." >&2
-        echo "         Rebuilding a pinned pure-go (CGO_ENABLED=0 -tags gms_pure_go) binary" >&2
-        echo "         for CI-consistent docs. Set BD_DOCS_ALLOW_CGO=1 to use it as-is." >&2
-        if [ -z "$TMP_BUILD_DIR" ]; then
-            TMP_BUILD_DIR="$(mktemp -d)"
-        fi
-        BD="$TMP_BUILD_DIR/bd-pure"
-        (cd "$PROJECT_ROOT" && CGO_ENABLED=0 go build -tags gms_pure_go -o "$BD" ./cmd/bd/)
-    fi
 fi
 
 if [ ! -x "$BD" ]; then

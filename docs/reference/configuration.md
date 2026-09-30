@@ -375,68 +375,6 @@ federation:
 
 `bd config validate` checks the remote URL format, the sovereignty tier, `federation.allowed-remote-patterns`, and `routing.mode`.
 
-## Integration Configuration
-
-Tracker settings are project-level config under the tracker's namespace; secrets (`jira.api_token`, `linear.api_key`, `github.token`, `gitlab.token`, `ado.pat`) are YAML-routed and better supplied as environment variables. Every tracker records `<tracker>.last_sync` automatically after a sync, enabling incremental syncs.
-
-### Jira
-
-```bash
-bd config set jira.url "https://company.atlassian.net"
-bd config set jira.project "PROJ"
-bd config set jira.projects "PROJ1,PROJ2"   # Multiple projects (comma-separated)
-export JIRA_API_TOKEN="YOUR_TOKEN"          # or: bd config set jira.api_token ...
-
-# Map bd statuses to Jira statuses
-bd config set jira.status_map.open "To Do"
-bd config set jira.status_map.in_progress "In Progress"
-bd config set jira.status_map.closed "Done"
-
-# Map bd issue types to Jira issue types
-bd config set jira.type_map.bug "Bug"
-bd config set jira.type_map.feature "Story"
-bd config set jira.type_map.task "Task"
-
-# Set Jira custom fields on pushed issues
-bd config set jira.custom_fields.customfield_10042 '{"value":"AI Platform"}'
-bd config set jira.custom_fields.Story.customfield_10042 '{"value":"AI Platform"}'
-```
-
-`jira.custom_fields.<field>` applies to every issue pushed to Jira. `jira.custom_fields.<JiraType>.<field>` applies only when the mapped Jira issue type matches `<JiraType>`; per-type fields override global fields with the same field key. Values beginning with `{` or `[` are sent as JSON (useful for select-like fields); other values are sent as strings. `jira.url`, `jira.project`/`jira.projects`, and `jira.api_token` fall back to the `JIRA_URL`, `JIRA_PROJECT`/`JIRA_PROJECTS`, and `JIRA_API_TOKEN` environment variables. See [bd jira](/cli-reference/jira).
-
-### Linear
-
-```bash
-export LINEAR_API_KEY="lin_api_YOUR_API_KEY"    # Settings → API → Personal API keys
-
-bd config set linear.team_id "team-uuid-here"
-bd config set linear.team_ids "uuid-1,uuid-2"   # Multiple teams (or LINEAR_TEAM_IDS)
-```
-
-When `linear.team_ids` is set, `bd linear sync` fetches issues from all listed teams; push with multiple teams configured requires an explicit `--team`. The singular `linear.team_id` remains supported.
-
-Mapping namespaces — `linear.priority_map.*` (Linear 0–4 → beads 0–4), `linear.state_map.*` (Linear state types and custom state names → beads statuses, e.g. `bd config set linear.state_map.in_review in_progress`), `linear.label_type_map.*` (Linear labels → bd issue types), and `linear.relation_map.*` (Linear relations → bd dependencies; imported only when pulling with `--relations`) — are documented with defaults in [bd linear](/cli-reference/linear).
-
-Staleness detection: after each successful pull, `bd` writes a timestamp to `.beads/last_pull` (a local-only, per-machine file covered by the `.beads/.gitignore` template). `bd linear sync --pull-if-stale` pulls only when data is older than the threshold (`--threshold`, default 20m), and a 5-minute debounce prevents agent loops. `bd prime` and other core commands never contact Linear — run `bd linear sync --pull-if-stale` from a session-start hook to keep data fresh in agent sessions.
-
-### GitHub
-
-```bash
-bd config set github.org "myorg"
-bd config set github.repo "myrepo"
-export GITHUB_TOKEN="YOUR_TOKEN"    # or: bd config set github.token ...
-
-# Map bd labels to GitHub labels
-bd config set github.label_map.bug "bug"
-bd config set github.label_map.feature "enhancement"
-```
-
-See [bd github](/cli-reference/github).
-
-### Azure DevOps
-
-Connection keys (`ado.pat`, `ado.org`, `ado.project`, `ado.projects`, `ado.url`) each have an `AZURE_DEVOPS_*` environment variable equivalent; config keys take priority over env vars. When `ado.projects` is set, `bd ado sync` fetches work items from all listed projects in a single query. State maps default to the Agile process template (override with `ado.state_map.*` / `ado.type_map.*` for Scrum or CMMI), and priority mapping (ADO 1–4 ↔ beads 0–4, with backlog collapsing to low) is automatic and not configurable. Full setup, mapping tables, and sync commands: [Azure DevOps integration](/integrations/azure-devops) and [bd ado](/cli-reference/ado).
-
 ## Environment Variables
 
 The Viper env prefix is `BD_`. Config keys map to env vars by upper-casing and replacing `.` and `-` with `_` (e.g. `dolt.auto-commit` → `BD_DOLT_AUTO_COMMIT`, `validation.on-create` → `BD_VALIDATION_ON_CREATE`).

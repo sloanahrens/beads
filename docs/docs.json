@@ -124,10 +124,6 @@
       "destination": "/integrations/claude-code-plugin"
     },
     {
-      "source": "/ADO_CONFIG",
-      "destination": "/integrations/azure-devops"
-    },
-    {
       "source": "/COPILOT_INTEGRATION",
       "destination": "/integrations/github-copilot"
     },
@@ -310,8 +306,7 @@
           "integrations/windsurf",
           "integrations/mcp-server",
           "integrations/github-copilot",
-          "integrations/copilot-cli",
-          "integrations/azure-devops"
+          "integrations/copilot-cli"
         ]
       },
       {

@@ -698,9 +698,8 @@ configured adopts that origin as its Dolt remote first, exactly as 'bd dolt push
 does — so 'bd sync' works as a first-time federation bring-up step instead of
 reporting 'no remote' and doing nothing. Passing --remote never adopts anything.
 
-This is not 'bd federation sync', which syncs with named peer towns and takes a
---strategy ours|theirs to resolve whatever conflicts it meets. 'bd sync' targets
-the configured remote and has no such switch: what it cannot settle, it halts on.
+'bd sync' targets the configured remote and has no conflict-strategy switch:
+what it cannot settle, it halts on.
 
 Examples:
   bd sync                        # sync with the default remote

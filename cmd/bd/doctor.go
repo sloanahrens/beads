@@ -693,27 +693,6 @@ func runDiagnostics(path string) doctorResult {
 	legacyRemoteCheck := convertWithCategory(doctor.CheckLegacyCLIRemotes(path), doctor.CategoryFederation)
 	result.Checks = append(result.Checks, legacyRemoteCheck)
 
-	// Federation health checks (bd-wkumz.6)
-	// Check 8d: Federation remotesapi port accessibility
-	remotesAPICheck := convertWithCategory(doctor.CheckFederationRemotesAPI(path), doctor.CategoryFederation)
-	result.Checks = append(result.Checks, remotesAPICheck)
-	// Don't fail overall for federation issues - they're only relevant for Dolt users
-
-	// Check 8e: Federation peer connectivity
-	peerConnCheck := convertWithCategory(doctor.CheckFederationPeerConnectivity(path), doctor.CategoryFederation)
-	result.Checks = append(result.Checks, peerConnCheck)
-
-	// Check 8f: Federation sync staleness
-	syncStalenessCheck := convertWithCategory(doctor.CheckFederationSyncStaleness(path), doctor.CategoryFederation)
-	result.Checks = append(result.Checks, syncStalenessCheck)
-
-	// Check 8g: Federation conflict detection
-	fedConflictsCheck := convertWithCategory(doctor.CheckFederationConflicts(path), doctor.CategoryFederation)
-	result.Checks = append(result.Checks, fedConflictsCheck)
-	if fedConflictsCheck.Status == statusError {
-		result.OverallOK = false // Unresolved conflicts are a real problem
-	}
-
 	// Check 8h: Dolt server mode configuration check
 	doltModeCheck := convertWithCategory(doctor.CheckDoltServerModeMismatch(path), doctor.CategoryFederation)
 	result.Checks = append(result.Checks, doltModeCheck)

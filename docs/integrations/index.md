@@ -47,5 +47,3 @@ These integrations use the Beads MCP server rather than a dedicated `bd setup` r
 
 - [Claude Code Plugin](/integrations/claude-code-plugin) — the packaged
   plugin with slash commands and MCP tools (`/plugin install beads`).
-- [Azure DevOps](/integrations/azure-devops) — configuration reference for
-  syncing beads with ADO work items.
