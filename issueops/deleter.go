@@ -166,11 +166,6 @@ type DeleteRequest struct {
 	DryRun bool
 }
 
-// DeleteResult reports one deletion.
-//
-// EVERY NUMBER DESCRIBES THE SAME SNAPSHOT, because the guard, the cascade
-// expansion, the deletion and the reference rewrite all run in ONE
-// transaction. See Deleter.Delete.
 // DeleteGuardError refuses a deletion whose ExpectedStatus/ExpectedAssignee
 // guard failed on at least one named row. IDs and Errs are parallel, in request
 // order; each Err matches ErrStatusMismatch or ErrAssigneeMismatch.
@@ -192,6 +187,11 @@ func (e *DeleteGuardError) Error() string {
 // ErrStatusMismatch and ErrAssigneeMismatch.
 func (e *DeleteGuardError) Unwrap() []error { return e.Errs }
 
+// DeleteResult reports one deletion.
+//
+// EVERY NUMBER DESCRIBES THE SAME SNAPSHOT, because the guard, the cascade
+// expansion, the deletion and the reference rewrite all run in ONE
+// transaction. See Deleter.Delete.
 type DeleteResult struct {
 	// DryRun echoes the request, so a result value carries whether its numbers
 	// describe rows that are gone or rows that would go without the caller
