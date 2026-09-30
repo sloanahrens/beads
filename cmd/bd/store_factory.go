@@ -6,24 +6,8 @@ import (
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/backends"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 )
-
-// newRegisteredBackendStore opens a store from the pluggable backend registry,
-// so the registry arm of the root pre-run's open goes through events-journal
-// activation like every other construction path.
-func newRegisteredBackendStore(ctx context.Context, name, beadsDir string, readOnly bool) (s storage.DoltStorage, err error) {
-	defer func() { s, err = activateEventsJournalStore(beadsDir, s, err) }()
-	backend, ok := backends.Lookup(name)
-	if !ok {
-		return nil, fmt.Errorf("storage backend %q is not registered", name)
-	}
-	if readOnly {
-		return backend.OpenReadOnly(ctx, beadsDir)
-	}
-	return backend.Open(ctx, beadsDir)
-}
 
 // newDoltStore creates a storage backend from an explicit config. It applies
 // events-journal activation here rather than in the caller — see the note at
@@ -50,9 +34,6 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (s storage.Dol
 		return nil, err
 	}
 	cfg = normalizeLoadedConfig(cfg)
-	if backend, ok := backends.Lookup(cfg.GetBackend()); ok {
-		return backend.Open(ctx, beadsDir)
-	}
 	if cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfig(ctx, beadsDir)
 	}
@@ -72,9 +53,6 @@ func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.D
 		return nil, err
 	}
 	cfg = normalizeLoadedConfig(cfg)
-	if backend, ok := backends.Lookup(cfg.GetBackend()); ok {
-		return backend.OpenReadOnly(ctx, beadsDir)
-	}
 	if cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfigWithOptions(ctx, beadsDir, &dolt.Config{ReadOnly: true})
 	}

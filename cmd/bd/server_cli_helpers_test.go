@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 )
@@ -86,4 +89,43 @@ func seedBatchTestIssues(t *testing.T, ctx context.Context, st storage.DoltStora
 			t.Fatalf("seed CreateIssue %s: %v", id, err)
 		}
 	}
+}
+
+// writeContractBackendConfig writes a metadata.json naming backend into a fresh
+// directory and returns it.
+func writeContractBackendConfig(t *testing.T, backend string) string {
+	t.Helper()
+	beadsDir := t.TempDir()
+	if err := (&configfile.Config{Backend: backend}).Save(beadsDir); err != nil {
+		t.Fatalf("save metadata.json: %v", err)
+	}
+	return beadsDir
+}
+
+// captureBootstrapStderr redirects os.Stderr for the duration of fn and returns
+// what was written. bd bootstrap surfaces the guard message through HandleError,
+// which writes to os.Stderr and returns an opaque exit error, so the message is
+// only observable here — not on the error returned by rootCmd.Execute().
+func captureBootstrapStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	fn()
+
+	os.Stderr = orig
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
 }

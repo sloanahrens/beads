@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -19,7 +18,6 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/httpapi"
-	"github.com/steveyegge/beads/internal/storage"
 )
 
 // TestServeFlags pins the flag surface. Every bound that is NOT here — the
@@ -129,78 +127,6 @@ func TestServeSkipsPostCommandMaintenance(t *testing.T) {
 	if runsPostCommandMaintenance("update", true) {
 		t.Error("strict readonly no longer suppresses post-command maintenance")
 	}
-}
-
-// TestServeRefusalsPromiseNothing is the honesty gate on the mode gate. The
-// refusal is typed so a caller can dispatch on it, and it must promise nothing
-// — claiming otherwise sends an operator to do the wrong work.
-//
-// The second case was, until bd-emv, the mirror image: it pinned the STAGED
-// refusal for dolt server mode and required its text to read as "not yet". That
-// wiring landed, so the case now asserts the reality it was staging for rather
-// than being deleted with the refusal. Deleting it would have left nothing
-// asserting that these workspaces are served: a later change could route them
-// back into a refusal and no test would notice.
-func TestServeRefusalsPromiseNothing(t *testing.T) {
-	t.Run("embedded is permanent", func(t *testing.T) {
-		err := errServeEmbedded()
-
-		var unsupported *storage.ErrUnsupported
-		if !errors.As(err, &unsupported) {
-			t.Fatalf("err = %v, want a typed storage.ErrUnsupported", err)
-		}
-		if unsupported.Op != "serve" {
-			t.Errorf("Op = %q, want serve", unsupported.Op)
-		}
-		// Backend names a BACKEND. The type documents it that way and it is the
-		// embryo of the pluggable-backend error taxonomy, so a topology string
-		// here would hand every downstream errors.As a mixed vocabulary.
-		if unsupported.Backend != "embedded-dolt" {
-			t.Errorf("Backend = %q, want embedded-dolt", unsupported.Backend)
-		}
-
-		msg := err.Error()
-		if !strings.Contains(msg, "embedded Dolt") {
-			t.Errorf("message does not name the workspace's actual backend: %q", msg)
-		}
-		for _, promise := range []string{"not yet", "coming", "tracked", "will be"} {
-			if strings.Contains(strings.ToLower(msg), promise) {
-				t.Errorf("permanent refusal hints at future support (%q): %q", promise, msg)
-			}
-		}
-	})
-
-	t.Run("the dolt server modes are served, not refused", func(t *testing.T) {
-		for _, tc := range []struct {
-			name  string
-			apply func(t *testing.T)
-		}{
-			{
-				name:  "server / external-server",
-				apply: func(t *testing.T) { serverMode = true },
-			},
-			{
-				name: "shared-server",
-				apply: func(t *testing.T) {
-					t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
-				},
-			},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				useStorageModeGlobals(t)
-				beadsDir := writeContractBackendConfig(t, configfile.BackendDolt)
-				tc.apply(t)
-				db, err := serveDatabaseSource(beadsDir)
-				if err != nil {
-					t.Fatalf("serveDatabaseSource() = %v, want nil: this mode has a SQL server and bd serve builds a provider for it", err)
-				}
-				if db.source != serveSourceProvider {
-					t.Errorf("source = %v, want serveSourceProvider", db.source)
-				}
-			})
-		}
-	})
-
 }
 
 // useStorageModeGlobals points the storage-mode accessors at the package
@@ -668,4 +594,71 @@ func TestServeHelpDescribesTheAuthPosture(t *testing.T) {
 	if usage := serveCmd.Flags().Lookup("allow-non-loopback").Usage; strings.Contains(usage, "no authentication") {
 		t.Errorf("--allow-non-loopback still advertises that the server has no authentication: %q", usage)
 	}
+}
+
+// TestServeServesTheDoltServerModes pins that every Dolt server mode is served
+// through the unit-of-work provider rather than refused.
+func TestServeServesTheDoltServerModes(t *testing.T) {
+	t.Run("the dolt server modes are served, not refused", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			apply func(t *testing.T)
+		}{
+			{
+				name:  "server / external-server",
+				apply: func(t *testing.T) { serverMode = true },
+			},
+			{
+				name: "shared-server",
+				apply: func(t *testing.T) {
+					t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				useStorageModeGlobals(t)
+				beadsDir := writeContractBackendConfig(t, configfile.BackendDolt)
+				tc.apply(t)
+				db, err := serveDatabaseSource(beadsDir)
+				if err != nil {
+					t.Fatalf("serveDatabaseSource() = %v, want nil: this mode has a SQL server and bd serve builds a provider for it", err)
+				}
+				if db.source != serveSourceProvider {
+					t.Errorf("source = %v, want serveSourceProvider", db.source)
+				}
+			})
+		}
+	})
+}
+
+// restoreServeGlobals snapshots the package state one in-process serve run can
+// touch and puts it back afterwards, so a registered backend and a bound server
+// cannot leak into the tests sharing this binary.
+//
+// The flag set is part of that state and the least obvious part of it: cobra
+// merges every inherited persistent flag into serveCmd's own FlagSet the first
+// time it parses one, so a run through rootCmd.Execute leaves `bd serve`
+// carrying --json, --db and the rest of the root's surface. That is what
+// TestServeFlags reads. ResetFlags plus the command's own registration function
+// is the un-merge cobra does not offer.
+func restoreServeGlobals(t *testing.T) {
+	t.Helper()
+	origStore, origDBPath := store, dbPath
+	origServer := serverMode
+	origAddr, origNonLoopback := serveAddr, serveAllowNonLoopback
+	origCtx, origCancel := rootCtx, rootCancel
+	origCmdCtx, origUseGlobals := cmdCtx, testModeUseGlobals
+	t.Cleanup(func() {
+		if store != nil && store != origStore {
+			store.Close()
+		}
+		serveCmd.ResetFlags()
+		registerServeFlags(serveCmd) // rebinds serveAddr/serveAllowNonLoopback to the defaults
+		store, dbPath = origStore, origDBPath
+		serverMode = origServer
+		serveAddr, serveAllowNonLoopback = origAddr, origNonLoopback
+		rootCtx, rootCancel = origCtx, origCancel
+		cmdCtx, testModeUseGlobals = origCmdCtx, origUseGlobals
+		rootCmd.SetArgs(nil)
+	})
 }

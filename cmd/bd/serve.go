@@ -14,7 +14,6 @@ import (
 	"github.com/steveyegge/beads/internal/eventsjournal"
 	"github.com/steveyegge/beads/internal/httpapi"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/backends"
 	"github.com/steveyegge/beads/internal/storage/contextinfo"
 	"github.com/steveyegge/beads/internal/storage/domain"
 	"github.com/steveyegge/beads/internal/storage/uow"
@@ -524,40 +523,13 @@ type serveDatabase struct {
 	backend string
 }
 
-// serveDatabaseSource classifies the workspace. It is both the mode gate and
-// the wiring decision, in one function, so the two can never disagree about one
-// workspace.
-//
-// THE REGISTRY IS CONSULTED FIRST, and that ordering is not a preference.
-// PersistentPreRunE dispatches the store open on backends.Lookup before
-// anything looks at Dolt mode, so a registered workspace opens its registered
-// store even with BEADS_DOLT_SHARED_SERVER=1 exported. Resolving it the other
-// way here would build a Dolt unit-of-work provider over a non-Dolt store and
-// answer HTTP from a different database than the CLI reaches in the same
-// directory. Registry-first is also what closes the !cgo corner, where
-// isEmbeddedMode is a constant false and a registered workspace would otherwise
-// be handed to the Dolt provider and fail with a misleading Dolt error — or
-// connect to a defaulted host and serve the wrong database.
-//
-// EMBEDDED DOLT IS PERMANENT, and this is the only place that refusal lives.
-// Its commit protocol runs outside the SQL transaction on a separate
-// connection, so the per-request atomicity this server's contract states would
-// be a lie there. That is a property of the backend rather than of what has
-// been built so far, which is also why no unit-of-work provider for it exists
-// or will. Nothing downstream will catch a bypass: internal/httpapi cannot see
-// the backend behind a role, and every store publishes every role accessor
-// whatever it is. TestServeNamesOneDatabaseSourcePerServerItBuilds pins that
-// the roles are only ever reached through here.
+// serveDatabaseSource classifies the workspace. With the backend registry and
+// embedded Dolt gone, every readable workspace is served through the Dolt
+// unit-of-work provider; an unreadable metadata.json is refused.
 func serveDatabaseSource(beadsDir string) (serveDatabase, error) {
-	cfg, err := configfile.Load(beadsDir)
-	if err != nil {
-		// Never classify past an unreadable metadata.json. The classification's
-		// default is the embedded refusal, so falling back would refuse a
-		// workspace whose real backend nobody managed to read.
+	if _, err := configfile.Load(beadsDir); err != nil {
+		// Never classify past an unreadable metadata.json.
 		return serveDatabase{}, fmt.Errorf("load %s: %w", configfile.ConfigPath(beadsDir), err)
-	}
-	if backend := normalizeLoadedConfig(cfg).GetBackend(); backends.Registered(backend) {
-		return serveDatabase{source: serveSourceStore, backend: backend}, nil
 	}
 	return serveDatabase{source: serveSourceProvider}, nil
 }
@@ -594,20 +566,6 @@ func errServeReadonly() error {
 	return errors.New("bd serve is unavailable under strict readonly (--readonly, or readonly in config): " +
 		"every server it binds publishes the issue-claim operation, and refusing to start is the only honest " +
 		"answer — a server that advertised a claim it could never land would be worse than no server")
-}
-
-// errServeEmbedded is the PERMANENT refusal. The message says what the
-// workspace is and what serve needs, and promises nothing further: the reason
-// is the embedded backend's commit protocol (see serveDatabaseSource), which no
-// amount of provider or role plumbing changes.
-//
-// The mode belongs in the message, not in ErrUnsupported.Backend: that field is
-// documented as a BACKEND name and is the embryo of the pluggable-backend error
-// taxonomy, so putting a topology string in it would hand every downstream
-// errors.As a mixed backend/mode vocabulary.
-func errServeEmbedded() error {
-	return fmt.Errorf("%w: bd serve requires a Dolt SQL server; this workspace uses embedded Dolt",
-		&storage.ErrUnsupported{Op: "serve", Backend: "embedded-dolt"})
 }
 
 // serveRoleSource is the surface serveIssueRoles reaches on the store, spelled

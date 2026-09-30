@@ -59,7 +59,6 @@ var storeConstructors = map[string]map[string]bool{
 	// The pluggable backend registry: Lookup is what turns a configured backend
 	// name into something that can Open, so a function that calls it is
 	// constructing a store just as much as the direct opens above.
-	"github.com/steveyegge/beads/internal/storage/backends": {"Lookup": true},
 }
 
 // activationCalls are the helpers that apply a workspace's configured
