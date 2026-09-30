@@ -65,3 +65,18 @@ func TestReportFormulaError_MachineKinds(t *testing.T) {
 		t.Fatalf("detail = %+v", ce.Detail)
 	}
 }
+
+// Outside machine mode the formula error path is HandleError: exit 1 and no
+// typed cliError, exactly what pour and wisp returned before.
+func TestReportFormulaError_LegacyModeUnchanged(t *testing.T) {
+	withMachineMode(t, false)
+	err := reportFormulaError(&formula.FormulaError{File: "f", Problems: []formula.Problem{{Message: "m"}}})
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.Code != 1 {
+		t.Fatalf("want exitError{1}, got %#v", err)
+	}
+	var ce *cliError
+	if errors.As(err, &ce) {
+		t.Fatalf("legacy mode must not return a typed error: %#v", ce)
+	}
+}

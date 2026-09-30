@@ -80,7 +80,8 @@ func lintFile(path string, searchPaths []string) ([]Problem, error) {
 	// #nosec G304 -- path is the file or directory entry the caller named
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		// One unreadable file must not hide the rest of the directory.
+		return []Problem{{Kind: ProblemSyntax, Message: fmt.Sprintf("cannot read: %v", err)}}, nil
 	}
 	f, problems, err := DecodeTOMLStrict(data)
 	if err != nil {

@@ -2,8 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
-	"os"
 
 	"github.com/steveyegge/beads/internal/formula"
 )
@@ -33,8 +31,8 @@ func formulaErrorDetail(err error) map[string]any {
 
 // reportFormulaError reports a formula load/cook failure. Invalid formulas
 // and invalid --var values are invalid_args (27), an unknown formula is
-// not_found (20); anything else is internal. Outside machine mode it prints
-// one "Error:" line on stderr and exits 1, as HandleError does.
+// not_found (20); anything else is internal. Outside machine mode it is
+// HandleError, unchanged: one "Error:" line on stderr, exit 1.
 func reportFormulaError(err error) error {
 	kind := kindInternal
 	switch {
@@ -44,8 +42,8 @@ func reportFormulaError(err error) error {
 		kind = kindNotFound
 	}
 	if !machineModeActive() {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return &exitError{Code: 1}
+		// Byte-for-byte what these call sites printed before.
+		return HandleError("%v", err)
 	}
 	return &cliError{Kind: kind, Message: err.Error(), Detail: formulaErrorDetail(err)}
 }

@@ -400,7 +400,7 @@ func scanFormulaDir(dir string) ([]*formula.Formula, error) {
 			if errors.Is(err, formula.ErrInvalidFormula) {
 				// Still skipped, but never silently: strict decode is new,
 				// and a formula vanishing from the list is how that shows.
-				fmt.Fprintf(os.Stderr, "Warning: skipping %s (run bd formula lint %s)\n", err, dir)
+				fmt.Fprintf(os.Stderr, "Warning: not listed: %v (bd formula lint %s shows every problem)\n", err, dir)
 			}
 			continue // Skip invalid formulas
 		}
