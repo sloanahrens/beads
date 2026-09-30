@@ -3,8 +3,10 @@ package dolt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/cenkalti/backoff/v4"
 	mysql "github.com/go-sql-driver/mysql"
 )
 
@@ -220,5 +222,46 @@ func TestWithRetry_DoesNotReplayDoltMergeConflict(t *testing.T) {
 	}
 	if callCount != 1 {
 		t.Errorf("expected 1 call at the general retry boundary, got %d", callCount)
+	}
+}
+
+func TestRetryVersionCommit(t *testing.T) {
+	t.Parallel()
+	conflict := fmt.Errorf("dolt commit: %w", &mysql.MySQLError{
+		Number:   1213,
+		SQLState: [5]byte{'4', '0', '0', '0', '1'},
+		Message:  "serialization failure: this transaction conflicts with a committed transaction from another client, try restarting transaction",
+	})
+	tests := []struct {
+		name      string
+		results   []error // commit's result per call; the last repeats
+		wantErr   error
+		wantCalls int
+	}{
+		{name: "succeeds first time", results: []error{nil}, wantCalls: 1},
+		{name: "conflict then success", results: []error{conflict, nil}, wantCalls: 2},
+		{name: "always conflicts", results: []error{conflict}, wantErr: conflict, wantCalls: 4},
+		{name: "other error not retried", results: []error{errors.New("boom")}, wantErr: errors.New("boom"), wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			err := retryVersionCommit(context.Background(),
+				backoff.WithMaxRetries(&backoff.ZeroBackOff{}, 3),
+				func() error {
+					calls++
+					return tt.results[min(calls, len(tt.results))-1]
+				})
+			if calls != tt.wantCalls {
+				t.Errorf("commit called %d times, want %d", calls, tt.wantCalls)
+			}
+			switch {
+			case tt.wantErr == nil && err != nil:
+				t.Errorf("err = %v, want nil", err)
+			case tt.wantErr != nil && (err == nil || err.Error() != tt.wantErr.Error()):
+				t.Errorf("err = %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }

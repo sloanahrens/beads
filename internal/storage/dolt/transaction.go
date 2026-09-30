@@ -268,7 +268,9 @@ func (s *DoltStore) finishDoltTransaction(ctx context.Context, conn *sql.Conn, t
 		return wrapSQLCommitError("sql commit (regular)", err)
 	}
 
-	if err := versioncontrolops.StageAndCommit(ctx, conn, tx.dirty.DirtyTables(), commitMsg, s.commitAuthorString()); err != nil {
+	if err := retryVersionCommit(ctx, newVersionCommitBackOff(), func() error {
+		return versioncontrolops.StageAndCommit(ctx, conn, tx.dirty.DirtyTables(), commitMsg, s.commitAuthorString())
+	}); err != nil {
 		rollbackIgnored()
 		return fmt.Errorf("stage and commit after regular SQL commit: %w: %w", err, ErrCommitIndeterminate)
 	}

@@ -3284,7 +3284,8 @@ func (s *DoltStore) CommitAll(ctx context.Context, message string) (bool, error)
 // connection. This prevents DOLT_COMMIT('-Am') from sweeping up stale
 // working set changes from concurrent operations (GH#2455). Every caller has
 // already committed its SQL mutation, so any publication failure here has an
-// indeterminate durable outcome and must not be replayed.
+// indeterminate durable outcome and must not be replayed — except a
+// serialization failure, which retryVersionCommit replays (be-321).
 func (s *DoltStore) doltAddAndCommit(ctx context.Context, tables []string, commitMsg string) error {
 	// Batch/off auto-commit (bd-4wamg): leave the writes in the working set
 	// for a later explicit commit point (bd dolt commit / CommitPending),
@@ -3293,42 +3294,81 @@ func (s *DoltStore) doltAddAndCommit(ctx context.Context, tables []string, commi
 		return nil
 	}
 	return s.withCircuitWrite(ctx, func(ctx context.Context) error {
-		conn, err := s.db.Conn(ctx)
-		if err != nil {
+		return retryVersionCommit(ctx, newVersionCommitBackOff(), func() error {
+			return s.doltAddAndCommitOnce(ctx, tables, commitMsg)
+		})
+	})
+}
+
+func (s *DoltStore) doltAddAndCommitOnce(ctx context.Context, tables []string, commitMsg string) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return s.recordDoltPublicationFailure(ctx,
+			fmt.Errorf("acquire connection after SQL mutation: %w: %w", err, ErrCommitIndeterminate))
+	}
+	defer conn.Close()
+
+	for _, table := range tables {
+		if err := schema.DrainCall(ctx, conn, "CALL DOLT_ADD(?)", table); err != nil {
 			return s.recordDoltPublicationFailure(ctx,
-				fmt.Errorf("acquire connection after SQL mutation: %w: %w", err, ErrCommitIndeterminate))
+				fmt.Errorf("dolt add %s after SQL mutation: %w: %w", table, err, ErrCommitIndeterminate))
 		}
-		defer conn.Close()
+	}
 
-		for _, table := range tables {
-			if err := schema.DrainCall(ctx, conn, "CALL DOLT_ADD(?)", table); err != nil {
-				return s.recordDoltPublicationFailure(ctx,
-					fmt.Errorf("dolt add %s after SQL mutation: %w: %w", table, err, ErrCommitIndeterminate))
-			}
-		}
+	// Skip the commit when nothing was actually staged (idempotent no-op
+	// write), so Dolt does not log a server-side "nothing to commit" warning
+	// on every reconcile-cadence call. The guard tests the STAGED set rather
+	// than the whole working set because this helper stages only a fixed
+	// table list — an unrelated dirty table must not trigger an empty '-m'
+	// commit. A guard-read failure is NOT a publication failure: nothing has
+	// been committed and nothing is indeterminate, so plain error return.
+	staged, err := issueops.HasStagedChanges(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("check staged changes before commit: %w", err)
+	}
+	if !staged {
+		return nil
+	}
 
-		// Skip the commit when nothing was actually staged (idempotent no-op
-		// write), so Dolt does not log a server-side "nothing to commit" warning
-		// on every reconcile-cadence call. The guard tests the STAGED set rather
-		// than the whole working set because this helper stages only a fixed
-		// table list — an unrelated dirty table must not trigger an empty '-m'
-		// commit. A guard-read failure is NOT a publication failure: nothing has
-		// been committed and nothing is indeterminate, so plain error return.
-		staged, err := issueops.HasStagedChanges(ctx, conn)
-		if err != nil {
-			return fmt.Errorf("check staged changes before commit: %w", err)
-		}
-		if !staged {
+	if err := schema.DrainCall(ctx, conn, "CALL DOLT_COMMIT('-m', ?, '--author', ?)",
+		commitMsg, s.commitAuthorString()); err != nil && !isDoltNothingToCommit(err) {
+		return s.recordDoltPublicationFailure(ctx,
+			fmt.Errorf("dolt commit after SQL mutation: %w: %w", err, ErrCommitIndeterminate))
+	}
+	return nil
+}
+
+// newVersionCommitBackOff bounds retryVersionCommit: exponential from 25ms,
+// giving up after 10s, long enough to outlast a burst of concurrent writers
+// committing to one database.
+func newVersionCommitBackOff() backoff.BackOff {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 25 * time.Millisecond
+	bo.MaxElapsedTime = 10 * time.Second
+	return bo
+}
+
+// retryVersionCommit runs commit, replaying it while Dolt rejects it with a
+// serialization failure (1213/1205, SQLSTATE 40001) until bo gives up (be-321).
+// It wraps only the Dolt version commit that follows an already-committed SQL
+// transaction: the rows are durable in the working set, and Dolt rolls back
+// the DOLT_COMMIT that lost the race, so staging and committing again cannot
+// double-apply. When a concurrent writer's DOLT_ADD already staged and
+// committed these rows, the replay finds nothing staged and succeeds as a
+// no-op. Any other error stops at once and is returned as is.
+func retryVersionCommit(ctx context.Context, bo backoff.BackOff, commit func() error) error {
+	return backoff.Retry(func() error {
+		err := commit()
+		if err == nil {
 			return nil
 		}
-
-		if err := schema.DrainCall(ctx, conn, "CALL DOLT_COMMIT('-m', ?, '--author', ?)",
-			commitMsg, s.commitAuthorString()); err != nil && !isDoltNothingToCommit(err) {
-			return s.recordDoltPublicationFailure(ctx,
-				fmt.Errorf("dolt commit after SQL mutation: %w: %w", err, ErrCommitIndeterminate))
+		if isSerializationError(err) {
+			doltMetrics.serializationErrors.Add(ctx, 1)
+			doltMetrics.writeRetries.Add(ctx, 1, metric.WithAttributes(attribute.String("type", "serialization")))
+			return err
 		}
-		return nil
-	})
+		return backoff.Permanent(err)
+	}, backoff.WithContext(bo, ctx))
 }
 
 func (s *DoltStore) wrapDoltPublicationFailure(ctx context.Context, op string, err error) error {
