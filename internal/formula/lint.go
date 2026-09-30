@@ -60,10 +60,7 @@ func LintPath(path string, searchPaths []string) (*LintReport, error) {
 		if err != nil {
 			return nil, err
 		}
-		problems, err := lintFile(abs, searchPaths)
-		if err != nil {
-			return nil, err
-		}
+		problems := lintFile(abs, searchPaths)
 		rep.Checked++
 		if len(problems) > 0 {
 			rep.Failed++
@@ -76,12 +73,12 @@ func LintPath(path string, searchPaths []string) (*LintReport, error) {
 	return rep, nil
 }
 
-func lintFile(path string, searchPaths []string) ([]Problem, error) {
+func lintFile(path string, searchPaths []string) []Problem {
 	// #nosec G304 -- path is the file or directory entry the caller named
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// One unreadable file must not hide the rest of the directory.
-		return []Problem{{Kind: ProblemSyntax, Message: fmt.Sprintf("cannot read: %v", err)}}, nil
+		return []Problem{{Kind: ProblemSyntax, Message: fmt.Sprintf("cannot read: %v", err)}}
 	}
 	f, problems, err := DecodeTOMLStrict(data)
 	if err != nil {
@@ -91,7 +88,7 @@ func lintFile(path string, searchPaths []string) ([]Problem, error) {
 			p.Line = pe.Position.Line
 			p.Message = pe.Message
 		}
-		return []Problem{p}, nil
+		return []Problem{p}
 	}
 
 	if len(f.Extends) == 0 {
@@ -99,11 +96,11 @@ func lintFile(path string, searchPaths []string) ([]Problem, error) {
 		if verr := validationError(f); verr != nil {
 			problems = append(problems, problemsOf(verr, path)...)
 		}
-		return problems, nil
+		return problems
 	}
 	if len(problems) > 0 {
 		// Resolving would stop at this file's own strict error.
-		return problems, nil
+		return problems
 	}
 	parser := NewParser(append([]string{filepath.Dir(path)}, searchPaths...)...)
 	parsed, err := parser.ParseFile(path)
@@ -113,7 +110,7 @@ func lintFile(path string, searchPaths []string) ([]Problem, error) {
 	if err != nil {
 		problems = append(problems, problemsOf(err, path)...)
 	}
-	return problems, nil
+	return problems
 }
 
 // problemsOf turns a parse/resolve error into problems: a *FormulaError
