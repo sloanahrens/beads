@@ -763,13 +763,14 @@ func RunBatchCloserDurableHistoryNeverNamesAWisp(t *testing.T, ctx context.Conte
 // a blanket override, so the id that does not exist still refuses and an invalid
 // request is still invalid.
 //
-// The same clause says force would not bypass a per-item LIFECYCLE
-// PRECONDITION either, and the doc says that category is EMPTY today. That is
-// the one half no request can exercise, so it is asserted against the request
-// TYPE instead — see assertBatchCloserCarriesNoPrecondition below.
+// The same clause says force never bypasses a per-item LIFECYCLE
+// PRECONDITION: BatchCloseItem.ExpectedStatus/ExpectedAssignee (be-pgd). A
+// forced batch whose guarded item no longer matches refuses that item with the
+// mismatch sentinel and writes nothing to it, while its matching sibling
+// closes.
 func RunBatchCloserForceBypassesOnlyClosePolicy(t *testing.T, ctx context.Context, fixture BatchCloserFixture) {
 	t.Helper()
-	assertBatchCloserCarriesNoPrecondition(t)
+	runBatchCloserForceKeepsPreconditions(t, ctx, fixture)
 	blocked := fixture.IssuePrefix + "-force-blocked"
 	blocker := fixture.IssuePrefix + "-force-blocker"
 	parent := fixture.IssuePrefix + "-force-parent"
@@ -1136,33 +1137,46 @@ func RunBatchCloserDoesNotMutateTheCallerRequest(t *testing.T, ctx context.Conte
 	}
 }
 
-// assertBatchCloserCarriesNoPrecondition holds the emptiness the force clause
-// depends on (batchcloser.go:43-53): neither the request nor an item carries a
-// per-item precondition, so "force never bypasses a lifecycle precondition"
-// governs nothing a caller can send.
-//
-// A promise with no reachable member is one a future reader will try to test
-// and cannot, so the claim is made falsifiable HERE rather than left as prose.
-// Expected* is the house spelling for a precondition — Lifecycle's
-// ExpectedVersion, Update's ExpectedAssignee and ExpectedStatus — so the day a
-// batch grows one, this fails and the doc's "the category is empty" has to be
-// replaced by a case that forces one and watches it hold.
-func assertBatchCloserCarriesNoPrecondition(t *testing.T) {
+// runBatchCloserForceKeepsPreconditions is the precondition half of the force
+// clause: guards are checked per item inside the batch, force does not waive
+// them, and a mismatch refuses only its own item.
+func runBatchCloserForceKeepsPreconditions(t *testing.T, ctx context.Context, fixture BatchCloserFixture) {
 	t.Helper()
-	for _, subject := range []struct {
-		name string
-		typ  reflect.Type
-	}{
-		{"CloseBatchRequest", reflect.TypeOf(publicops.CloseBatchRequest{})},
-		{"BatchCloseItem", reflect.TypeOf(publicops.BatchCloseItem{})},
-	} {
-		for i := 0; i < subject.typ.NumField(); i++ {
-			if field := subject.typ.Field(i).Name; strings.HasPrefix(field, "Expected") {
-				t.Errorf("%s carries the precondition field %s, but batchcloser.go says a batch has none — force's lifecycle clause now governs something, and needs a case that exercises it",
-					subject.name, field)
-			}
-		}
+	statusGuarded := fixture.IssuePrefix + "-guard-status"
+	assigneeGuarded := fixture.IssuePrefix + "-guard-assignee"
+	matching := fixture.IssuePrefix + "-guard-match"
+	seedBatchCloserIssue(t, ctx, fixture, statusGuarded)
+	seedBatchCloserIssue(t, ctx, fixture, assigneeGuarded)
+	seedBatchCloserIssue(t, ctx, fixture, matching)
+	inProgress, someone, open, unassigned := "in_progress", "someone", "open", ""
+
+	result, err := fixture.Closer.CloseBatch(ctx, publicops.CloseBatchRequest{
+		Actor: "closer",
+		Items: []publicops.BatchCloseItem{
+			{IssueID: statusGuarded, ExpectedStatus: &inProgress},
+			{IssueID: assigneeGuarded, ExpectedAssignee: &someone},
+			{IssueID: matching, ExpectedStatus: &open, ExpectedAssignee: &unassigned},
+		},
+		Force: true,
+	})
+	if err != nil {
+		t.Fatalf("forced guarded CloseBatch: %v", err)
 	}
+	if len(result.Outcomes) != 3 {
+		t.Fatalf("outcomes = %d, want 3", len(result.Outcomes))
+	}
+	if !errors.Is(result.Outcomes[0].Err, publicops.ErrStatusMismatch) {
+		t.Errorf("forced close of %s guarded on in_progress = %v, want ErrStatusMismatch: force never bypasses a precondition", statusGuarded, result.Outcomes[0].Err)
+	}
+	if !errors.Is(result.Outcomes[1].Err, publicops.ErrAssigneeMismatch) {
+		t.Errorf("forced close of %s guarded on assignee %q = %v, want ErrAssigneeMismatch", assigneeGuarded, someone, result.Outcomes[1].Err)
+	}
+	if result.Outcomes[2].Err != nil {
+		t.Errorf("close of %s whose guards hold = %v, want it to land", matching, result.Outcomes[2].Err)
+	}
+	assertBatchCloserStatus(t, ctx, fixture, statusGuarded, types.StatusOpen)
+	assertBatchCloserStatus(t, ctx, fixture, assigneeGuarded, types.StatusOpen)
+	assertBatchCloserStatus(t, ctx, fixture, matching, types.StatusClosed)
 }
 
 // RunBatchCloserSettlesTheDependersOfWhatItClosed pins the blocked-state
