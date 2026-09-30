@@ -103,6 +103,7 @@ var mutationEntryPoints = []string{
 	"PromoteFromEphemeralInTx",
 	"AddDependencyInTx",
 	"RemoveDependencyInTx",
+	"PruneOrphanDependenciesInTx", // bd dep prune-orphans (be-cgr)
 	"AddLabelInTx",
 	"RemoveLabelInTx",
 	"UpdateIssueIDInTx",

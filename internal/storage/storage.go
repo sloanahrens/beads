@@ -663,6 +663,22 @@ type DoltStorage interface {
 	FastStatisticsStore
 }
 
+// PruneOrphanDependenciesResult counts the dependency rows `bd dep
+// prune-orphans` removed, or would remove under DryRun.
+type PruneOrphanDependenciesResult struct {
+	DryRun           bool `json:"dry_run"`
+	Dependencies     int  `json:"dependencies"`
+	WispDependencies int  `json:"wisp_dependencies"`
+	Total            int  `json:"total"`
+}
+
+// OrphanDependencyPruner removes dependency rows whose issue or target no
+// longer exists, in one transaction with at most one version commit. Callers
+// type-assert to it; a backend without it does not support the operation.
+type OrphanDependencyPruner interface {
+	PruneOrphanDependencies(ctx context.Context, dryRun bool) (PruneOrphanDependenciesResult, error)
+}
+
 // RawDBAccessor provides raw *sql.DB access for diagnostics and migrations.
 // Callers that need raw SQL should type-assert to this interface.
 type RawDBAccessor interface {

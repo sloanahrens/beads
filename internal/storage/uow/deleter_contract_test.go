@@ -90,6 +90,9 @@ func TestDeleterContract(t *testing.T) {
 	t.Run("VersionOutranksForceAndCascade", func(t *testing.T) {
 		conformance.RunDeleterVersionOutranksForceAndCascade(t, ctx, fixture)
 	})
+	t.Run("WriteGuardsRefuseTheWholeRequest", func(t *testing.T) {
+		conformance.RunDeleterWriteGuardsRefuseTheWholeRequest(t, ctx, fixture)
+	})
 	t.Run("RefusesAnExpectedVersionAcrossSeveralIDs", func(t *testing.T) {
 		conformance.RunDeleterRefusesAnExpectedVersionAcrossSeveralIDs(t, ctx, fixture)
 	})

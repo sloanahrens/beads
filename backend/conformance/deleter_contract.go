@@ -1198,6 +1198,65 @@ func RunDeleterRefusesAnExpectedVersionAcrossSeveralIDs(t *testing.T, ctx contex
 	deleterAssertIssueRows(t, ctx, fixture, 1, second)
 }
 
+// RunDeleterWriteGuardsRefuseTheWholeRequest pins DeleteRequest.ExpectedStatus
+// and ExpectedAssignee (be-pgd): a mismatch on ANY named row refuses the whole
+// request with a *DeleteGuardError naming every mismatched id in request
+// order, deletes nothing (not even the rows whose guards held), and neither
+// Force nor DryRun changes that; guards that hold on every row delete.
+func RunDeleterWriteGuardsRefuseTheWholeRequest(t *testing.T, ctx context.Context, fixture DeleterFixture) {
+	t.Helper()
+	open := deleterSeedIssue(t, ctx, fixture, "guard", "open")
+	wisp := deleterSeedWisp(t, ctx, fixture, "guard", "wisp")
+	expectedStatus := "in_progress"
+
+	for _, dryRun := range []bool{true, false} {
+		_, err := fixture.Deleter.Delete(ctx, publicops.DeleteRequest{
+			IDs:            []string{open, wisp},
+			Actor:          "deleter-contract",
+			Force:          true,
+			DryRun:         dryRun,
+			ExpectedStatus: &expectedStatus,
+		})
+		var guardErr *publicops.DeleteGuardError
+		if !errors.As(err, &guardErr) {
+			t.Fatalf("Delete(dryRun=%v) with a failing status guard = %v, want *DeleteGuardError", dryRun, err)
+		}
+		if !errors.Is(err, publicops.ErrStatusMismatch) {
+			t.Errorf("guard refusal %v does not match ErrStatusMismatch", err)
+		}
+		if len(guardErr.IDs) != 2 || guardErr.IDs[0] != open || guardErr.IDs[1] != wisp {
+			t.Errorf("guard refusal ids = %v, want [%s %s] in request order", guardErr.IDs, open, wisp)
+		}
+		deleterAssertIssueRows(t, ctx, fixture, 1, open)
+		deleterAssertWispRows(t, ctx, fixture, 1, wisp)
+	}
+
+	someone := "someone"
+	if _, err := fixture.Deleter.Delete(ctx, publicops.DeleteRequest{
+		IDs:              []string{open},
+		Actor:            "deleter-contract",
+		Force:            true,
+		ExpectedAssignee: &someone,
+	}); !errors.Is(err, publicops.ErrAssigneeMismatch) {
+		t.Errorf("Delete with a failing assignee guard = %v, want ErrAssigneeMismatch", err)
+	}
+	deleterAssertIssueRows(t, ctx, fixture, 1, open)
+
+	openStatus, unassigned := "open", ""
+	result := deleterDelete(t, ctx, fixture, publicops.DeleteRequest{
+		IDs:              []string{open, wisp},
+		Actor:            "deleter-contract",
+		Force:            true,
+		ExpectedStatus:   &openStatus,
+		ExpectedAssignee: &unassigned,
+	})
+	if result.Deleted != 2 {
+		t.Errorf("Delete with holding guards Deleted = %d, want 2", result.Deleted)
+	}
+	deleterAssertIssueRows(t, ctx, fixture, 0, open)
+	deleterAssertWispRows(t, ctx, fixture, 0, wisp)
+}
+
 // deleterRowVersion reads the RowVersion token straight off the row, in the
 // plane the caller names.
 //

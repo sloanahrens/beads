@@ -60,6 +60,19 @@ Force: Delete and orphan dependents
 			}
 		}()
 
+		guards, err := writeGuardsFromFlags(cmd)
+		if err != nil {
+			return err
+		}
+		if guards.set() {
+			if usesProxiedServer() {
+				return failKind(kindInvalidArgs, "--if-status/--if-assignee are not supported in proxied-server mode")
+			}
+			if cascade, _ := cmd.Flags().GetBool("cascade"); cascade {
+				return failKind(kindInvalidArgs, "--if-status/--if-assignee cannot be combined with --cascade: the guards cover the named ids only, never the dependents a cascade would also delete")
+			}
+		}
+
 		if usesProxiedServer() {
 			return runDeleteProxiedServer(cmd, rootCtx, args)
 		}
@@ -90,7 +103,7 @@ Force: Delete and orphan dependents
 		}
 
 		if len(issueIDs) > 1 || cascade {
-			if err := deleteBatch(cmd, issueIDs, force, dryRun, cascade, jsonOutput, false); err != nil {
+			if err := deleteBatchGuarded(issueIDs, force, dryRun, cascade, jsonOutput, guards); err != nil {
 				if _, ok := exitCodeFromError(err); ok {
 					return err
 				}
@@ -126,16 +139,21 @@ Force: Delete and orphan dependents
 		// rewrite runs INSIDE the transaction that deletes, because it is the
 		// role's.
 		request := issueops.DeleteRequest{
-			Actor:  actor,
-			IDs:    []string{issueID},
-			Force:  force,
-			DryRun: dryRun || !force,
+			Actor:            actor,
+			IDs:              []string{issueID},
+			Force:            force,
+			DryRun:           dryRun || !force,
+			ExpectedStatus:   guards.status,
+			ExpectedAssignee: guards.assignee,
 		}
 		opsCtx, err := issueOpsContext(ctx)
 		if err != nil {
 			return HandleError("%v", err)
 		}
 		result, err := deleter.Delete(opsCtx, request)
+		if guardErr := deleteGuardFailure(err); guardErr != nil {
+			return guardErr
+		}
 		if request.DryRun {
 			if err != nil {
 				if previewErr := outputDeletionPreview([]string{issueID}, map[string]*types.Issue{issueID: issue}, false, dryRun, nil, err, jsonOutput); previewErr != nil {
@@ -276,6 +294,13 @@ func deleteIssue(ctx context.Context, issueID string) error {
 //
 //nolint:unparam // cmd parameter required for potential future use
 func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, cascade bool, jsonOutput bool, _ bool, _ ...string) error {
+	return deleteBatchGuarded(issueIDs, force, dryRun, cascade, jsonOutput, writeGuards{})
+}
+
+// deleteBatchGuarded is deleteBatch with `bd delete`'s --if-status/--if-assignee
+// guards applied to every named id (be-pgd). A mismatch on any of them refuses
+// the whole request, the role's all-or-nothing rule.
+func deleteBatchGuarded(issueIDs []string, force bool, dryRun bool, cascade bool, jsonOutput bool, guards writeGuards) error {
 	if store == nil {
 		if err := ensureStoreActive(); err != nil {
 			return err
@@ -322,17 +347,22 @@ func deleteBatch(_ *cobra.Command, issueIDs []string, force bool, dryRun bool, c
 	// --force is the confirmation as well as the orphan mode, so an unconfirmed
 	// run asks the role what it WOULD do; see the single-id path.
 	request := issueops.DeleteRequest{
-		Actor:   actor,
-		IDs:     resolvedIDs,
-		Cascade: cascade,
-		Force:   force,
-		DryRun:  dryRun || !force,
+		Actor:            actor,
+		IDs:              resolvedIDs,
+		Cascade:          cascade,
+		Force:            force,
+		DryRun:           dryRun || !force,
+		ExpectedStatus:   guards.status,
+		ExpectedAssignee: guards.assignee,
 	}
 	opsCtx, err := issueOpsContext(ctx)
 	if err != nil {
 		return HandleError("%v", err)
 	}
 	result, err := deleter.Delete(opsCtx, request)
+	if guardErr := deleteGuardFailure(err); guardErr != nil {
+		return guardErr
+	}
 	if request.DryRun {
 		if err != nil {
 			if previewErr := outputDeletionPreview(resolvedIDs, issues, cascade, dryRun, nil, err, jsonOutput); previewErr != nil {
@@ -493,6 +523,7 @@ func init() {
 	deleteCmd.Flags().String("from-file", "", "Read issue IDs from file (one per line)")
 	deleteCmd.Flags().Bool("dry-run", false, "Preview what would be deleted without making changes")
 	deleteCmd.Flags().Bool("cascade", false, "Recursively delete all dependent issues")
+	registerWriteGuardFlags(deleteCmd, "delete")
 	deleteCmd.ValidArgsFunction = issueIDCompletion
 	rootCmd.AddCommand(deleteCmd)
 }

@@ -120,6 +120,12 @@ func ExecuteCloseBatch(ctx context.Context, tx *sql.Tx, request publicops.CloseB
 	landed := 0
 
 	for i, item := range request.Items {
+		// Write-time guards ride the batch's own transaction, so the read and
+		// the close see one snapshot and a concurrent writer collides at commit.
+		if err := CheckExpectedFieldsInTx(ctx, tx, item.IssueID, item.ExpectedAssignee, item.ExpectedStatus); err != nil {
+			result.Outcomes[i] = publicops.CloseOutcome{IssueID: item.IssueID, Err: err}
+			continue
+		}
 		closed, changedTables, err := ExecuteClose(ctx, tx, publicops.CloseRequest{
 			Actor:   request.Actor,
 			IssueID: item.IssueID,

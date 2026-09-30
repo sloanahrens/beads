@@ -93,6 +93,11 @@ func closeBatchItem(ctx context.Context, uw UnitOfWork, request publicops.CloseB
 	if err != nil {
 		return publicops.CloseOutcome{IssueID: item.IssueID, Err: err}
 	}
+	// Write-time guards compare the row this unit of work just read, the same
+	// comparison CheckExpectedFieldsInTx makes on the store-backed leg.
+	if err := storageissueops.ExpectedFieldsMismatch(item.IssueID, current.Assignee, string(current.Status), item.ExpectedAssignee, item.ExpectedStatus); err != nil {
+		return publicops.CloseOutcome{IssueID: item.IssueID, Err: err}
+	}
 
 	params := domain.CloseIssueParams{Reason: item.Reason, Session: request.Session}
 	var closed domain.CloseIssueResult

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/steveyegge/beads/internal/storage"
+	storageissueops "github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/issueops"
 )
@@ -18,6 +19,7 @@ type closeDirectItem struct {
 	id     string
 	reason string
 	store  storage.DoltStorage
+	guards writeGuards
 }
 
 // closeDirectPlan is the argument list after the CLI's own close policy has
@@ -31,6 +33,9 @@ type closeDirectItem struct {
 type closeDirectPlan struct {
 	items    []closeDirectItem
 	refusals []string
+	// refusalKinds is parallel to refusals: kindRefused for close policy,
+	// kindGuardNotHeld for an --if-status/--if-assignee mismatch.
+	refusalKinds []errorKind
 }
 
 // closeDirectPreflight applies `bd close`'s own close policy to every resolved
@@ -47,11 +52,24 @@ type closeDirectPlan struct {
 // by hand. Keeping a copy here would be a second implementation of a rule the
 // role already states, and a read-then-write window besides — one that made
 // `bd close <child> <parent>` depend on argument order.
-func closeDirectPreflight(results []*RoutedResult, resolvedIDs, reasons []string, force bool) closeDirectPlan {
-	plan := closeDirectPlan{refusals: make([]string, len(resolvedIDs))}
+func closeDirectPreflight(results []*RoutedResult, resolvedIDs, reasons []string, force bool, guards writeGuards) closeDirectPlan {
+	plan := closeDirectPlan{refusals: make([]string, len(resolvedIDs)), refusalKinds: make([]errorKind, len(resolvedIDs))}
 	for i, id := range resolvedIDs {
+		// A write-time guard that already fails on the resolved snapshot
+		// outranks close policy: the caller's precondition is gone, so the
+		// answer is guard_not_held whatever the policy would have said. A
+		// guard that holds here is checked again inside the close's own
+		// transaction, which is what makes it a write-time guard.
+		if issue := results[i].Issue; issue != nil && guards.set() {
+			if err := storageissueops.ExpectedFieldsMismatch(id, issue.Assignee, string(issue.Status), guards.assignee, guards.status); err != nil {
+				plan.refusals[i] = fmt.Sprintf("Error closing %s: %v", id, err)
+				plan.refusalKinds[i] = kindGuardNotHeld
+				continue
+			}
+		}
 		if refusal := closeDirectCheckOne(id, results[i].Issue, force); refusal != "" {
 			plan.refusals[i] = refusal
+			plan.refusalKinds[i] = kindRefused
 			continue
 		}
 		plan.items = append(plan.items, closeDirectItem{
@@ -59,6 +77,7 @@ func closeDirectPreflight(results []*RoutedResult, resolvedIDs, reasons []string
 			id:     id,
 			reason: reasonForCloseIndex(reasons, i),
 			store:  results[i].Store,
+			guards: guards,
 		})
 	}
 	return plan
@@ -144,7 +163,12 @@ func closeDirectRequest(batch closeDirectBatch, session string, force bool, clai
 		request.ClaimNext = claimNext
 	}
 	for _, item := range batch.items {
-		request.Items = append(request.Items, issueops.BatchCloseItem{IssueID: item.id, Reason: item.reason})
+		request.Items = append(request.Items, issueops.BatchCloseItem{
+			IssueID:          item.id,
+			Reason:           item.reason,
+			ExpectedStatus:   item.guards.status,
+			ExpectedAssignee: item.guards.assignee,
+		})
 	}
 	return request
 }

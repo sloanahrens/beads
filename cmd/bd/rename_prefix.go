@@ -84,6 +84,13 @@ NOTE: This is a rare operation. Most users never need this command.`,
 			return HandleError("%v", err)
 		}
 
+		if configOnly, _ := cmd.Flags().GetBool("config-only"); configOnly {
+			if repair {
+				return failKind(kindInvalidArgs, "--config-only cannot be combined with --repair")
+			}
+			return runRenamePrefixConfigOnly(ctx, strings.TrimRight(newPrefix, "-"), dryRun)
+		}
+
 		oldPrefix, err := store.GetConfig(ctx, "issue_prefix")
 		if err != nil || oldPrefix == "" {
 			return HandleError("failed to get current prefix: %v", err)
@@ -218,6 +225,80 @@ NOTE: This is a rare operation. Most users never need this command.`,
 
 		return nil
 	},
+}
+
+// renamePrefixConfigOnlySample caps how many offending ids a refusal names.
+const renamePrefixConfigOnlySample = 5
+
+// runRenamePrefixConfigOnly sets issue_prefix without rewriting any id
+// (be-qr3). It is the one verb for a database whose prefix is unset, equal or
+// stale while every stored id already carries the new prefix: `bd config set`
+// refuses the key, and a plain rename-prefix needs a current prefix to rename
+// from. When any id carries another prefix, setting the cell alone would split
+// the database from its own ids, so the request is refused and nothing is
+// written.
+func runRenamePrefixConfigOnly(ctx context.Context, newPrefix string, dryRun bool) error {
+	oldPrefix, err := store.GetConfig(ctx, "issue_prefix")
+	if err != nil {
+		return handleClassifiedRespectJSON(fmt.Errorf("failed to read current prefix: %w", err))
+	}
+	issues, err := store.SearchIssues(ctx, "", types.IssueFilter{})
+	if err != nil {
+		return handleClassifiedRespectJSON(fmt.Errorf("failed to list issues: %w", err))
+	}
+
+	var mismatched []string
+	for _, issue := range issues {
+		if !strings.HasPrefix(issue.ID, newPrefix+"-") {
+			mismatched = append(mismatched, issue.ID)
+		}
+	}
+	if len(mismatched) > 0 {
+		slices.Sort(mismatched)
+		sample := mismatched[:min(len(mismatched), renamePrefixConfigOnlySample)]
+		e := &cliError{
+			Kind: kindRefused,
+			Message: fmt.Sprintf("%d issue id(s) do not carry prefix %q (e.g. %s); setting the config alone would need id rewriting, use 'bd rename-prefix %s'",
+				len(mismatched), newPrefix, strings.Join(sample, ", "), newPrefix),
+			Detail: map[string]any{
+				"current_prefix":   oldPrefix,
+				"new_prefix":       newPrefix,
+				"mismatched_count": len(mismatched),
+				"mismatched":       sample,
+			},
+		}
+		if !machineModeActive() {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", e.Message)
+		}
+		return e
+	}
+
+	changed := oldPrefix != newPrefix
+	if changed && !dryRun {
+		if err := store.SetConfig(ctx, "issue_prefix", newPrefix); err != nil {
+			return handleClassifiedRespectJSON(fmt.Errorf("failed to set prefix: %w", err))
+		}
+		commandDidWrite.Store(true)
+	}
+
+	if jsonOutput {
+		return outputJSON(map[string]interface{}{
+			"old_prefix":   oldPrefix,
+			"new_prefix":   newPrefix,
+			"changed":      changed,
+			"dry_run":      dryRun,
+			"issues_count": len(issues),
+		})
+	}
+	switch {
+	case !changed:
+		fmt.Printf("Issue prefix is already %s; nothing to do\n", ui.RenderAccent(newPrefix))
+	case dryRun:
+		fmt.Printf("DRY RUN: would set issue prefix '%s' -> '%s' (%d issue ids already carry it, none rewritten)\n", oldPrefix, newPrefix, len(issues))
+	default:
+		fmt.Printf("%s Set issue prefix '%s' -> '%s' (%d issue ids already carry it, none rewritten)\n", ui.RenderPass("✓"), oldPrefix, ui.RenderAccent(newPrefix), len(issues))
+	}
+	return nil
 }
 
 func validatePrefix(prefix string) error {
@@ -509,6 +590,7 @@ func generateRepairHashID(prefix string, issue *types.Issue, actor string, usedI
 
 func init() {
 	renamePrefixCmd.Flags().Bool("dry-run", false, "Preview changes without applying them")
+	renamePrefixCmd.Flags().Bool("config-only", false, "Only set the issue_prefix config cell; refused (exit 21 under --machine) when any issue id would need rewriting")
 	renamePrefixCmd.Flags().Bool("repair", false, "Repair database with multiple prefixes by consolidating them")
 	rootCmd.AddCommand(renamePrefixCmd)
 }

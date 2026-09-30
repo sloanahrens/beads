@@ -9,6 +9,15 @@ import "context"
 type BatchCloseItem struct {
 	IssueID string
 	Reason  string
+	// ExpectedStatus and ExpectedAssignee are write-time guards with
+	// UpdateRequest's semantics: checked inside the batch's transaction before
+	// this item closes, and a mismatch refuses THIS ITEM with
+	// ErrStatusMismatch/ErrAssigneeMismatch while the rest of the batch goes
+	// on. nil disables a guard; a pointer to "" as ExpectedAssignee means
+	// "expected unassigned". Force never bypasses them: they are
+	// preconditions, not policy.
+	ExpectedStatus   *string
+	ExpectedAssignee *string
 }
 
 // CloseBatchRequest describes one closure of many issues.
@@ -45,12 +54,10 @@ type CloseBatchRequest struct {
 	// names nothing refuses whether or not force is set. It is request-wide
 	// because the flag that spells it is.
 	//
-	// It would not bypass a per-item LIFECYCLE PRECONDITION either, but no
-	// batch item carries one: there is no counterpart here to the
-	// ExpectedVersion a Lifecycle close takes, so the category is empty and
-	// nothing in a batch can exercise it today. The rule is stated for the day
-	// an item grows a precondition, which is the day force stops being a
-	// question with only two answers.
+	// It does not bypass a per-item LIFECYCLE PRECONDITION either:
+	// BatchCloseItem.ExpectedStatus and ExpectedAssignee still refuse their
+	// item under Force. There is still no counterpart here to the
+	// ExpectedVersion a Lifecycle close takes.
 	Force bool
 	// ClaimNext claims the next ready issue after the closes land, in the same
 	// transaction, and only when at least one item closed — a claim handed out
