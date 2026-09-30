@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/steveyegge/beads/internal/formula"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/schema"
 )
@@ -167,6 +168,10 @@ func errorKindOf(err error) errorKind {
 		return kindRouteUnreachable
 	case errors.As(err, &skew):
 		return kindSchemaSkew
+	case errors.Is(err, formula.ErrInvalidFormula), errors.Is(err, formula.ErrVarValidation):
+		return kindInvalidArgs
+	case errors.Is(err, formula.ErrFormulaNotFound):
+		return kindNotFound
 	case isGuardMismatch(err):
 		return kindGuardNotHeld
 	case isNotFoundErr(err):
