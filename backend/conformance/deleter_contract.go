@@ -1146,6 +1146,58 @@ func RunDeleterVersionOutranksForceAndCascade(t *testing.T, ctx context.Context,
 	deleterAssertIssueRows(t, ctx, fixture, 1, dependent)
 }
 
+// RunDeleterRefusesAnExpectedVersionAcrossSeveralIDs pins the arity rule
+// (issueops/deleter.go, DeleteRequest.ExpectedVersion: "A non-nil
+// ExpectedVersion with more than one DISTINCT id is ErrValidation, refused
+// before anything is read") and the duplicate-collapse exception beside it.
+//
+// THE TOKEN MATCHES THE FIRST ID. That is the arrangement the rule exists for:
+// a body that quietly checked the first row and deleted the whole list would
+// pass a case built on a token matching nothing, and would erase the second row
+// under a precondition that never described it. Both rows are counted raw
+// afterwards.
+//
+// The collapse arm is the falsifying sibling. Without it the rule reads as
+// "expected-version deletes take one element", and an implementation that
+// counted MENTIONS rather than distinct ids would refuse `bd delete a a`, which
+// DeleteRequest.IDs promises is one row. The repeated mention is spelled
+// untrimmed, so it also says the count happens after normalization.
+func RunDeleterRefusesAnExpectedVersionAcrossSeveralIDs(t *testing.T, ctx context.Context, fixture DeleterFixture) {
+	t.Helper()
+	first := deleterSeedIssue(t, ctx, fixture, "version-arity", "first")
+	second := deleterSeedIssue(t, ctx, fixture, "version-arity", "second")
+	version := deleterRowVersion(t, ctx, fixture, "issues", first)
+
+	for _, dryRun := range []bool{false, true} {
+		result, err := fixture.Deleter.Delete(ctx, publicops.DeleteRequest{
+			IDs:             []string{first, second},
+			Actor:           "deleter-contract",
+			Force:           true,
+			ExpectedVersion: &version,
+			DryRun:          dryRun,
+		})
+		if !errors.Is(err, publicops.ErrValidation) {
+			t.Fatalf("Delete(dryRun=%v) with a version across two ids error = %v, want ErrValidation", dryRun, err)
+		}
+		if result.Deleted != 0 {
+			t.Errorf("refused delete reported Deleted = %d, want 0", result.Deleted)
+		}
+		deleterAssertIssueRows(t, ctx, fixture, 2, first, second)
+	}
+
+	result := deleterDelete(t, ctx, fixture, publicops.DeleteRequest{
+		IDs:             []string{first, "  " + first + "  "},
+		Actor:           "deleter-contract",
+		Force:           true,
+		ExpectedVersion: &version,
+	})
+	if result.Deleted != 1 {
+		t.Errorf("Deleted = %d, want 1 — a repeated mention of one id is one row", result.Deleted)
+	}
+	deleterAssertIssueRows(t, ctx, fixture, 0, first)
+	deleterAssertIssueRows(t, ctx, fixture, 1, second)
+}
+
 // RunDeleterWriteGuardsRefuseTheWholeRequest pins DeleteRequest.ExpectedStatus
 // and ExpectedAssignee (be-pgd): a mismatch on ANY named row refuses the whole
 // request with a *DeleteGuardError naming every mismatched id in request
@@ -1203,58 +1255,6 @@ func RunDeleterWriteGuardsRefuseTheWholeRequest(t *testing.T, ctx context.Contex
 	}
 	deleterAssertIssueRows(t, ctx, fixture, 0, open)
 	deleterAssertWispRows(t, ctx, fixture, 0, wisp)
-}
-
-// RunDeleterRefusesAnExpectedVersionAcrossSeveralIDs pins the arity rule
-// (issueops/deleter.go, DeleteRequest.ExpectedVersion: "A non-nil
-// ExpectedVersion with more than one DISTINCT id is ErrValidation, refused
-// before anything is read") and the duplicate-collapse exception beside it.
-//
-// THE TOKEN MATCHES THE FIRST ID. That is the arrangement the rule exists for:
-// a body that quietly checked the first row and deleted the whole list would
-// pass a case built on a token matching nothing, and would erase the second row
-// under a precondition that never described it. Both rows are counted raw
-// afterwards.
-//
-// The collapse arm is the falsifying sibling. Without it the rule reads as
-// "expected-version deletes take one element", and an implementation that
-// counted MENTIONS rather than distinct ids would refuse `bd delete a a`, which
-// DeleteRequest.IDs promises is one row. The repeated mention is spelled
-// untrimmed, so it also says the count happens after normalization.
-func RunDeleterRefusesAnExpectedVersionAcrossSeveralIDs(t *testing.T, ctx context.Context, fixture DeleterFixture) {
-	t.Helper()
-	first := deleterSeedIssue(t, ctx, fixture, "version-arity", "first")
-	second := deleterSeedIssue(t, ctx, fixture, "version-arity", "second")
-	version := deleterRowVersion(t, ctx, fixture, "issues", first)
-
-	for _, dryRun := range []bool{false, true} {
-		result, err := fixture.Deleter.Delete(ctx, publicops.DeleteRequest{
-			IDs:             []string{first, second},
-			Actor:           "deleter-contract",
-			Force:           true,
-			ExpectedVersion: &version,
-			DryRun:          dryRun,
-		})
-		if !errors.Is(err, publicops.ErrValidation) {
-			t.Fatalf("Delete(dryRun=%v) with a version across two ids error = %v, want ErrValidation", dryRun, err)
-		}
-		if result.Deleted != 0 {
-			t.Errorf("refused delete reported Deleted = %d, want 0", result.Deleted)
-		}
-		deleterAssertIssueRows(t, ctx, fixture, 2, first, second)
-	}
-
-	result := deleterDelete(t, ctx, fixture, publicops.DeleteRequest{
-		IDs:             []string{first, "  " + first + "  "},
-		Actor:           "deleter-contract",
-		Force:           true,
-		ExpectedVersion: &version,
-	})
-	if result.Deleted != 1 {
-		t.Errorf("Deleted = %d, want 1 — a repeated mention of one id is one row", result.Deleted)
-	}
-	deleterAssertIssueRows(t, ctx, fixture, 0, first)
-	deleterAssertIssueRows(t, ctx, fixture, 1, second)
 }
 
 // deleterRowVersion reads the RowVersion token straight off the row, in the
