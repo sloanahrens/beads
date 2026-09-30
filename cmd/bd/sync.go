@@ -729,9 +729,6 @@ func init() {
 var syncAdoptGitOrigin func(context.Context, storage.DoltStorage, adoptPolicy, adoptOptIn) (bool, error) = adoptGitOriginRemoteForPush
 
 func runSyncCommand(cmd *cobra.Command, _ []string) error {
-	if usesProxiedServer() {
-		return HandleErrorRespectJSON("sync is not supported in proxied-server mode")
-	}
 	CheckReadonly("sync")
 
 	evt := metrics.NewCommandEvent("sync")

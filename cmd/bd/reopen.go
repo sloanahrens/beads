@@ -31,10 +31,6 @@ This is more explicit than 'bd update --status open' and emits a Reopened event.
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runReopenProxiedServer(cmd, rootCtx, args)
-		}
-
 		reason, _ := cmd.Flags().GetString("reason")
 		ctx := rootCtx
 		opsCtx, err := issueOpsContext(ctx)

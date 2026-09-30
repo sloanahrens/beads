@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -431,14 +432,6 @@ func outputMemoriesOnlyContext(w io.Writer) error {
 // silent: no workspace at all (nothing to inject), and a healthy store with
 // zero memories (a fresh workspace must not be given noise).
 func formatMemoriesForPrime(compact bool) string {
-	// bd-mm8wf: in a proxied-server workspace the memory read must ride the
-	// proxied plane (UOW provider), never ensureStoreActiveForPrime — the
-	// lazy direct-store open is the same seam class bd-m7zzd closed in
-	// relate.go and human.go, here in a read-only limb. The proxied dual
-	// preserves prime's silent-skip and timeout-banner contracts.
-	if usesProxiedServer() {
-		return formatMemoriesForPrimeProxied(compact)
-	}
 
 	// Try to initialize store if not already active (prime may run before other commands)
 	if store == nil {
@@ -1002,4 +995,14 @@ bd dep add beads-yyy beads-xxx  # Tests depend on Feature (Feature blocks tests)
 	_, _ = fmt.Fprint(w, context)
 
 	return nil
+}
+
+// sortedKeys returns the keys of m in ascending order.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

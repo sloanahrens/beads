@@ -64,10 +64,6 @@ func runMolStale(cmd *cobra.Command, args []string) error {
 	unassignedOnly, _ := cmd.Flags().GetBool("unassigned")
 	showAll, _ := cmd.Flags().GetBool("all")
 
-	if usesProxiedServer() {
-		return runMolStaleProxiedServer(rootCtx, blockingOnly, unassignedOnly, showAll)
-	}
-
 	ctx := rootCtx
 
 	var result *StaleResult

@@ -817,9 +817,10 @@ func finalizeSyncedBootstrap(beadsDir, syncRemote string, cfg *configfile.Config
 	// required by configfile.Load consumers.
 	cfg.Backend = configfile.BackendDolt
 	cfg.DoltDatabase = dbName
+	if cfg.IsDoltProxiedServerMode() {
+		return errProxiedServerModeRemoved()
+	}
 	switch {
-	case cfg.IsDoltProxiedServerMode():
-		cfg.DoltMode = configfile.DoltModeProxiedServer
 	case cfg.IsDoltServerMode() || doltserver.IsSharedServerMode():
 		cfg.DoltMode = configfile.DoltModeServer
 	default:

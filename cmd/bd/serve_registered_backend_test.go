@@ -312,7 +312,7 @@ func startServeInProcess(t *testing.T, dir, beadsDir string) (string, <-chan err
 	restoreServeGlobals(t)
 	resetRootPersistentFlags(t)
 	store = nil
-	serverMode, proxiedServerMode = false, false
+	serverMode = false
 
 	t.Chdir(dir)
 	t.Setenv("HOME", dir)

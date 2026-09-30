@@ -57,10 +57,6 @@ This helps identify:
 			ExcludeLabels: excludeLabels,
 		}
 
-		if usesProxiedServer() {
-			return runStaleProxiedServer(rootCtx, filter)
-		}
-
 		issues, err := store.GetStaleIssues(rootCtx, filter)
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)

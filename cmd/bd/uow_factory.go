@@ -163,15 +163,6 @@ func newProxiedServerUOWProvider(ctx context.Context, beadsDir, databaseOverride
 	return openProxiedServerUOWProvider(ctx, beadsDir, databaseOverride, assertWorkspaceIdentity, opts...)
 }
 
-// newProxiedServerUOWProviderAdopting skips that assertion. Only two callers
-// legitimately have no workspace identity to assert: `bd init --team-server`,
-// which ADOPTS the identity the shared database already carries (asserting the
-// locally-minted placeholder would reject every correct init), and server-wide
-// database maintenance, which is not scoped to one project's database.
-func newProxiedServerUOWProviderAdopting(ctx context.Context, beadsDir, databaseOverride string, opts ...uow.ProviderOption) (uow.UnitOfWorkProvider, error) {
-	return openProxiedServerUOWProvider(ctx, beadsDir, databaseOverride, adoptWorkspaceIdentity, opts...)
-}
-
 // identityPosture selects whether a proxied open asserts the workspace's
 // project identity against the database or adopts whatever it finds.
 type identityPosture bool

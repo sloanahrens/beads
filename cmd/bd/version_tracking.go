@@ -195,11 +195,6 @@ func autoMigrateOnVersionBump(beadsDir string) {
 		return
 	}
 
-	if cfg.IsDoltProxiedServerMode() {
-		debug.Logf("auto-migrate: skipping embedded migration, proxied-server handled after UOW provider init")
-		return
-	}
-
 	// Check if database exists at the backend-appropriate path
 	dbPath := cfg.DatabasePath(beadsDir)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {

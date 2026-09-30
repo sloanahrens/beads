@@ -266,19 +266,3 @@ func runDoctorTestCmd(t *testing.T, dir string, name string, args ...string) {
 		t.Fatalf("%s %v failed in %s: %v\nOutput: %s", name, args, dir, err, out)
 	}
 }
-
-// findDoltPIDs returns PIDs of running dolt sql-server processes on the host.
-func findDoltPIDs(t *testing.T) []string {
-	t.Helper()
-	out, err := exec.Command("pgrep", "-f", "dolt sql-server").Output()
-	if err != nil {
-		return nil
-	}
-	var pids []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			pids = append(pids, line)
-		}
-	}
-	return pids
-}

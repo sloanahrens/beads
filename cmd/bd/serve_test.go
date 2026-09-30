@@ -185,10 +185,6 @@ func TestServeRefusalsPromiseNothing(t *testing.T) {
 					t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
 				},
 			},
-			{
-				name:  "proxied-server",
-				apply: func(t *testing.T) { proxiedServerMode = true },
-			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				useStorageModeGlobals(t)
@@ -229,13 +225,13 @@ func TestServeRefusalsPromiseNothing(t *testing.T) {
 // reads them through cmdCtx otherwise, which no unit test builds.
 func useStorageModeGlobals(t *testing.T) {
 	t.Helper()
-	oldServerMode, oldProxied := serverMode, proxiedServerMode
+	oldServerMode := serverMode
 	oldCmdCtx, oldUseGlobals := cmdCtx, testModeUseGlobals
 	t.Setenv("BEADS_DOLT_SHARED_SERVER", "0")
-	serverMode, proxiedServerMode = false, false
+	serverMode = false
 	cmdCtx, testModeUseGlobals = nil, true
 	t.Cleanup(func() {
-		serverMode, proxiedServerMode = oldServerMode, oldProxied
+		serverMode = oldServerMode
 		cmdCtx, testModeUseGlobals = oldCmdCtx, oldUseGlobals
 	})
 }

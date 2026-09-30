@@ -790,7 +790,7 @@ required. Use this command for explicit control or diagnostics.`,
 		// server lifecycle (GH#3545/GH#3518): starting a repo-local
 		// server here would write local PID/port state that shadows the
 		// configured remote endpoint.
-		if host := fileCfg.GetDoltServerHost(); !usesProxiedServer() && !configfile.IsLocalHostString(host) {
+		if host := fileCfg.GetDoltServerHost(); !configfile.IsLocalHostString(host) {
 			return HandleError("the configured Dolt server host is remote (%s); 'bd dolt start' only manages a local server.\nStart the server on that host, or clear dolt_server_host / dolt.host / BEADS_DOLT_SERVER_HOST to run one locally", host)
 		}
 		serverDir := doltserver.ResolveServerDir(beadsDir)
@@ -851,31 +851,10 @@ scope cannot be established.`,
 		// remote server host, the repo-local PID state (if any) is a
 		// leftover, and stopping it would report success while the
 		// configured external server keeps running (GH#3545/GH#3518).
-		if host := fileCfg.GetDoltServerHost(); !usesProxiedServer() && !configfile.IsLocalHostString(host) {
+		if host := fileCfg.GetDoltServerHost(); !configfile.IsLocalHostString(host) {
 			return HandleError("the configured Dolt server host is remote (%s); 'bd dolt stop' only manages a local server.\nStop the server on that host, or clear dolt_server_host / dolt.host / BEADS_DOLT_SERVER_HOST to manage one locally", host)
 		}
 		force, _ := cmd.Flags().GetBool("force")
-
-		if usesProxiedServer() {
-			rootDir, err := resolveProxiedServerRootPath(beadsDir)
-			if err != nil {
-				return HandleError("%v", err)
-			}
-			shutdownErr := proxy.Shutdown(rootDir)
-			if shutdownErr == nil {
-				return renderDoltStopResult(doltStopResult{
-					Stopped:  true,
-					Force:    force,
-					Verified: boolPointer(true),
-				})
-			}
-			if !force || !proxy.CanForceStopUnverified(shutdownErr) {
-				return HandleErrorRespectJSON("%v", shutdownErr)
-			}
-
-			report, forceErr := proxy.ForceStopUnverified(rootDir)
-			return renderDoltStopResult(newForcedDoltStopResult(shutdownErr, report, forceErr))
-		}
 
 		serverDir := doltserver.ResolveServerDir(beadsDir)
 
@@ -1196,8 +1175,7 @@ func shouldUseExternalDoltStatus(cfg *configfile.Config, autoStartDisabled, shar
 	// this must precede the IsDoltServerMode guard — otherwise a workspace
 	// with dolt.shared-server: true in config.yaml and stale embedded
 	// metadata still falls through to the PID-file "not running" path.
-	// Proxied-server mode is excluded, matching that override's !psm guard.
-	if sharedServerMode && !cfg.IsDoltProxiedServerMode() {
+	if sharedServerMode {
 		return true
 	}
 	if !cfg.IsDoltServerMode() {
@@ -1456,10 +1434,6 @@ recovery.`,
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		purgeDropped, _ := cmd.Flags().GetBool("purge-dropped")
 		opts := cleanDatabasesOptions{dryRun: dryRun, purgeDropped: purgeDropped}
-
-		if usesProxiedServer() {
-			return runDoltCleanDatabasesProxied(rootCtx, beadsDir, opts)
-		}
 
 		// Connect directly to the Dolt server via config instead of getStore(),
 		// which isn't initialized for dolt subcommands (beads-9vt).
@@ -1737,10 +1711,6 @@ var doltRemoteRemoveCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		name := args[0]
-
-		if usesProxiedServer() {
-			return runDoltRemoteRemoveProxied(ctx, name)
-		}
 
 		st := getStore()
 		if st == nil {

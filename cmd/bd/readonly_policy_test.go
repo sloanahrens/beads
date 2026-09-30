@@ -68,26 +68,6 @@ func TestEffectiveRootStorePolicy(t *testing.T) {
 	}
 }
 
-func TestStrictReadonlyBackendSupport(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  *configfile.Config
-		want bool
-	}{
-		{name: "fresh embedded default", cfg: nil, want: true},
-		{name: "dolt server", cfg: &configfile.Config{Backend: configfile.BackendDolt, DoltMode: configfile.DoltModeServer}, want: true},
-		{name: "proxied server", cfg: &configfile.Config{Backend: configfile.BackendDolt, DoltMode: configfile.DoltModeProxiedServer}, want: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := backendSupportsStrictReadonly(tc.cfg); got != tc.want {
-				t.Fatalf("backendSupportsStrictReadonly() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 type strictReadonlyPostRunStore struct {
 	storage.DoltStorage
 	metadataWrites int
@@ -107,7 +87,6 @@ func (s *strictReadonlyPostRunStore) Close() error {
 func TestPersistentPostRunStrictReadonlySuppressesMaintenance(t *testing.T) {
 	originalStore := store
 	originalReadonly := readonlyMode
-	originalProxied := proxiedServerMode
 	originalRootCtx := rootCtx
 	originalRootCancel := rootCancel
 	originalCommandSpan := commandSpan
@@ -132,7 +111,6 @@ func TestPersistentPostRunStrictReadonlySuppressesMaintenance(t *testing.T) {
 	t.Cleanup(func() {
 		store = originalStore
 		readonlyMode = originalReadonly
-		proxiedServerMode = originalProxied
 		rootCtx = originalRootCtx
 		rootCancel = originalRootCancel
 		commandSpan = originalCommandSpan
@@ -165,7 +143,6 @@ func TestPersistentPostRunStrictReadonlySuppressesMaintenance(t *testing.T) {
 	fake := &strictReadonlyPostRunStore{}
 	store = fake
 	readonlyMode = true
-	proxiedServerMode = false
 	rootCtx = context.Background()
 	rootCancel = nil
 	commandSpan = nil

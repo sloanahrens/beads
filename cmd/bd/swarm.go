@@ -157,9 +157,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return runSwarmValidateProxiedServer(cmd, rootCtx, args)
-		}
 		evt := metrics.NewCommandEvent("swarm-validate")
 		defer func() {
 			if c := metrics.Global(); c != nil {
@@ -664,9 +661,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return runSwarmStatusProxiedServer(cmd, rootCtx, args)
-		}
 		evt := metrics.NewCommandEvent("swarm-status")
 		defer func() {
 			if c := metrics.Global(); c != nil {
@@ -951,9 +945,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("swarm create is not supported in proxied-server mode")
-		}
 		CheckReadonly("swarm create")
 
 		evt := metrics.NewCommandEvent("swarm-create")
@@ -1136,9 +1127,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("swarm list is not supported in proxied-server mode")
-		}
 		evt := metrics.NewCommandEvent("swarm-list")
 		defer func() {
 			if c := metrics.Global(); c != nil {

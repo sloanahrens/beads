@@ -115,10 +115,6 @@ pointless).`,
 			return HandleErrorRespectJSON("%s", err)
 		}
 
-		if usesProxiedServer() {
-			return runUpdateProxiedServer(cmd, rootCtx, args)
-		}
-
 		// If no IDs provided, use last touched issue (interactive only;
 		// the non-interactive case was already refused in Args validation)
 		if len(args) == 0 {

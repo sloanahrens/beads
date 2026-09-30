@@ -131,10 +131,6 @@ func runMolDistill(cmd *cobra.Command, args []string) error {
 
 	in := gatherMolDistillInput(cmd, args)
 
-	if usesProxiedServer() {
-		return runMolDistillProxiedServer(rootCtx, in)
-	}
-
 	ctx := rootCtx
 
 	if store == nil {

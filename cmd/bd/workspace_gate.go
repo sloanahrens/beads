@@ -101,10 +101,6 @@ func closeStoreBeforeGateRelease() {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if uowProvider != nil {
-		_ = uowProvider.Close(ctx) // Best effort: we are on an error exit already
-		uowProvider = nil
-	}
 	if store != nil {
 		storeMutex.Lock()
 		storeActive = false

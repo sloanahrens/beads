@@ -58,10 +58,6 @@ the flags appear in the command line.`,
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runCloseProxiedServer(cmd, rootCtx, args)
-		}
-
 		// If no IDs provided, use last touched issue (interactive only;
 		// the non-interactive case was already refused in Args validation)
 		if len(args) == 0 {

@@ -134,10 +134,6 @@ To read notes on an issue, use: bd show <id>`,
 			return HandleErrorRespectJSON("%v", err)
 		}
 
-		if usesProxiedServer() {
-			return runNoteProxiedServer(rootCtx, id, noteText)
-		}
-
 		ctx := rootCtx
 
 		result, err := resolveAndGetIssueForMutation(ctx, store, id)

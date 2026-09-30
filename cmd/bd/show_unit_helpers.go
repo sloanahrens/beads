@@ -5,7 +5,6 @@ import (
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/issueops"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/validation"
 )
@@ -56,18 +55,6 @@ func validateIssueReassignable(id string, issue *types.Issue, actor, newAssignee
 func storeClaimPoolAliases(ctx context.Context, st storage.DoltStorage) func() []string {
 	return func() []string {
 		raw, err := st.GetConfig(ctx, "claim.pools")
-		if err != nil {
-			return nil
-		}
-		return issueops.ParseClaimPools(raw)
-	}
-}
-
-// uowClaimPoolAliases is storeClaimPoolAliases' proxied-server sibling: the
-// same lazy claim.pools read through the unit of work's transaction.
-func uowClaimPoolAliases(ctx context.Context, uw uow.UnitOfWork) func() []string {
-	return func() []string {
-		raw, err := uw.ConfigUseCase().GetConfig(ctx, "claim.pools")
 		if err != nil {
 			return nil
 		}

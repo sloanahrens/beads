@@ -71,10 +71,6 @@ func runMolBurn(cmd *cobra.Command, args []string) error {
 		force = true
 	}
 
-	if usesProxiedServer() {
-		return runMolBurnProxiedServer(rootCtx, args, dryRun, force)
-	}
-
 	ctx := rootCtx
 
 	if store == nil {

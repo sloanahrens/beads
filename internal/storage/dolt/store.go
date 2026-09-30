@@ -428,14 +428,6 @@ type Config struct {
 	// on metadata.json dolt_mode or BEADS_DOLT_SERVER_MODE env var.
 	ServerMode bool
 
-	// ProxiedServer indicates this config targets a per-workspace proxied
-	// dolt sql-server (a parent proxy + a child dolt sql-server, both rooted
-	// at <BeadsDir>/dolt). Mutually exclusive with ServerMode: the
-	// proxied path owns its own connection details and does not consult
-	// ServerHost/Port/Socket/User. Set by the store factory based on
-	// metadata.json dolt_mode=proxied-server.
-	ProxiedServer bool
-
 	// Gateway indicates the server is an authenticating gateway server: a credential
 	// command supplies a short-lived token as the connection username. bd treats such a
 	// server as owning database routing and schema, so it connects with the project
@@ -1590,7 +1582,7 @@ func New(ctx context.Context, cfg *Config) (*DoltStore, error) {
 // servers may leave unrelated client-local directories at those locations.
 func resolveLocalActiveDatabaseDir(cfg *Config) string {
 	if cfg == nil || cfg.BeadsDir == "" || cfg.Database == "" ||
-		cfg.Gateway || cfg.ProxiedServer || cfg.ServerSocket != "" ||
+		cfg.Gateway || cfg.ServerSocket != "" ||
 		cfg.ServerTLS || !isLocalHost(cfg.ServerHost) {
 		return ""
 	}

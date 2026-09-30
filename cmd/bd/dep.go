@@ -184,9 +184,6 @@ Examples:
 			CheckReadonly("dep --blocks")
 
 			ctx := rootCtx
-			if usesProxiedServer() {
-				return runDepBlocksProxiedServer(cmd, ctx, blockerID, blocksID)
-			}
 			depType := "blocks"
 
 			// Resolve partial IDs with routing support. The source issue's store
@@ -330,10 +327,6 @@ Examples:
 				c.CloseEventAndAdd(evt)
 			}
 		}()
-
-		if usesProxiedServer() {
-			return runDepAddProxiedServer(cmd, rootCtx, args)
-		}
 
 		depType, _ := cmd.Flags().GetString("type")
 		file, _ := cmd.Flags().GetString("file")
@@ -926,10 +919,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runDepListProxiedServer(cmd, rootCtx, args)
-		}
-
 		ctx := rootCtx
 		direction, _ := cmd.Flags().GetString("direction")
 		typeFilter, _ := cmd.Flags().GetString("type")
@@ -1103,10 +1092,6 @@ var depRemoveCmd = &cobra.Command{
 				c.CloseEventAndAdd(evt)
 			}
 		}()
-
-		if usesProxiedServer() {
-			return runDepRemoveProxiedServer(cmd, rootCtx, args)
-		}
 
 		ctx := rootCtx
 
@@ -1557,7 +1542,7 @@ func init() {
 	depTreeCmd.Flags().String("format", "", "Output format: 'mermaid' for Mermaid.js flowchart")
 	// Defensive row cap (be-x42v): applied to the node count after the walk, by
 	// the role, on BOTH routes — hence the routed variant of the flag.
-	addRoutedMaxRowsFlag(depTreeCmd)
+	addMaxRowsFlag(depTreeCmd)
 	// Note: --type flag intentionally omitted from depTreeCmd — TreeNode lacks
 	// dependency type info so filtering is not possible. Use 'bd dep list --type' instead.
 

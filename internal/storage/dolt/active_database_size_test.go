@@ -106,12 +106,6 @@ func TestResolveLocalActiveDatabaseDir(t *testing.T) {
 				cfg.Gateway = true
 			},
 		},
-		{
-			name: "proxied",
-			setup: func(_ *testing.T, cfg *Config) {
-				cfg.ProxiedServer = true
-			},
-		},
 	}
 	for _, tc := range tests {
 		tc := tc

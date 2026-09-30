@@ -338,18 +338,9 @@ func runServe() error {
 		})
 	}
 
-	// Serve from the provider BENEATH the hook layer. `bd serve` documents that
-	// it runs no hooks — a user-controlled subprocess per mutation is an
-	// unbounded latency multiplier and an orphaned child at shutdown — while
-	// proxied mode wires a notifying provider so the CLI's own writes keep
-	// firing them. This is the unit-of-work twin of the
-	// (*storage.HookFiringStore).Unwrap the store-shaped source takes.
-	provider := uow.UnwrapProvider(uowProvider)
-	if provider != nil {
-		// Remove hooks, then restore the external-dependency policy. The policy
-		// is not a hook and must remain on every served ready/claim path.
-		provider = wireExternalDependencyUOWProvider(provider)
-	}
+	// bd serve runs no hooks: a user-controlled subprocess per mutation is an
+	// unbounded latency multiplier and an orphaned child at shutdown.
+	var provider uow.UnitOfWorkProvider
 	if provider == nil {
 		// Server, external-server and shared-server workspaces: PersistentPreRunE
 		// builds a DoltStore for those and no unit-of-work provider, so serve
@@ -597,10 +588,7 @@ func serveDatabaseSource(beadsDir string) (serveDatabase, error) {
 // read-only server's advertised capabilities would be a wire change — that list
 // is the documented pre-flight a client checks — and it would make one
 // operation's presence depend on a flag on the process that happened to start
-// the server, which no client can discover before connecting. bd already
-// answers this question the same way one layer down, where a backend that
-// cannot guarantee mutation-free access is turned away rather than opened
-// anyway (backendSupportsStrictReadonly, cmd/bd/main.go).
+// the server, which no client can discover before connecting.
 //
 // The value is read from the global rather than a flag lookup because
 // `readonly` is also a config key, and PersistentPreRunE has already folded
@@ -889,15 +877,8 @@ func serveResolvedMode(info domain.ContextInfo, db serveDatabase) string {
 	if db.source == serveSourceStore {
 		return db.backend + " (registered backend)"
 	}
-	if !usesProxiedServer() {
-		// Server, external-server and shared-server: serve fronts the running
-		// dolt sql-server rather than starting one, so from this process the
-		// server is external even when Beads is what started it.
-		return info.DoltMode + " (external dolt)"
-	}
-	client, err := configfile.LoadProxiedServerClientInfo(info.BeadsDir)
-	if err == nil && client != nil && client.External != nil {
-		return info.DoltMode + " (external dolt)"
-	}
-	return info.DoltMode + " (managed dolt)"
+	// Server, external-server and shared-server: serve fronts the running
+	// dolt sql-server rather than starting one, so from this process the
+	// server is external even when Beads is what started it.
+	return info.DoltMode + " (external dolt)"
 }

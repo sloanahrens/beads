@@ -38,10 +38,6 @@ Examples:
 			return HandleErrorRespectJSON("tag %s: %v", args[0], err)
 		}
 
-		if usesProxiedServer() {
-			return runTagProxiedServer(rootCtx, args[0], label)
-		}
-
 		id := args[0]
 
 		ctx := rootCtx

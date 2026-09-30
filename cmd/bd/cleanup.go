@@ -49,9 +49,6 @@ SEE ALSO:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if usesProxiedServer() {
-			return HandleErrorRespectJSON("admin cleanup is not supported in proxied-server mode")
-		}
 		evt := metrics.NewCommandEvent("admin-cleanup")
 		defer func() {
 			if c := metrics.Global(); c != nil {

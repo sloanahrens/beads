@@ -153,9 +153,6 @@ Examples:
 // through whichever backend this invocation uses: the direct store, or a
 // proxied-server unit of work. Both routes apply the same humanListFilter.
 func humanIssues(ctx context.Context, status string) ([]*types.Issue, error) {
-	if usesProxiedServer() {
-		return proxiedHumanIssues(ctx, status)
-	}
 
 	if err := ensureStoreActive(); err != nil {
 		return nil, err
@@ -275,10 +272,6 @@ Examples:
 		// identically-shaped comments.
 		commentText := fmt.Sprintf("Response: %s", response)
 
-		if usesProxiedServer() {
-			return runHumanRespondProxiedServer(ctx, issueID, commentText)
-		}
-
 		// Direct mode
 		if err := ensureStoreActive(); err != nil {
 			return HandleErrorRespectJSON("responding to human bead: %v", err)
@@ -370,10 +363,6 @@ Examples:
 
 		ctx := rootCtx
 		issueID := args[0]
-
-		if usesProxiedServer() {
-			return runHumanDismissProxiedServer(ctx, issueID, closeReason)
-		}
 
 		// Direct mode
 		if err := ensureStoreActive(); err != nil {

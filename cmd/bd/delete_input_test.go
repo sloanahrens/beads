@@ -4,10 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
-
-	"github.com/spf13/cobra"
 )
 
 func TestReadIssueIDsFromFile(t *testing.T) {
@@ -75,67 +72,6 @@ func TestUniqueStrings(t *testing.T) {
 		want := []string{"a", "b", "c"}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("uniqueStrings(): got %v, want %v", got, want)
-		}
-	})
-}
-
-func TestGatherDeleteInput(t *testing.T) {
-	oldJSONOutput, oldQuiet := jsonOutput, quietFlag
-	t.Cleanup(func() { jsonOutput, quietFlag = oldJSONOutput, oldQuiet })
-
-	newCommand := func(t *testing.T) *cobra.Command {
-		t.Helper()
-		cmd := &cobra.Command{}
-		cmd.Flags().String("from-file", "", "")
-		cmd.Flags().Bool("force", false, "")
-		cmd.Flags().Bool("dry-run", false, "")
-		cmd.Flags().Bool("cascade", false, "")
-		return cmd
-	}
-
-	t.Run("merges positional and file IDs with stable deduplication and projects flags", func(t *testing.T) {
-		idsPath := filepath.Join(t.TempDir(), "ids.txt")
-		if err := os.WriteFile(idsPath, []byte(strings.Join([]string{"bd-file", "bd-shared", "bd-file"}, "\n")), 0o600); err != nil {
-			t.Fatalf("write IDs file: %v", err)
-		}
-		cmd := newCommand(t)
-		for name, value := range map[string]string{"from-file": idsPath, "force": "true", "dry-run": "true"} {
-			if err := cmd.Flags().Set(name, value); err != nil {
-				t.Fatalf("set %s: %v", name, err)
-			}
-		}
-		jsonOutput, quietFlag = true, true
-
-		got, err := gatherDeleteInput(cmd, []string{"bd-arg", "bd-shared", "bd-arg"})
-		if err != nil {
-			t.Fatalf("gatherDeleteInput: %v", err)
-		}
-		want := &deleteInput{
-			ids:        []string{"bd-arg", "bd-shared", "bd-file"},
-			force:      true,
-			dryRun:     true,
-			jsonOutput: true,
-			quiet:      true,
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("gatherDeleteInput(): got %#v, want %#v", got, want)
-		}
-	})
-
-	t.Run("accepts cascade and projects it (embedded parity, bd-paurh)", func(t *testing.T) {
-		cmd := newCommand(t)
-		if err := cmd.Flags().Set("cascade", "true"); err != nil {
-			t.Fatalf("set cascade: %v", err)
-		}
-		jsonOutput, quietFlag = false, false
-
-		got, err := gatherDeleteInput(cmd, []string{"bd-target"})
-		if err != nil {
-			t.Fatalf("gatherDeleteInput() with --cascade: %v", err)
-		}
-		want := &deleteInput{ids: []string{"bd-target"}, cascade: true}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("gatherDeleteInput(): got %#v, want %#v", got, want)
 		}
 	})
 }

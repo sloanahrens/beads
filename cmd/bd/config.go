@@ -252,9 +252,6 @@ var configSetCmd = &cobra.Command{
 // is reachable by neither route. It is per-verb because the shipped text names
 // the verb.
 func openWorkspaceConfig(directRequirement string) (issueops.WorkspaceConfig, error) {
-	if usesProxiedServer() {
-		return proxiedWorkspaceConfig()
-	}
 	if err := ensureDirectMode(directRequirement); err != nil {
 		return nil, err
 	}
@@ -263,14 +260,8 @@ func openWorkspaceConfig(directRequirement string) (issueops.WorkspaceConfig, er
 
 // noteDirectConfigWrite marks the invocation as having written, which is what
 // the auto-commit epilogue in main.go keys on.
-//
-// It is DIRECT-ROUTE ONLY: a proxied write already committed inside the role's
-// own unit of work, so flagging it here would ask the epilogue to commit a
-// second time on a route that has nothing outstanding.
 func noteDirectConfigWrite() {
-	if !usesProxiedServer() {
-		commandDidWrite.Store(true)
-	}
+	commandDidWrite.Store(true)
 }
 
 var configGetCmd = &cobra.Command{
@@ -948,27 +939,15 @@ Examples:
 		// setting per call and commits each, so routing this through it would
 		// turn a three-key batch into three commits.
 		if len(dbPairs) > 0 {
-			if usesProxiedServer() {
-				keys := make([]string, len(dbPairs))
-				values := make([]string, len(dbPairs))
-				for i, p := range dbPairs {
-					keys[i] = p.key
-					values[i] = p.value
-				}
-				if err := runConfigSetManyProxiedServer(rootCtx, keys, values); err != nil {
-					return err
-				}
-			} else {
-				if err := ensureDirectMode("config set-many requires direct database access"); err != nil {
-					return HandleError("%v", err)
-				}
-				for _, p := range dbPairs {
-					if err := store.SetConfig(rootCtx, p.key, p.value); err != nil {
-						return HandleError("setting config %s: %v", p.key, err)
-					}
-				}
-				commandDidWrite.Store(true)
+			if err := ensureDirectMode("config set-many requires direct database access"); err != nil {
+				return HandleError("%v", err)
 			}
+			for _, p := range dbPairs {
+				if err := store.SetConfig(rootCtx, p.key, p.value); err != nil {
+					return HandleError("setting config %s: %v", p.key, err)
+				}
+			}
+			commandDidWrite.Store(true)
 		}
 
 		if jsonOutput {

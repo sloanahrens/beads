@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"testing"
-
-	"github.com/spf13/cobra"
 )
 
 // Write paths must normalize labels the same way read paths already do.
@@ -71,39 +68,6 @@ func TestGatherCreateInputNormalizesLabels(t *testing.T) {
 			assertLabels(t, in.labels, tt.want)
 		})
 	}
-}
-
-// The update write paths carry the same gap on --add-label, --remove-label and
-// --set-labels.
-func TestGatherUpdateInputNormalizesLabels(t *testing.T) {
-	// gatherUpdateInput reads flags through Flags().Changed, which reports
-	// false for anything unregistered, so the three label flags are all this
-	// case needs. ctx is consulted only for --status validation.
-	cmd := &cobra.Command{Use: "update"}
-	cmd.Flags().StringSlice("add-label", nil, "Add labels (repeatable)")
-	cmd.Flags().StringSlice("remove-label", nil, "Remove labels (repeatable)")
-	cmd.Flags().StringSlice("set-labels", nil, "Set labels, replacing all existing (repeatable)")
-
-	args := []string{
-		"--add-label", "theme:a, theme:b",
-		"--remove-label", " theme:c ",
-		"--set-labels", "theme:d,,theme:d",
-	}
-	if err := cmd.ParseFlags(args); err != nil {
-		t.Fatalf("parse update flags: %v", err)
-	}
-
-	in, err := gatherUpdateInput(context.Background(), cmd)
-	if err != nil {
-		t.Fatalf("gatherUpdateInput: %v", err)
-	}
-
-	assertLabels(t, in.addLabels, []string{"theme:a", "theme:b"})
-	assertLabels(t, in.removeLabels, []string{"theme:c"})
-	if in.setLabels == nil {
-		t.Fatal("expected --set-labels to be captured")
-	}
-	assertLabels(t, *in.setLabels, []string{"theme:d"})
 }
 
 // `bd tag` calls itself "Shorthand for 'bd update <id> --add-label <label>'",

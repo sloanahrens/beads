@@ -134,8 +134,6 @@ func directContextSnapshot(t *testing.T, beadsDir string) domain.ContextInfo {
 		BeadsDir:  rc.BeadsDir,
 		RepoRoot:  rc.RepoRoot,
 	}
-	if err := applyContextBackend(&snapshot, rc.BeadsDir, cfg); err != nil {
-		t.Fatalf("applyContextBackend: %v", err)
-	}
+	applyContextBackend(&snapshot, rc.BeadsDir, cfg)
 	return snapshot
 }

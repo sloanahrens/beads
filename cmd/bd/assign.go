@@ -40,10 +40,6 @@ Examples:
 
 		force, _ := cmd.Flags().GetBool("force")
 
-		if usesProxiedServer() {
-			return runAssignProxiedServer(rootCtx, args, force)
-		}
-
 		id := args[0]
 		assignee := args[1]
 

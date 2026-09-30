@@ -55,10 +55,6 @@ Examples:
 			return printSections(jsonOutput)
 		}
 
-		if usesProxiedServer() {
-			return runTypesProxiedServer(rootCtx)
-		}
-
 		if err := ensureDirectMode("types command requires direct database access"); err != nil {
 			return HandleError("%v", err)
 		}

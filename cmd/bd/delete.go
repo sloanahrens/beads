@@ -60,10 +60,6 @@ Force: Delete and orphan dependents
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runDeleteProxiedServer(cmd, rootCtx, args)
-		}
-
 		fromFile, _ := cmd.Flags().GetString("from-file")
 		force, _ := cmd.Flags().GetBool("force")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")

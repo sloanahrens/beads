@@ -15,7 +15,6 @@ import (
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage/domain"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -85,20 +84,6 @@ func runExport(cmd *cobra.Command, args []string) error {
 	}()
 
 	ctx := rootCtx
-
-	if usesProxiedServer() {
-		if uowProvider == nil {
-			return HandleErrorRespectJSON("proxied-server UOW provider not initialized")
-		}
-		// Run the ENTIRE read set inside one read transaction so the exported
-		// issues, labels, dependencies, comments, and memories are a single
-		// consistent snapshot. Export is read-only: RunTxRead never commits
-		// (the attempt is always rolled back on close).
-		_, err := uow.RunTxRead(ctx, uowProvider, func(ctx context.Context, uw uow.UnitOfWork) (struct{}, error) {
-			return struct{}{}, runExportFromSource(ctx, &uowExportSource{uw: uw})
-		})
-		return err
-	}
 
 	return runExportFromSource(ctx, storeExportSource{})
 }

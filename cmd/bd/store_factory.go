@@ -21,10 +21,10 @@ import (
 
 func usesSQLServer() bool {
 	if shouldUseGlobals() {
-		if serverMode || proxiedServerMode {
+		if serverMode {
 			return true
 		}
-	} else if cmdCtx != nil && (cmdCtx.ServerMode || cmdCtx.ProxiedServerMode) {
+	} else if cmdCtx != nil && cmdCtx.ServerMode {
 		return true
 	}
 	if doltserver.IsSharedServerMode() {
@@ -36,13 +36,6 @@ func usesSQLServer() bool {
 // isEmbeddedMode reports whether the command is using embedded Dolt storage.
 func isEmbeddedMode() bool {
 	return !usesSQLServer()
-}
-
-func usesProxiedServer() bool {
-	if shouldUseGlobals() {
-		return proxiedServerMode
-	}
-	return cmdCtx != nil && cmdCtx.ProxiedServerMode
 }
 
 // newDoltStore creates a storage backend from an explicit config.
@@ -70,11 +63,6 @@ func newRegisteredBackendStore(ctx context.Context, name, beadsDir string, readO
 
 func newDoltStore(ctx context.Context, cfg *dolt.Config) (s storage.DoltStorage, err error) {
 	defer func() { s, err = activateEventsJournalStore(cfg.BeadsDir, s, err) }()
-	if cfg.ProxiedServer {
-		// TODO: this should not be a store
-		// it should be a uow provider
-		return nil, fmt.Errorf("proxy server store should be uow provider")
-	}
 	if cfg.ServerMode {
 		return dolt.New(ctx, cfg)
 	}
@@ -210,15 +198,6 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (s storage.Dol
 	if backend, ok := backends.Lookup(cfg.GetBackend()); ok {
 		return backend.Open(ctx, beadsDir)
 	}
-	if cfg != nil && cfg.IsDoltProxiedServerMode() {
-		// TODO: this needs to be uow provider
-		return nil, fmt.Errorf("proxy server store should be uow provider")
-		// 	return newProxiedServerStore(ctx, &dolt.Config{
-		// 		BeadsDir:      beadsDir,
-		// 		Database:      cfg.GetDoltDatabase(),
-		// 		ProxiedServer: true,
-		// 	})
-	}
 	if cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfig(ctx, beadsDir)
 	}
@@ -317,16 +296,6 @@ func openNonMutatingStoreFromConfig(ctx context.Context, beadsDir string, previe
 	cfg = normalizeLoadedConfig(cfg)
 	if backend, ok := backends.Lookup(cfg.GetBackend()); ok {
 		return backend.OpenReadOnly(ctx, beadsDir)
-	}
-	if cfg != nil && cfg.IsDoltProxiedServerMode() {
-		// TODO: this needs to be uow provider
-		return nil, fmt.Errorf("proxy server store needs to be uow provider")
-		// return newProxiedServerStore(ctx, &dolt.Config{
-		// 	BeadsDir:      beadsDir,
-		// 	Database:      cfg.GetDoltDatabase(),
-		// 	ProxiedServer: true,
-		// 	ReadOnly:      true,
-		// })
 	}
 	if cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfigWithOptions(ctx, beadsDir, &dolt.Config{ReadOnly: true})

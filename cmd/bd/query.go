@@ -87,10 +87,6 @@ Examples:
 			}
 		}()
 
-		if usesProxiedServer() {
-			return runQueryProxiedServer(cmd, rootCtx, args)
-		}
-
 		in, err := gatherQueryInput(cmd, args)
 		if err != nil {
 			return err
@@ -99,7 +95,7 @@ Examples:
 			return printParsedQuery(in.expression)
 		}
 		if in.offset > 0 {
-			return HandleErrorRespectJSON("--offset is only supported under --proxied-server")
+			return HandleErrorRespectJSON("--offset is not supported: page with --limit")
 		}
 
 		querier, err := openQuerier()
@@ -114,9 +110,6 @@ Examples:
 // invocation is on. Neither branch parses the expression, builds a filter or
 // opens a unit of work: that is what moved behind the role.
 func openQuerier() (issueops.Querier, error) {
-	if usesProxiedServer() {
-		return proxiedQuerier()
-	}
 	if store == nil {
 		return nil, errors.New("no storage available")
 	}
@@ -295,7 +288,7 @@ func formatQueryIssue(buf *strings.Builder, issue *types.Issue) {
 
 func init() {
 	queryCmd.Flags().IntP("limit", "n", workapi.DefaultQueryLimit, "Limit results (default: 50, 0 = unlimited)")
-	queryCmd.Flags().Int("offset", 0, "Skip the first N matching results (0-based). Only supported under --proxied-server.")
+	queryCmd.Flags().Int("offset", 0, "Not supported: any value above 0 is rejected (page with --limit).")
 	queryCmd.Flags().BoolP("all", "a", false, "Include closed issues (default: exclude closed)")
 	queryCmd.Flags().Bool("long", false, "Show detailed multi-line output for each issue")
 	queryCmd.Flags().String("sort", "", "Sort by field: priority, created, updated, closed, status, id, title, type, assignee")

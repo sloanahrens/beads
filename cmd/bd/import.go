@@ -15,7 +15,6 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/metrics"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -242,10 +241,6 @@ func runImportFromReader(ctx context.Context, r io.Reader, source string) error 
 	issues, memories, err := parseImportRecords(r)
 	if err != nil {
 		return err
-	}
-
-	if usesProxiedServer() {
-		return runImportRecordsProxied(ctx, issues, memories, source)
 	}
 
 	if store == nil {
@@ -498,22 +493,6 @@ func renderImportOutcome(result importResultJSON, source string, dedupHits int) 
 // directly, and uowImportTitleSearcher adapts the proxied unit of work.
 type importTitleSearcher interface {
 	SearchIssues(ctx context.Context, query string, filter types.IssueFilter) ([]*types.Issue, error)
-}
-
-// uowImportTitleSearcher adapts a unit of work's issue use case to the
-// classic []*types.Issue search shape filterDuplicatesByTitle consumes. Both
-// stacks run the same issueops search underneath (issues merged with wisps),
-// so --dedup sees the same title universe in both modes.
-type uowImportTitleSearcher struct {
-	uw uow.UnitOfWork
-}
-
-func (s uowImportTitleSearcher) SearchIssues(ctx context.Context, query string, filter types.IssueFilter) ([]*types.Issue, error) {
-	page, err := s.uw.IssueUseCase().SearchIssues(ctx, query, filter)
-	if err != nil {
-		return nil, err
-	}
-	return page.Items, nil
 }
 
 // filterDuplicatesByTitle removes issues whose title matches an existing open issue.

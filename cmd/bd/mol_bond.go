@@ -99,10 +99,6 @@ func runMolBond(cmd *cobra.Command, args []string) error {
 		return HandleErrorRespectJSON("%v", err)
 	}
 
-	if usesProxiedServer() {
-		return runMolBondProxiedServer(rootCtx, in)
-	}
-
 	ctx := rootCtx
 
 	if store == nil {
@@ -406,34 +402,6 @@ func bondProtoMolWithSubgraph(ctx context.Context, s storage.DoltStorage, protoS
 		return nil, err
 	}
 	spawnResult, err := cloneSubgraph(ctx, s, protoSubgraph, opts)
-	if err != nil {
-		return nil, fmt.Errorf("spawning and attaching proto: %w", err)
-	}
-	return &BondResult{
-		ResultID:   mol.ID,
-		ResultType: "compound_molecule",
-		BondType:   bondType,
-		Spawned:    spawnResult.Created,
-		IDMapping:  spawnResult.IDMapping,
-	}, nil
-}
-
-// bondProtoMolAttachInto is bondProtoMolWithSubgraph's counterpart for
-// callers that already have an open molWriter (the proxied-server duals),
-// so spawn + attach happen inside the caller's own transaction.
-func bondProtoMolAttachInto(ctx context.Context, w molWriter, protoSubgraph *TemplateSubgraph, proto, mol *types.Issue, bondType string, vars map[string]string, childRef string, actorName string, ephemeralFlag, pourFlag bool) (*BondResult, error) {
-	if protoSubgraph == nil {
-		var err error
-		protoSubgraph, err = loadTemplateSubgraph(ctx, w, proto.ID)
-		if err != nil {
-			return nil, fmt.Errorf("loading proto: %w", err)
-		}
-	}
-	opts, err := buildAttachCloneOpts(protoSubgraph, mol, bondType, vars, childRef, actorName, ephemeralFlag, pourFlag)
-	if err != nil {
-		return nil, err
-	}
-	spawnResult, err := cloneSubgraphInto(ctx, w, protoSubgraph, opts)
 	if err != nil {
 		return nil, fmt.Errorf("spawning and attaching proto: %w", err)
 	}

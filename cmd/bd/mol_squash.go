@@ -141,10 +141,6 @@ func runMolSquash(cmd *cobra.Command, args []string) error {
 
 	in := gatherMolSquashInput(cmd, args)
 
-	if usesProxiedServer() {
-		return runMolSquashProxiedServer(rootCtx, in)
-	}
-
 	ctx := rootCtx
 
 	if store == nil {

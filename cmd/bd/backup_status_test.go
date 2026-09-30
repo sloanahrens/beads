@@ -159,24 +159,6 @@ func TestBackupStatusIncludesAvailableDatabaseSize(t *testing.T) {
 	})
 }
 
-func TestBackupStatusProxiedGuardDoesNotMeasureSize(t *testing.T) {
-	prepareBackupStatusTest(t)
-	proxiedServerMode = true
-	called := false
-	sizeDatabase := func(context.Context) (int64, bool, error) {
-		called = true
-		return 1, true, nil
-	}
-
-	cmd := newBackupStatusTestRoot(sizeDatabase)
-	cmd.SetArgs([]string{"backup", "status"})
-	_, _, err := executeBackupStatusCommand(t, cmd)
-	assertExitCode(t, err, 1)
-	if called {
-		t.Fatal("proxied-server guard called database size provider")
-	}
-}
-
 func prepareBackupStatusTest(t *testing.T) {
 	t.Helper()
 
@@ -189,13 +171,10 @@ func prepareBackupStatusTest(t *testing.T) {
 	initConfigForTest(t)
 
 	oldJSONOutput := jsonOutput
-	oldProxiedServerMode := proxiedServerMode
 	jsonOutput = false
-	proxiedServerMode = false
 	resetCommandContext()
 	t.Cleanup(func() {
 		jsonOutput = oldJSONOutput
-		proxiedServerMode = oldProxiedServerMode
 		resetCommandContext()
 	})
 }

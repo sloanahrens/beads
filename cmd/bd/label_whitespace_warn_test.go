@@ -3,8 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"github.com/spf13/cobra"
 )
 
 // bd honors the shell's word boundaries: a quoted or backslash-escaped space
@@ -71,26 +69,5 @@ func TestGatherCreateInputWarnsOnSpaceContainingLabel(t *testing.T) {
 	})
 	if !strings.Contains(out, "ONE label") {
 		t.Fatalf("expected create to warn on a space-containing label, got: %q", out)
-	}
-}
-
-// Removing a space-containing label is how the damage gets repaired, so the
-// repair must not be warned at.
-func TestGatherUpdateInputDoesNotWarnOnRemoveLabel(t *testing.T) {
-	out := captureStderr(t, func() {
-		cmd := &cobra.Command{Use: "update"}
-		cmd.Flags().StringSlice("add-label", nil, "")
-		cmd.Flags().StringSlice("remove-label", nil, "")
-		cmd.Flags().StringSlice("set-labels", nil, "")
-		if err := cmd.ParseFlags([]string{"--remove-label", "theme:a theme:b"}); err != nil {
-			t.Errorf("parse update flags: %v", err)
-			return
-		}
-		if _, err := gatherUpdateInput(t.Context(), cmd); err != nil {
-			t.Errorf("gatherUpdateInput: %v", err)
-		}
-	})
-	if out != "" {
-		t.Fatalf("removing a space-containing label must not warn, got: %q", out)
 	}
 }

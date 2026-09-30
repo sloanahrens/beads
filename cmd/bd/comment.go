@@ -90,9 +90,6 @@ To list comments on an issue, use the plural form: bd comments <id>`,
 
 		// Dispatched after the text is resolved so both backends read the
 		// same sources and report the same conflicts.
-		if usesProxiedServer() {
-			return runCommentProxiedServer(rootCtx, id, author, commentText)
-		}
 
 		ctx := rootCtx
 

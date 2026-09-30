@@ -99,10 +99,6 @@ Examples:
 
 		CheckReadonly("reclaim")
 
-		if usesProxiedServer() {
-			return runReclaimProxiedServer(rootCtx, olderThan, filter)
-		}
-
 		ctx := rootCtx
 		reclaimed, err := store.ReclaimExpiredLeases(ctx, olderThan, filter, actor)
 		if err != nil {

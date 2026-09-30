@@ -185,10 +185,6 @@ Examples:
 		}
 		value := args[1]
 
-		if usesProxiedServer() {
-			return runKVSetProxiedServer(rootCtx, key, value)
-		}
-
 		if err := ensureDirectMode("kv set requires direct database access"); err != nil {
 			return HandleError("%v", err)
 		}
@@ -225,10 +221,6 @@ Examples:
 		}()
 
 		key := args[0]
-
-		if usesProxiedServer() {
-			return runKVGetProxiedServer(rootCtx, key)
-		}
 
 		if err := ensureDirectMode("kv get requires direct database access"); err != nil {
 			return HandleError("%v", err)
@@ -273,10 +265,6 @@ Examples:
 			return HandleErrorRespectJSON("invalid key: %v", err)
 		}
 
-		if usesProxiedServer() {
-			return runKVClearProxiedServer(rootCtx, key)
-		}
-
 		if err := ensureDirectMode("kv clear requires direct database access"); err != nil {
 			return HandleError("%v", err)
 		}
@@ -310,10 +298,6 @@ Examples:
 				c.CloseEventAndAdd(evt)
 			}
 		}()
-
-		if usesProxiedServer() {
-			return runKVListProxiedServer(rootCtx)
-		}
 
 		if err := ensureDirectMode("kv list requires direct database access"); err != nil {
 			return HandleError("%v", err)

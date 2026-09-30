@@ -14,6 +14,9 @@ func validateConfiguredBackend(cfg *configfile.Config) error {
 	if backends.Registered(cfg.Backend) {
 		return nil
 	}
+	if cfg.IsDoltProxiedServerMode() {
+		return errProxiedServerModeRemoved()
+	}
 	switch cfg.Backend {
 	case configfile.BackendPostgres, configfile.BackendMySQL, configfile.BackendSQLite:
 		return configfile.RemovedBackendError(cfg.Backend)
@@ -68,4 +71,13 @@ func loadDoltBackendConfig(beadsDir string) (*configfile.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// errProxiedServerModeRemoved is the fail-closed refusal for a workspace whose
+// metadata.json still selects dolt_mode "proxied-server". That mode was removed;
+// bd opens nothing rather than guessing at a server-mode equivalent.
+func errProxiedServerModeRemoved() error {
+	return fmt.Errorf("dolt_mode %q in metadata.json is no longer supported: proxied-server mode was removed; %s; "+
+		"convert the workspace to server mode with an older bd (bd migrate from-proxied-server-to-server) and retry",
+		configfile.DoltModeProxiedServer, configfile.BackendNotOpenedGuarantee)
 }

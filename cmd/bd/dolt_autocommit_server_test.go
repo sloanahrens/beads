@@ -34,7 +34,6 @@ func (f *fakeCommitPendingStore) CommitPending(_ context.Context, actor string) 
 func saveStorageMode(t *testing.T) {
 	t.Helper()
 	oldServerMode := serverMode
-	oldProxiedServerMode := proxiedServerMode
 	oldCmdCtx := cmdCtx
 	oldStore := store
 	oldUseGlobals := testModeUseGlobals
@@ -45,7 +44,6 @@ func saveStorageMode(t *testing.T) {
 	doltAutoCommit = string(doltAutoCommitOn)
 	t.Cleanup(func() {
 		serverMode = oldServerMode
-		proxiedServerMode = oldProxiedServerMode
 		cmdCtx = oldCmdCtx
 		store = oldStore
 		testModeUseGlobals = oldUseGlobals
@@ -70,16 +68,13 @@ func TestMaybeAutoCommitSkipsSQLServerMode(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		server      bool
-		proxied     bool
 		description string
 	}{
 		{name: "server", server: true, description: "server mode"},
-		{name: "proxied", proxied: true, description: "proxied server mode"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			saveStorageMode(t)
 			serverMode = tc.server
-			proxiedServerMode = tc.proxied
 
 			fake := &fakeCommitPendingStore{}
 			setStore(fake)
@@ -96,7 +91,6 @@ func TestMaybeAutoCommitSkipsSQLServerMode(t *testing.T) {
 func TestCommitPendingIfEmbeddedCommitsWhenEnabled(t *testing.T) {
 	saveStorageMode(t)
 	serverMode = false
-	proxiedServerMode = false
 
 	fake := &fakeCommitPendingStore{}
 	if err := commitPendingIfEmbedded(context.Background(), fake, "tester", doltAutoCommitParams{
@@ -121,7 +115,6 @@ func TestCommitPendingIfEmbeddedHonorsBatchAndOffModes(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			saveStorageMode(t)
 			serverMode = false
-			proxiedServerMode = false
 			doltAutoCommit = string(mode)
 
 			fake := &fakeCommitPendingStore{}
@@ -182,7 +175,6 @@ func TestShouldCommitCreatePostWritesPreservesEmbeddedFlushWhenEnabled(t *testin
 func TestShouldCommitCreatePostWritesDefaultsEmbeddedToOn(t *testing.T) {
 	saveStorageMode(t)
 	serverMode = false
-	proxiedServerMode = false
 	doltAutoCommit = ""
 
 	if got, err := shouldCommitCreatePostWrites(&types.Issue{}, false); err != nil || !got {

@@ -58,10 +58,6 @@ Examples:
 		fix, _ := cmd.Flags().GetBool("fix")
 		details, _ := cmd.Flags().GetBool("details")
 
-		if usesProxiedServer() {
-			return runOrphansProxiedServer(rootCtx, labels, labelsAny, fix, details)
-		}
-
 		orphans, err := findOrphanedIssues(".", labels, labelsAny)
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)

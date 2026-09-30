@@ -12,7 +12,6 @@ import (
 	"github.com/steveyegge/beads/internal/memoryapi"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage/kvkeys"
-	"github.com/steveyegge/beads/internal/storage/uow"
 	"github.com/steveyegge/beads/memoryops"
 )
 
@@ -24,57 +23,21 @@ import (
 // is reachable by neither route. It is per-verb because the shipped text names
 // the verb.
 func openMemories(directRequirement string) (memoryops.Memories, error) {
-	if usesProxiedServer() {
-		return proxiedMemories()
-	}
 	if err := ensureDirectMode(directRequirement); err != nil {
 		return nil, err
 	}
 	return store.Memories()
 }
 
-// proxiedMemories hands back the guarded persistent-memory surface for this
-// invocation's proxied-server provider, through the provider's OWN capability
-// accessor — the same two-step proxiedWorkspaceConfig performs.
-func proxiedMemories() (memoryops.Memories, error) {
-	if uowProvider == nil {
-		return nil, errors.New("proxied-server UOW provider not initialized")
-	}
-	return memoriesFromProvider(uowProvider)
-}
-
-// memoriesFromProvider is that accessor step for a provider the caller names.
-//
-// It takes the provider rather than reading the global one because `bd prime`
-// opens a provider SCOPED to its read — prime is in noDbCommands, so the root
-// pre-run opens nothing — and one spelling of "ask this provider for the memory
-// surface" is the whole point of having an accessor at all.
-func memoriesFromProvider(provider uow.UnitOfWorkProvider) (memoryops.Memories, error) {
-	src, ok := provider.(uow.MemoriesSource)
-	if !ok {
-		return nil, fmt.Errorf("proxied-server provider %T does not offer the persistent-memory surface", provider)
-	}
-	return src.Memories()
-}
-
 // noteDirectMemoryWrite marks the invocation as having written, which is what
 // the auto-commit epilogue in main.go keys on.
 //
-// It is DIRECT-ROUTE ONLY, and both halves of that matter. A direct memory
-// write lands in the Dolt working set and nothing else commits it, so a verb
-// that forgets to call this stores a memory that exists until the process exits
-// and then sits uncommitted — visible to the session that wrote it and to
-// nothing after. A proxied write already committed inside the role's unit of
-// work, so flagging it there would ask the epilogue to commit a second time on
-// a route with nothing outstanding.
-//
-// The RunEs cannot make that distinction themselves: openMemories hides which
-// route they are on, which is the point. So the guard lives here, once, the way
-// noteDirectConfigWrite does for the settings plane.
+// A direct memory write lands in the Dolt working set and nothing else commits
+// it, so a verb that forgets to call this stores a memory that exists until the
+// process exits and then sits uncommitted — visible to the session that wrote it
+// and to nothing after.
 func noteDirectMemoryWrite() {
-	if !usesProxiedServer() {
-		commandDidWrite.Store(true)
-	}
+	commandDidWrite.Store(true)
 }
 
 // memoryPrefix is prepended (after kvPrefix) to all memory keys.

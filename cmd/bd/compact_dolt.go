@@ -45,9 +45,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		if usesProxiedServer() {
-			return runCompactProxiedServer(rootCtx)
-		}
 		evt := metrics.NewCommandEvent("compact")
 		defer func() {
 			if c := metrics.Global(); c != nil {

@@ -703,28 +703,6 @@ func TestCLI_NoteMisplacedSyntaxRejectedBeforeStoreOpen(t *testing.T) {
 	}
 }
 
-// TestCLI_NoteMisplacedSyntaxRejectedInProxiedServerMode is the
-// proxied-server counterpart, mirroring
-// TestCLI_CommentMisplacedSyntaxRejectedInProxiedServerMode: because
-// validateNoteArgs runs in Args — before RunE ever branches on
-// usesProxiedServer() — the rejection fires identically regardless of
-// backend, without needing a real proxied server.
-func TestCLI_NoteMisplacedSyntaxRejectedInProxiedServerMode(t *testing.T) {
-	origProxied := proxiedServerMode
-	t.Cleanup(func() { proxiedServerMode = origProxied })
-	proxiedServerMode = true
-
-	tmpDir := setupCLITestDB(t)
-	stdout, stderr, err := runBDInProcessAllowError(t, tmpDir, "note", "list", "should not be stored")
-	if err == nil {
-		t.Fatalf("expected non-zero exit for misplaced 'note list' in proxied-server mode, got success:\nstdout: %s", stdout)
-	}
-	combined := stdout + stderr
-	if !strings.Contains(combined, "bd note") {
-		t.Errorf("expected hint pointing to `bd note`, got:\n%s", combined)
-	}
-}
-
 // TestCLI_NoteTextStartingWithReservedWordStillWorks confirms the fix is
 // scoped to the id positional argument only: a real id followed by note
 // TEXT that happens to start with "list" or "add" must still work exactly
@@ -1498,33 +1476,6 @@ func TestCLI_CommentsSwappedAddRejectedBeforeStoreOpen(t *testing.T) {
 	}
 }
 
-// TestCLI_CommentsSwappedAddRejectedInProxiedServerMode is the proxied-server
-// counterpart: forcing proxiedServerMode simulates the dispatch that GH#4642's
-// merge-base drift routes around a RunE-only check (main added
-// runCommentsProxiedServer after this fix branched, consuming only args[0]
-// and ignoring trailing `add <text>`). Because validateCommentsArgs runs in
-// Args — before RunE ever branches on usesProxiedServer() — the rejection
-// fires identically regardless of backend, without needing a real proxied
-// server.
-func TestCLI_CommentsSwappedAddRejectedInProxiedServerMode(t *testing.T) {
-	origProxied := proxiedServerMode
-	t.Cleanup(func() { proxiedServerMode = origProxied })
-	proxiedServerMode = true
-
-	tmpDir := setupCLITestDB(t)
-	stdout, stderr, err := runBDInProcessAllowError(t, tmpDir, "comments", "bd-123", "add", "should not be stored")
-	if err == nil {
-		t.Fatalf("expected non-zero exit for swapped-order add in proxied-server mode, got success:\nstdout: %s", stdout)
-	}
-	combined := stdout + stderr
-	if strings.Contains(combined, "not supported in proxied-server mode") {
-		t.Fatalf("Args validation did not run before the proxied dispatch: got RunE's proxied-mode stub error instead.\nOutput:\n%s", combined)
-	}
-	if !strings.Contains(combined, "bd comments add") {
-		t.Errorf("expected hint pointing to `bd comments add`, got:\n%s", combined)
-	}
-}
-
 // TestCLI_CommentsAddShortID tests that 'comments add' accepts short IDs (issue #1070)
 // Most bd commands accept short IDs (e.g., "5wbm") but comments add previously required
 // full IDs (e.g., "mike.vibe-coding-5wbm"). This test ensures short IDs work.
@@ -1754,28 +1705,6 @@ func TestCLI_CommentMisplacedSyntaxRejectedBeforeStoreOpen(t *testing.T) {
 	}
 }
 
-// TestCLI_CommentMisplacedSyntaxRejectedInProxiedServerMode is the
-// proxied-server counterpart, mirroring
-// TestCLI_CommentsSwappedAddRejectedInProxiedServerMode: because
-// validateCommentArgs runs in Args — before RunE ever branches on
-// usesProxiedServer() — the rejection fires identically regardless of
-// backend, without needing a real proxied server.
-func TestCLI_CommentMisplacedSyntaxRejectedInProxiedServerMode(t *testing.T) {
-	origProxied := proxiedServerMode
-	t.Cleanup(func() { proxiedServerMode = origProxied })
-	proxiedServerMode = true
-
-	tmpDir := setupCLITestDB(t)
-	stdout, stderr, err := runBDInProcessAllowError(t, tmpDir, "comment", "list", "should not be stored")
-	if err == nil {
-		t.Fatalf("expected non-zero exit for misplaced 'comment list' in proxied-server mode, got success:\nstdout: %s", stdout)
-	}
-	combined := stdout + stderr
-	if !strings.Contains(combined, "bd comments") {
-		t.Errorf("expected hint pointing to `bd comments`, got:\n%s", combined)
-	}
-}
-
 // TestCLI_CommentTextStartingWithReservedWordStillWorks confirms the fix is
 // scoped to the id positional argument only: a real id followed by comment
 // TEXT that happens to start with "list" or "add" must still work exactly
@@ -1890,49 +1819,6 @@ func TestCLI_CreateRejectsEmptyTitle(t *testing.T) {
 				t.Errorf("expected 'title cannot be empty' error, got: %s", combined)
 			}
 		})
-	}
-}
-
-// TestCLI_CreateRejectsEmptyTitle_ProxiedServerMode is a proxied-server
-// regression for GH#4771. Before this fix, the whitespace-only guard lived
-// only in create's local-store RunE branch: gatherCreateInput/
-// runCreateProxiedServer (the path taken when usesProxiedServer() is true)
-// never re-checked, so proxied-mode create still minted a blank-titled bead.
-// The fix moved the check into resolveTitle, invoked from createCmd's Args
-// validator — which runs for every invocation regardless of backend, before
-// RunE ever branches on usesProxiedServer(). Setting proxiedServerMode here
-// exercises that dispatch without needing a real proxied server: Args
-// validation must reject before gatherCreateInput/runCreateProxiedServer (or
-// any store open) ever runs.
-func TestCLI_CreateRejectsEmptyTitle_ProxiedServerMode(t *testing.T) {
-	origProxied := proxiedServerMode
-	t.Cleanup(func() { proxiedServerMode = origProxied })
-	proxiedServerMode = true
-
-	// createCmd is a shared package-level *cobra.Command, so a --title value
-	// set by an earlier in-process test invocation (e.g. TestCLI_CreateRejectsEmptyTitle's
-	// own FlagTab case) survives on the FlagSet across rootCmd.Execute() calls.
-	// Reset it explicitly so this test's outcome doesn't depend on suite
-	// ordering — a pre-existing gap, not something this test should also fall
-	// victim to.
-	titleFlag := createCmd.Flags().Lookup("title")
-	origTitleValue := titleFlag.Value.String()
-	origTitleChanged := titleFlag.Changed
-	t.Cleanup(func() {
-		_ = titleFlag.Value.Set(origTitleValue)
-		titleFlag.Changed = origTitleChanged
-	})
-	_ = titleFlag.Value.Set("")
-	titleFlag.Changed = false
-
-	tmpDir := setupCLITestDB(t)
-	stdout, stderr, err := runBDInProcessAllowError(t, tmpDir, "create", "   ", "-p", "2")
-	if err == nil {
-		t.Fatalf("expected error for whitespace-only title in proxied-server mode, got success\nstdout: %s", stdout)
-	}
-	combined := stdout + stderr
-	if !strings.Contains(combined, "title cannot be empty") {
-		t.Errorf("expected 'title cannot be empty' error, got: %s", combined)
 	}
 }
 

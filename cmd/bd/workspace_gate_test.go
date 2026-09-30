@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/workspacegate"
@@ -233,55 +232,4 @@ func TestReleaseWorkspaceGatesIdempotent(t *testing.T) {
 		t.Fatalf("gate still held after releaseWorkspaceGates: %v", err)
 	}
 	_ = h.Release()
-}
-
-// The cross-wiring guarantee: a chokepoint SHARED hold (a normal command
-// mid-flight) excludes acquireMigrateGates' EXCLUSIVE acquisition on the
-// same workspace. Also exercises the nil-rootCtx path inside
-// acquireMigrateGates (tests have no process signal context), which used to
-// panic before the nil-context normalization.
-func TestChokepointSharedExcludesMigrateExclusive(t *testing.T) {
-	resetGateTestEnv(t)
-	t.Cleanup(releaseWorkspaceGates)
-	beadsDir := newGateTestWorkspace(t)
-
-	// rootCtx is a package global that production sets via
-	// setupGracefulShutdown() in PersistentPreRunE and cancels via
-	// rootCancel() in PersistentPostRunE WITHOUT resetting the var to nil —
-	// harmless in production (the process exits), but any earlier in-process
-	// test that exercises the full command path (Execute()) leaves rootCtx
-	// pointing at an already-canceled context for whatever test runs next in
-	// the same binary. acquireMigrateGates now threads rootCtx through to
-	// acquireExclusiveWorkspaceGates, so this test is sensitive to that
-	// leak: pin it to nil (the documented "no process signal context yet"
-	// case this test exercises) regardless of what ran before it.
-	oldRootCtx := rootCtx
-	rootCtx = nil
-	t.Cleanup(func() { rootCtx = oldRootCtx })
-
-	oldWait := exclusiveGateWait
-	exclusiveGateWait = 10 * time.Millisecond
-	t.Cleanup(func() { exclusiveGateWait = oldWait })
-
-	list := &cobra.Command{Use: "list"}
-	if err := acquireCommandWorkspaceGates(context.Background(), list, beadsDir); err != nil {
-		t.Fatal(err)
-	}
-	if workspaceGateHandle == nil {
-		t.Fatal("expected a held shared gate handle")
-	}
-
-	release, err := acquireMigrateGates(beadsDir, false, "test migrate")
-	if err == nil {
-		release()
-		t.Fatal("migrate EXCLUSIVE acquisition must fail while the chokepoint holds SHARED")
-	}
-
-	// After the shared holder releases, the migration proceeds.
-	releaseWorkspaceGates()
-	release, err = acquireMigrateGates(beadsDir, false, "test migrate")
-	if err != nil {
-		t.Fatalf("migrate acquisition after shared release: %v", err)
-	}
-	release()
 }
