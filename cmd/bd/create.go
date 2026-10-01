@@ -327,12 +327,6 @@ var createCmd = &cobra.Command{
 			// Explicit --repo flag overrides auto-routing
 			repoPath = repoOverride
 		} else {
-			// Auto-routing based on user role
-			userRole, err := routing.DetectUserRole(".")
-			if err != nil {
-				debug.Logf("Warning: failed to detect user role: %v\n", err)
-			}
-
 			// Build routing config with backward compatibility for legacy contributor.* keys.
 			// Prefer config.yaml values, but fall back to DB config values set by bd init --contributor.
 			routingMode := getRoutingConfigValue(rootCtx, store, "routing.mode")
@@ -346,6 +340,17 @@ var createCmd = &cobra.Command{
 			}
 			if contributorRepo == "" {
 				contributorRepo = getRoutingConfigValue(rootCtx, store, "contributor.planning_repo")
+			}
+
+			// The user role only picks a repo in auto mode; detect it (and
+			// warn when beads.role is unset) only then.
+			var userRole routing.UserRole
+			if routingMode == "auto" {
+				var err error
+				userRole, err = routing.DetectUserRole(".")
+				if err != nil {
+					debug.Logf("Warning: failed to detect user role: %v\n", err)
+				}
 			}
 
 			routingConfig := &routing.RoutingConfig{

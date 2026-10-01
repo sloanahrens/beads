@@ -491,7 +491,7 @@ func assertCycleDetectorPath(t *testing.T, cycle publicops.Cycle, edgeOrder ...s
 	t.Helper()
 	lowest := 0
 	for i, id := range edgeOrder {
-		if id < edgeOrder[lowest] {
+		if id < edgeOrder[lowest] { //nolint:gosec // G602: lowest is always an index this range already visited
 			lowest = i
 		}
 	}

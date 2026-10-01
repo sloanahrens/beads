@@ -248,8 +248,11 @@ func TestMetadataSlotWritesDoltCommitResponseLossIsIndeterminateAndNotReplayed(t
 			if driver.metadataUpdates != 1 || driver.eventInserts != 1 {
 				t.Fatalf("mutation attempts = updates:%d events:%d, want updates:1 events:1 (no replay)", driver.metadataUpdates, driver.eventInserts)
 			}
-			if driver.stageCalls != 2 || driver.doltCommits != 1 {
-				t.Fatalf("Dolt calls = adds:%d commits:%d, want adds:2 commits:1", driver.stageCalls, driver.doltCommits)
+			// One DOLT_ADD (issues; events is dolt-ignored, be-xu2.2) and one
+			// DOLT_COMMIT: a lost response is untyped, so retryVersionCommit
+			// (be-321) must not replay it.
+			if driver.stageCalls != 1 || driver.doltCommits != 1 {
+				t.Fatalf("Dolt calls = adds:%d commits:%d, want adds:1 commits:1", driver.stageCalls, driver.doltCommits)
 			}
 			if driver.txAttempts != 1 || driver.txCommits != 0 || driver.txRollbacks != 1 {
 				t.Fatalf("SQL transaction outcomes = attempts:%d commits:%d rollbacks:%d, want attempts:1 commits:0 rollbacks:1", driver.txAttempts, driver.txCommits, driver.txRollbacks)

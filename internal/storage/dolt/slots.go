@@ -39,8 +39,8 @@ func (s *DoltStore) MergeMetadata(ctx context.Context, issueID, key string, valu
 			}
 
 			// Dolt versioning for permanent issues. The merge routes through
-			// UpdateIssueInTx, which also writes an EventUpdated row into events, so
-			// stage both tables before committing (mirrors CloseIssue).
+			// UpdateIssueInTx, which also writes an EventUpdated row into events;
+			// events is dolt-ignored (migration 0062), so only issues is staged.
 			commitMsg := fmt.Sprintf("bd: merge metadata %s.%s", issueID, key)
 			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)
 		})
@@ -140,8 +140,8 @@ func (s *DoltStore) SlotClear(ctx context.Context, issueID, key, actor string) e
 				return err
 			}
 
-			// DeleteMetadataInTx routes through UpdateIssueInTx (issues + events),
-			// so stage both before committing. A no-op clear writes nothing, which
+			// DeleteMetadataInTx routes through UpdateIssueInTx (issues + events);
+			// only issues is versioned (events is dolt-ignored). A no-op clear writes nothing, which
 			// DOLT_COMMIT reports as nothing-to-commit (handled by the helper).
 			commitMsg := fmt.Sprintf("bd: clear metadata %s.%s", issueID, key)
 			return s.doltAddAndCommitInTx(ctx, tx, []string{"issues"}, commitMsg)

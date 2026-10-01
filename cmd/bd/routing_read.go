@@ -49,11 +49,6 @@ func getRoutingConfigValue(ctx context.Context, store storage.DoltStorage, key s
 }
 
 func determineAutoRoutedRepoPath(ctx context.Context, store storage.DoltStorage) (string, routing.RoutingRule) {
-	userRole, err := routing.DetectUserRole(".")
-	if err != nil {
-		debug.Logf("Warning: failed to detect user role: %v\n", err)
-	}
-
 	var dbValues map[string]string
 	if store != nil {
 		all, allErr := store.GetAllConfig(ctx)
@@ -79,6 +74,17 @@ func determineAutoRoutedRepoPath(ctx context.Context, store storage.DoltStorage)
 	}
 	if contributorRepo == "" {
 		contributorRepo = resolveRoutingConfigValue("contributor.planning_repo", dbValues)
+	}
+
+	// The user role only picks a repo in auto mode; detect it (and warn when
+	// beads.role is unset) only then.
+	var userRole routing.UserRole
+	if routingMode == "auto" {
+		var err error
+		userRole, err = routing.DetectUserRole(".")
+		if err != nil {
+			debug.Logf("Warning: failed to detect user role: %v\n", err)
+		}
 	}
 
 	routingConfig := &routing.RoutingConfig{

@@ -98,8 +98,12 @@ func TestCreateRemoteRepoSkipsLocalDatabaseGuard(t *testing.T) {
 		t.Fatalf("guard was not bypassed for remote --repo: got the pre-fix error.\nOutput:\n%s", combined)
 	}
 
+	// Once an earlier test in this binary has started the shared test Dolt
+	// server, the remote-cache store reaches it and fails to open the cache
+	// database instead: also downstream of the guard.
 	if !strings.Contains(combined, "dolt CLI not found") &&
-		!strings.Contains(combined, "embedded Dolt requires a CGO build") {
+		!strings.Contains(combined, "embedded Dolt requires a CGO build") &&
+		!strings.Contains(combined, "failed to open database") {
 		t.Fatalf("expected downstream remote-cache/open failure, got:\n%s", combined)
 	}
 }

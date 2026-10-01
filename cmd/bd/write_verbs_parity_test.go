@@ -1584,11 +1584,11 @@ func TestParityCloseNoIDAndNoLastTouchedExits1(t *testing.T) {
 	}
 }
 
-// TestParityClosePartialFailureExitsZero pins the close exit contract's
-// permissive half (cmd/bd/close.go:377-380): as long as ONE id settled as
-// closed, a batch with refused ids still exits 0. The refusal is reported on
-// stderr only.
-func TestParityClosePartialFailureExitsZero(t *testing.T) {
+// TestParityClosePartialFailureExitsNonZero pins the close batch rule from
+// be-3xa.2: a batch with a refused id exits 1 even when another id closed
+// (it used to exit 0). The closable id still closes, and the refusal is
+// reported on stderr only.
+func TestParityClosePartialFailureExitsNonZero(t *testing.T) {
 	env := newParityEnv(t)
 	env.seed("test-cls4", "Closable", nil)
 	env.seed("test-cls5", "Owned by another actor", func(i *types.Issue) {
@@ -1598,8 +1598,8 @@ func TestParityClosePartialFailureExitsZero(t *testing.T) {
 	env.setFlags(closeCmd, nil)
 	res := env.run(closeCmd, "test-cls4", "test-cls5")
 
-	if res.exitCode != 0 {
-		t.Fatalf("exit = %d, want 0 (partial failure is still success today)\nstderr:\n%s", res.exitCode, res.stderr)
+	if res.exitCode != 1 {
+		t.Fatalf("exit = %d, want 1 (a refused id fails the batch)\nstderr:\n%s", res.exitCode, res.stderr)
 	}
 	wantErr := fmt.Sprintf("cannot close %s: assignee is %q, actor is %q; reclaim or use --force to override\n",
 		"test-cls5", "someone-else", actor)
