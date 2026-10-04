@@ -216,7 +216,17 @@ ci-pr-lint:
 # separately. It is not every check CI requires (ci-pr-core and ci-pr-policy
 # are separate), and the integration tier is not part of it: it needs Docker
 # and takes far longer.
+#
+# It also refuses to run under -i/--ignore-errors (or MAKEFLAGS=i): make would
+# ignore gate-lint's failure, and the gate would exit 0 over a red tree. The
+# refusal is a $(error), which aborts during recipe expansion - before either
+# stage starts, and without -i swallowing it. Detection reads the packed
+# single-letter flags in the first word of MAKEFLAGS ("ki"), plus the lone -i
+# that -j splits out and the --ignore-errors GNU make 4.x leaves spelled out.
+# A first word with a dash is a long option and one with "=" a command-line
+# variable ("TEST_TAGS=integration"); neither is the packed flag word.
 gate:
+	@$(if $(strip $(findstring --ignore-errors,$(MAKEFLAGS)) $(filter -i,$(MAKEFLAGS)) $(filter i,$(MAKEFLAGS)) $(if $(or $(findstring -,$(firstword $(MAKEFLAGS))),$(findstring =,$(firstword $(MAKEFLAGS)))),,$(findstring i,$(firstword $(MAKEFLAGS))))),$(error make gate: -i/--ignore-errors is in effect so make would ignore a failed gate stage and a red tree could exit 0; rerun make gate without -i))
 	@$(MAKE) gate-lint
 	@$(MAKE) gate-test
 
