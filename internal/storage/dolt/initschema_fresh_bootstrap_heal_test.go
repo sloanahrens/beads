@@ -187,12 +187,26 @@ func TestFreshBootstrapHealNotArmedWhenDatabasePreexists(t *testing.T) {
 		store.Close()
 	}
 	if err == nil {
-		t.Fatal("New must not silently heal a database it did not create; expected the #4566 guard's refusal")
+		t.Fatal("New must not silently heal a database it did not create; expected a refusal")
 	}
+	// The pre-created database is empty, so the remote-migrate gate passes on
+	// the first attempt and is not re-asked on the retry (gateOnce); the
+	// refusal is the #4566 dirty-table guard, which only the proven creator
+	// may bypass. Pin that, and that the debris survived.
 	if !strings.Contains(err.Error(), "dirty tables") {
 		t.Fatalf("New error = %v, want the #4566 dirty-table guard refusal", err)
 	}
 	if !fired {
 		t.Fatal("fault hook never fired; test no longer exercises the mid-pass failure path")
+	}
+	var debrisCols int
+	if err := initDB.QueryRowContext(context.Background(),
+		"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'issues' AND column_name = 'bd_freshheal_negative_debris'",
+		dbName,
+	).Scan(&debrisCols); err != nil {
+		t.Fatalf("count debris column: %v", err)
+	}
+	if debrisCols != 1 {
+		t.Fatalf("debris column count = %d, want 1: a database this open did not create must not be reset", debrisCols)
 	}
 }
