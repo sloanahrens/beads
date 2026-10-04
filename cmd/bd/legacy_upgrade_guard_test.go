@@ -110,22 +110,21 @@ func TestLegacyUpgradeGuardMetadataLessSQLiteAndCurrentEmbeddedPrecedence(t *tes
 		}
 	})
 
-	t.Run("current embedded root wins over stale sqlite artifact", func(t *testing.T) {
+	// This case used to prove that an embeddeddolt root won over a stale SQLite
+	// artifact and a dolt/ directory and was admitted. Embedded Dolt was removed
+	// (be-xu2.2) and the guard no longer special-cases that root, so what remains
+	// to pin is that a legacy dolt/ directory is refused beside a stale artifact.
+	// (An embedded root on its own is refused by the open path, not by this guard.)
+	t.Run("legacy dolt directory is refused beside a stale sqlite artifact", func(t *testing.T) {
 		beadsDir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(beadsDir, "beads.db"), []byte("stale SQLite artifact"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Join(beadsDir, "embeddeddolt", "beads", ".dolt"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(beadsDir, "embeddeddolt", "beads", ".dolt", "repo-entry"), []byte("opaque"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Mkdir(filepath.Join(beadsDir, "dolt"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := guardLegacyUpgradeWorkspace(beadsDir); err != nil {
-			t.Fatalf("current embedded workspace was refused due to stale artifacts: %v", err)
+		if err := guardLegacyUpgradeWorkspace(beadsDir); !isLegacyUpgradeRefusal(err) {
+			t.Fatalf("legacy dolt directory was admitted beside a stale sqlite artifact: %v", err)
 		}
 	})
 
