@@ -44,7 +44,7 @@ endif
 endif
 
 .PHONY: all build doctor-build test test-integration test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force safe-install check-forward-only check-on-main help check-up-to-date fmt fmt-check check-testing-short
-.PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
+.PHONY: gate gate-lint gate-test ci-pr-core ci-pr-policy ci-pr-lint ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
 .PHONY: api-gen api-check
 
 # Default target
@@ -210,6 +210,21 @@ ci-pr-policy:
 
 ci-pr-lint:
 	@./scripts/ci/pr-lint.sh
+
+# Landing gate: lint, then the unit tier, stopping at the first failure.
+# gate-lint and gate-test are its two stages, so a caller can bound each
+# separately. It is not every check CI requires (ci-pr-core and ci-pr-policy
+# are separate), and the integration tier is not part of it: it needs Docker
+# and takes far longer.
+gate:
+	@$(MAKE) gate-lint
+	@$(MAKE) gate-test
+
+gate-lint:
+	@$(MAKE) ci-pr-lint
+
+gate-test:
+	@$(MAKE) test
 
 # Opt-in architecture experiment. Install gocyclo v0.6.0 first;
 # report is advisory while check exercises the local baseline guard.
@@ -499,6 +514,9 @@ help:
 	@echo "  make test         - Run all tests"
 	@echo "  make test-icu-path - Run opt-in ICU regex path tests (maintainer-only)"
 	@echo "  make test-full-cgo - Deprecated alias for make test-icu-path"
+	@echo "  make gate         - Landing gate: ci-pr-lint, then make test (never the integration tier)"
+	@echo "  make gate-lint    - First stage of make gate (ci-pr-lint)"
+	@echo "  make gate-test    - Second stage of make gate (make test)"
 	@echo "  make ci-pr-core  - Run required PR core Go test wrapper"
 	@echo "  make ci-pr-policy - Run required PR policy wrapper"
 	@echo "  make ci-pr-lint  - Run required PR formatting and lint wrapper"
