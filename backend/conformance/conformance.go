@@ -29,11 +29,11 @@
 //
 // # Why Factory is storage.DoltStorage
 //
-// Because the registry door is (internal/storage/backends), not because this
-// suite needs the surface. For a backend the registry already admits, the type
-// asks nothing beyond registration. It is a wall only for a provider that is
-// not a store at all — the in-tree unit-of-work provider, which is why the
-// Claimer role is wired outside RunAll (see the note in RunAll's body).
+// Because the storage backend registry (internal/storage/backends) once set that
+// door, not because this suite needs the surface. The registry has since been
+// deleted; the type is kept as it was. It is a wall only for a provider that is not a
+// store at all — the in-tree unit-of-work provider, which is why the Claimer
+// role is wired outside RunAll (see the note in RunAll's body).
 //
 // The name RunAll is historical and stays. The suite is not Dolt-specific, and
 // the name overstates only its coverage, not its portability.
@@ -68,7 +68,7 @@
 // its public alias, github.com/steveyegge/beads/backend.DoltStorage — the
 // identical type, so the factory literal satisfies Factory as-is. The whole
 // public contract an external backend implements (interface, signature types,
-// registry, sentinels) lives in that backend package.
+// sentinels) lives in that backend package.
 //
 // # Stability
 //
