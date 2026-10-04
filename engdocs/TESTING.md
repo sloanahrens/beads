@@ -22,6 +22,7 @@ a unit test: use the real boundary when the defect could live there.
 | Affected-package confidence | `./scripts/test.sh ./path/to/package/...` | After the focused test passes; include directly affected neighbors when their contract changed. |
 | Final Go baseline | `make test` | Once after focused work on Go code is green. It is the unit tier (see The Two Tiers) with the normal local build flags, coverage, and local skip handling. |
 | Real-store confidence | `make test-integration` | When the change touches storage, migrations, `bd init`, or other real-store behavior. Needs Docker and `dolt`. |
+| Landing gate | `make gate` | What the town's landing worker runs on a merged tree: `make ci-pr-lint`, then `make test` (the unit tier). It never runs `make test-integration`, and it is narrower than CI (`make ci-pr-core` and `make ci-pr-policy` are separate). Run it to reproduce a landing's verdict. |
 | Named CI wrapper | `make ci-pr-core`, `make ci-pr-policy`, or `make ci-pr-lint` | Run the wrapper whose risk or surface is affected, or use it to reproduce that CI check. Do not run all three routinely for every edit. |
 
 Do not replace the focused loop with repeated full-suite runs. Run the final
