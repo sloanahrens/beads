@@ -12,6 +12,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/git"
+	"github.com/steveyegge/beads/internal/utils"
 )
 
 // ErrVarValidation wraps a variable validation failure so callers with a
@@ -64,7 +65,7 @@ var StrictDecode = false
 // NewParser creates a new formula parser.
 // searchPaths are directories to search for formulas when resolving extends.
 // Default paths are the active beads project's formulas dir, then user-level,
-// then GT_ROOT if configured.
+// then the orchestrator (town) root if configured.
 func NewParser(searchPaths ...string) *Parser {
 	paths := searchPaths
 	if len(paths) == 0 {
@@ -123,9 +124,10 @@ func DefaultSearchPaths() []string {
 		addPath(filepath.Join(home, ".beads", "formulas"))
 	}
 
-	// Orchestrator formulas (via GT_ROOT)
-	if gtRoot := os.Getenv("GT_ROOT"); gtRoot != "" {
-		addPath(filepath.Join(gtRoot, ".beads", "formulas"))
+	// Orchestrator formulas (via the town root: GT_TOWN_ROOT, else the
+	// deprecated GT_ROOT alias)
+	if townRoot := utils.TownRoot(); townRoot != "" {
+		addPath(filepath.Join(townRoot, ".beads", "formulas"))
 	}
 
 	return paths

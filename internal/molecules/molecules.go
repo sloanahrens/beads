@@ -8,7 +8,7 @@
 //
 // Molecules are loaded from multiple locations in priority order (later overrides earlier):
 //  1. Built-in molecules (shipped with bd binary)
-//  2. Town-level: $GT_ROOT/.beads/molecules.jsonl (if orchestrator detected via GT_ROOT)
+//  2. Town-level: $GT_TOWN_ROOT/.beads/molecules.jsonl (if orchestrator detected via GT_TOWN_ROOT)
 //  3. User-level: ~/.beads/molecules.jsonl
 //  4. Project-level: .beads/molecules.jsonl in the current project
 //
@@ -32,6 +32,7 @@ import (
 	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
+	"github.com/steveyegge/beads/internal/utils"
 )
 
 // MoleculeFileName is the canonical name for molecule catalog files.
@@ -76,7 +77,7 @@ func (l *Loader) LoadAll(ctx context.Context, beadsDir string) (*LoadResult, err
 		}
 	}
 
-	// 2. Load town-level molecules ($GT_ROOT/.beads/molecules.jsonl)
+	// 2. Load town-level molecules ($GT_TOWN_ROOT/.beads/molecules.jsonl)
 	townPath := getTownMoleculesPath()
 	if townPath != "" {
 		if molecules, err := loadMoleculesFromFile(townPath); err == nil && len(molecules) > 0 {
@@ -205,15 +206,16 @@ func loadMoleculesFromFile(path string) ([]*types.Issue, error) {
 }
 
 // getTownMoleculesPath returns the path to town-level molecules.jsonl
-// if an orchestrator is detected via GT_ROOT environment variable.
+// if an orchestrator is detected via GT_TOWN_ROOT (or its deprecated GT_ROOT
+// alias) environment variable.
 func getTownMoleculesPath() string {
-	gtRoot := os.Getenv("GT_ROOT")
-	if gtRoot == "" {
+	townRoot := utils.TownRoot()
+	if townRoot == "" {
 		return ""
 	}
 
 	// Check for orchestrator molecules file
-	gtPath := filepath.Join(gtRoot, ".beads", MoleculeFileName)
+	gtPath := filepath.Join(townRoot, ".beads", MoleculeFileName)
 	if _, err := os.Stat(gtPath); err == nil {
 		return gtPath
 	}

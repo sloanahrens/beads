@@ -28,7 +28,8 @@ func TestCheckManagedHandoffPortWarnsOnManagedPortConflict(t *testing.T) {
 
 	t.Setenv("BEADS_DOLT_PORT", "54418")
 	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
-	t.Setenv("GT_ROOT", filepath.Join(repoDir, "city"))
+	t.Setenv("GT_ROOT", "")
+	t.Setenv("GT_TOWN_ROOT", filepath.Join(repoDir, "city"))
 
 	check := CheckManagedHandoffPort(repoDir)
 	if check.Status != StatusWarning {
@@ -38,12 +39,46 @@ func TestCheckManagedHandoffPortWarnsOnManagedPortConflict(t *testing.T) {
 		"managed Dolt port override differs",
 		"BEADS_DOLT_PORT=54418",
 		"contains 37953",
-		"GT_ROOT=",
+		"GT_TOWN_ROOT=",
 		"standalone store",
 	} {
 		if !strings.Contains(check.Message+check.Detail+check.Fix, want) {
 			t.Fatalf("check missing %q:\n%+v", want, check)
 		}
+	}
+}
+
+// TestCheckManagedHandoffPortReadsDeprecatedGT_ROOTAlias pins the fallback:
+// with only the deprecated GT_ROOT set, the detail still reports the town root,
+// under the new GT_TOWN_ROOT label.
+func TestCheckManagedHandoffPortReadsDeprecatedGT_ROOTAlias(t *testing.T) {
+	clearResolveBeadsDirCache()
+	t.Cleanup(clearResolveBeadsDirCache)
+
+	repoDir := t.TempDir()
+	beadsDir := filepath.Join(repoDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0o755); err != nil {
+		t.Fatalf("mkdir .beads: %v", err)
+	}
+	if err := (&configfile.Config{}).Save(beadsDir); err != nil {
+		t.Fatalf("save metadata: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, doltserver.PortFileName), []byte("37953"), 0o600); err != nil {
+		t.Fatalf("write port file: %v", err)
+	}
+
+	aliasRoot := filepath.Join(repoDir, "city")
+	t.Setenv("BEADS_DOLT_PORT", "54418")
+	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
+	t.Setenv("GT_TOWN_ROOT", "")
+	t.Setenv("GT_ROOT", aliasRoot)
+
+	check := CheckManagedHandoffPort(repoDir)
+	if check.Status != StatusWarning {
+		t.Fatalf("expected warning, got %s: %s", check.Status, check.Message)
+	}
+	if want := "GT_TOWN_ROOT=" + aliasRoot; !strings.Contains(check.Detail, want) {
+		t.Fatalf("check detail missing %q:\n%+v", want, check)
 	}
 }
 

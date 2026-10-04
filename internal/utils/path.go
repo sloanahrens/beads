@@ -1,4 +1,5 @@
-// Package utils provides utility functions for issue ID parsing and path handling.
+// Package utils provides utility functions for issue ID parsing, path
+// handling, and orchestrator (town) root resolution.
 package utils
 
 import (
