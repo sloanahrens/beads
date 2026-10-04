@@ -1,0 +1,15 @@
+# The landing gate, run by the local Forgejo on the candidate branch the landing worker pushes as land/<bead>.
+# Workflow name + the single job key are the required status context "ci / gate (push)" (internal/land derives it
+# from this file). Runs the same target the local landing gate runs. No secrets, no cloud credentials.
+# runs-on is the host runner's ci-base image (Go 1.27.1, dolt, jq, shellcheck, lsof; see ~/forgejo/runner-image).
+name: ci
+on:
+  push:
+    branches: ["land/**"]
+
+jobs:
+  gate:
+    runs-on: ci-base
+    steps:
+      - uses: actions/checkout@v4
+      - run: make gate
