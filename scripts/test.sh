@@ -16,6 +16,23 @@ source "$REPO_ROOT/scripts/ci/lib/test-env.sh"
 
 beads_test_env_enter
 
+# Per-run coverage profile cleanup (be-4pc). Defined here, before any early
+# exit, so the trap installed below can always call it.
+cleanup_coverage_profile() {
+    # Only a profile this script created is ours to remove: an explicit
+    # TEST_COVERPROFILE path belongs to the caller.
+    if [[ "${COVERPROFILE_IS_TEMP:-0}" == "1" && -n "${COVERPROFILE:-}" ]]; then
+        rm -f -- "$COVERPROFILE" || true
+    fi
+}
+
+# beads_test_env_enter installs `trap beads_test_env_cleanup EXIT`; re-install
+# a trap that also removes this run's coverage profile. The shared-Dolt branch
+# below re-installs its own trap, which chains this one too. Our cleanup runs
+# FIRST: under `set -e` a failure earlier in the trap would abort the rest of
+# it, and the test env's rm -rf does fail intermittently on a busy box.
+trap 'cleanup_coverage_profile; beads_test_env_cleanup' EXIT
+
 # Build skip pattern from .test-skip file
 build_skip_pattern() {
     if [[ ! -f "$SKIP_FILE" ]]; then
@@ -49,7 +66,19 @@ SKIP_PATTERN=$(build_skip_pattern)
 VERBOSE="${TEST_VERBOSE:-}"
 RUN_PATTERN="${TEST_RUN:-}"
 COVERAGE="${TEST_COVER:-}"
-COVERPROFILE="${TEST_COVERPROFILE:-/tmp/beads.coverage.out}"
+# TEST_COVERPROFILE is an explicit caller choice: use it as given and never
+# delete it (see cleanup_coverage_profile). With coverage on and no override,
+# allocate a private profile per run instead. The old fixed default,
+# /tmp/beads.coverage.out, was shared by every concurrent suite — a landing
+# gate and a crew run writing at once tore each other's profile, and
+# `go tool cover` then failed after every test had passed (be-4pc).
+COVERPROFILE="${TEST_COVERPROFILE:-}"
+COVERPROFILE_IS_TEMP=0
+if [[ -n "$COVERAGE" && -z "$COVERPROFILE" ]]; then
+    # Six trailing X's so BSD mktemp (macOS) accepts the template too.
+    COVERPROFILE="$(mktemp "${TMPDIR:-/tmp}/beads-coverage-XXXXXX")"
+    COVERPROFILE_IS_TEMP=1
+fi
 COVERPKG="${TEST_COVERPKG:-}"
 
 # Parse arguments
@@ -168,7 +197,7 @@ if [[ "${BEADS_TEST_SHARED_SERVER:-}" == "1" && -z "${BEADS_DOLT_PORT:-}" ]]; th
                 wait "$SHARED_DOLT_PID" 2>/dev/null || true
                 rm -rf "$SHARED_DOLT_DIR"
             }
-            trap 'cleanup_shared_server; beads_test_env_cleanup' EXIT
+            trap 'cleanup_coverage_profile; cleanup_shared_server; beads_test_env_cleanup' EXIT
         else
             echo "WARN: shared Dolt server failed to start, falling back to per-package servers" >&2
             kill "$SHARED_DOLT_PID" 2>/dev/null || true

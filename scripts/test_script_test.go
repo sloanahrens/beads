@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/exec"
@@ -17,6 +18,8 @@ const (
 	testScriptDriverEnv         = "BEADS_TEST_SCRIPT_DRIVER"
 	testScriptNativeSuffixEnv   = "BEADS_TEST_SCRIPT_NATIVE_SUFFIX"
 	testScriptLaunchProbeEnv    = "BEADS_TEST_SCRIPT_LAUNCH_PROBE"
+	testScriptCoverLogEnv       = "BEADS_TEST_SCRIPT_FAKE_GO_COVER_LOG"
+	testScriptCoverFailEnv      = "BEADS_TEST_SCRIPT_FAKE_GO_COVER_FAIL"
 )
 
 const testScriptFakeGo = `#!/usr/bin/env bash
@@ -60,9 +63,49 @@ case "${1:-}" in
         ;;
     test)
         record test
+        profile=""
+        while [[ $# -gt 0 ]]; do
+            if [[ "$1" == "-coverprofile" ]]; then
+                profile="${2:-}"
+                shift 2
+            else
+                shift
+            fi
+        done
+        if [[ -n "$profile" ]]; then
+            # Coverage mode: behave like a passing go test that wrote a
+            # profile, so scripts/test.sh reaches its go-tool-cover step.
+            if [[ -z "${BEADS_TEST_SCRIPT_FAKE_GO_COVER_LOG:-}" ]]; then
+                printf 'fake go: coverage run without a profile log\n' >&2
+                exit 90
+            fi
+            printf '%s\n' "$profile" >>"$BEADS_TEST_SCRIPT_FAKE_GO_COVER_LOG"
+            printf 'total:\t(statements)\t100.0%%\n' >"$profile"
+            if [[ "${BEADS_TEST_SCRIPT_FAKE_GO_COVER_FAIL:-0}" == "1" ]]; then
+                printf 'fake go: simulated test failure\n' >&2
+                exit 1
+            fi
+            exit 0
+        fi
         "$BEADS_TEST_SCRIPT_DRIVER" \
             -test.run '^TestTestScriptPrebuiltBinaryLaunchProbe$' \
             -test.count=1
+        ;;
+    tool)
+        # go tool cover -func=<profile>. Fail when the profile is gone, the
+        # same way the real tool does after a torn or deleted profile.
+        record tool
+        profile=""
+        for arg in "$@"; do
+            case "$arg" in
+                -func=*) profile="${arg#-func=}" ;;
+            esac
+        done
+        if [[ ! -s "$profile" ]]; then
+            printf 'fake go: cover profile %q is missing or empty\n' "$profile" >&2
+            exit 1
+        fi
+        cat "$profile"
         ;;
     *)
         printf 'fake go: unsupported command: %s\n' "$*" >&2
@@ -90,6 +133,106 @@ func TestTestScriptPrebuiltBinaryContract(t *testing.T) {
 	})
 }
 
+// TestTestScriptCoverageProfile pins the be-4pc contract: a coverage run uses a
+// profile of its own, removes it when the script exits, and leaves a caller's
+// explicit TEST_COVERPROFILE alone.
+func TestTestScriptCoverageProfile(t *testing.T) {
+	t.Run("concurrent runs get distinct profiles and remove them", func(t *testing.T) {
+		first := newTestScriptFixture(t, "")
+		second := newTestScriptFixture(t, "")
+
+		firstCmd := first.command("./cmd/bd")
+		firstCmd.Env = first.withEnv("TEST_COVER=1")
+		secondCmd := second.command("./cmd/bd")
+		secondCmd.Env = second.withEnv("TEST_COVER=1")
+
+		var firstOutput, secondOutput bytes.Buffer
+		firstCmd.Stdout, firstCmd.Stderr = &firstOutput, &firstOutput
+		secondCmd.Stdout, secondCmd.Stderr = &secondOutput, &secondOutput
+
+		if err := firstCmd.Start(); err != nil {
+			t.Fatalf("start first scripts/test.sh: %v", err)
+		}
+		if err := secondCmd.Start(); err != nil {
+			t.Fatalf("start second scripts/test.sh: %v", err)
+		}
+		firstErr := firstCmd.Wait()
+		secondErr := secondCmd.Wait()
+		if firstErr != nil {
+			t.Fatalf("first scripts/test.sh failed: %v\n%s", firstErr, firstOutput.String())
+		}
+		if secondErr != nil {
+			t.Fatalf("second scripts/test.sh failed: %v\n%s", secondErr, secondOutput.String())
+		}
+
+		firstProfiles := first.coverProfiles()
+		secondProfiles := second.coverProfiles()
+		if len(firstProfiles) != 1 || len(secondProfiles) != 1 {
+			t.Fatalf("coverprofile paths = %q and %q, want exactly one each", firstProfiles, secondProfiles)
+		}
+		if firstProfiles[0] == secondProfiles[0] {
+			t.Fatalf("concurrent runs shared coverage profile %q", firstProfiles[0])
+		}
+		assertFakeGoCommands(t, first.commands(), "env", "build", "test", "tool")
+		assertFakeGoCommands(t, second.commands(), "env", "build", "test", "tool")
+
+		runs := []struct {
+			output  string
+			profile string
+		}{
+			{firstOutput.String(), firstProfiles[0]},
+			{secondOutput.String(), secondProfiles[0]},
+		}
+		for _, run := range runs {
+			want := "Total coverage: 100.0% (profile: " + run.profile + ")"
+			if !strings.Contains(run.output, want) {
+				t.Fatalf("scripts/test.sh output does not report %q:\n%s", want, run.output)
+			}
+			if _, err := os.Stat(run.profile); !os.IsNotExist(err) {
+				t.Fatalf("per-run profile %q survived the run (stat error: %v)", run.profile, err)
+			}
+		}
+	})
+
+	t.Run("explicit TEST_COVERPROFILE is used as given and kept", func(t *testing.T) {
+		fixture := newTestScriptFixture(t, "")
+		explicit := filepath.Join(t.TempDir(), "caller chosen profile.out")
+		cmd := fixture.command("./cmd/bd")
+		cmd.Env = fixture.withEnv("TEST_COVER=1", "TEST_COVERPROFILE="+portableTestScriptPath(explicit))
+		output, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("scripts/test.sh with explicit TEST_COVERPROFILE failed: %v\n%s", runErr, output)
+		}
+
+		profiles := fixture.coverProfiles()
+		if len(profiles) != 1 || profiles[0] != portableTestScriptPath(explicit) {
+			t.Fatalf("coverprofile paths = %q, want [%q]", profiles, portableTestScriptPath(explicit))
+		}
+		if _, err := os.Stat(explicit); err != nil {
+			t.Fatalf("explicit TEST_COVERPROFILE was removed: %v", err)
+		}
+	})
+
+	t.Run("per-run profile is removed when the test run fails", func(t *testing.T) {
+		fixture := newTestScriptFixture(t, "")
+		cmd := fixture.command("./cmd/bd")
+		cmd.Env = fixture.withEnv("TEST_COVER=1", testScriptCoverFailEnv+"=1")
+		output, runErr := cmd.CombinedOutput()
+		if runErr == nil {
+			t.Fatalf("scripts/test.sh succeeded, want the failing go test to propagate:\n%s", output)
+		}
+
+		assertFakeGoCommands(t, fixture.commands(), "env", "build", "test")
+		profiles := fixture.coverProfiles()
+		if len(profiles) != 1 {
+			t.Fatalf("coverprofile paths = %q, want exactly one", profiles)
+		}
+		if _, err := os.Stat(profiles[0]); !os.IsNotExist(err) {
+			t.Fatalf("per-run profile %q survived the failed run (stat error: %v)", profiles[0], err)
+		}
+	})
+}
+
 // TestTestScriptPrebuiltBinaryLaunchProbe is selected only by the fake go test
 // process above. Keeping the os/exec probe in a normal test avoids claiming the
 // package-wide TestMain authority needed by other script-selection contracts.
@@ -114,10 +257,27 @@ func TestTestScriptPrebuiltBinaryLaunchProbe(t *testing.T) {
 	}
 }
 
-func runTestScriptWithFakeGo(t *testing.T, callerBinary string) []string {
+// testScriptFixture is one hermetic scripts/test.sh run: a private fake `go`,
+// fixture-local HOME/TMPDIR, and logs of the fake go's calls and of every
+// -coverprofile path the script handed it.
+type testScriptFixture struct {
+	t        *testing.T
+	callLog  string
+	coverLog string
+	env      []string
+	bash     string
+	repoRoot string
+}
+
+func newTestScriptFixture(t *testing.T, callerBinary string) *testScriptFixture {
 	t.Helper()
 
-	root := filepath.Join(t.TempDir(), "test script root with spaces")
+	// A directory with spaces exercises quoting, and MkdirTemp makes each
+	// fixture unique so one test can run two of them at once.
+	root, err := os.MkdirTemp(t.TempDir(), "test script root with spaces ")
+	if err != nil {
+		t.Fatalf("create fixture root: %v", err)
+	}
 	fakeBin := filepath.Join(root, "fake go bin")
 	testEnvRoot := filepath.Join(root, "isolated test environment")
 	tempRoot := filepath.Join(root, "temporary files")
@@ -135,6 +295,10 @@ func runTestScriptWithFakeGo(t *testing.T, callerBinary string) []string {
 	if err := os.WriteFile(callLog, nil, 0o600); err != nil {
 		t.Fatalf("initialize fake-go call log: %v", err)
 	}
+	coverLog := filepath.Join(root, "fake go coverage profiles")
+	if err := os.WriteFile(coverLog, nil, 0o600); err != nil {
+		t.Fatalf("initialize fake-go coverage log: %v", err)
+	}
 
 	expected := callerBinary
 	if expected == "" {
@@ -146,7 +310,7 @@ func runTestScriptWithFakeGo(t *testing.T, callerBinary string) []string {
 		t.Fatalf("bash is required to exercise scripts/test.sh: %v", err)
 	}
 	repoRoot := sourceRepoRoot(t)
-	env := testScriptEnvironment(testEnvRoot, tempRoot, expected, callerBinary)
+	env := testScriptEnvironment(testEnvRoot, tempRoot, expected, callerBinary, coverLog)
 	fakeBinShellPath := shellPathUnderEnv(t, bash, fakeBin, env)
 	fakeGoShellPath := shellPathUnderEnv(t, bash, fakeGo, env)
 	driverShellPath := shellPathUnderEnv(t, bash, currentTestExecutable(t), env)
@@ -156,33 +320,81 @@ func runTestScriptWithFakeGo(t *testing.T, callerBinary string) []string {
 		testScriptDriverEnv+"="+driverShellPath,
 		testScriptFakeGoLogEnv+"="+callLogShellPath,
 	)
+	requireShellCommandPath(t, bash, repoRoot, env, "go", fakeGoShellPath)
 
+	return &testScriptFixture{
+		t:        t,
+		callLog:  callLog,
+		coverLog: coverLog,
+		env:      env,
+		bash:     bash,
+		repoRoot: repoRoot,
+	}
+}
+
+// withEnv returns the fixture environment plus extra KEY=VALUE pairs.
+func (f *testScriptFixture) withEnv(pairs ...string) []string {
+	env := append([]string(nil), f.env...)
+	return append(env, pairs...)
+}
+
+// command builds a scripts/test.sh invocation carrying the fixture environment.
+func (f *testScriptFixture) command(packagePath string) *exec.Cmd {
+	f.t.Helper()
 	cmd := exec.Command(
-		bash,
+		f.bash,
 		"--noprofile",
 		"--norc",
 		"-c",
-		`PATH="$BEADS_TEST_COMMAND_PATH"; export PATH; exec "$BASH" --noprofile --norc "$1" "$2"`,
+		`PATH="$BEADS_TEST_COMMAND_PATH"; export PATH; exec "$BASH" --noprofile --norc "$@"`,
 		"test-script",
-		shellPathUnderEnv(t, bash, filepath.Join(repoRoot, "scripts", "test.sh"), env),
-		"./cmd/bd",
+		shellPathUnderEnv(f.t, f.bash, filepath.Join(f.repoRoot, "scripts", "test.sh"), f.env),
+		packagePath,
 	)
-	cmd.Dir = repoRoot
-	cmd.Env = env
-	requireShellCommandPath(t, bash, repoRoot, env, "go", fakeGoShellPath)
-	output, runErr := cmd.CombinedOutput()
-	if runErr != nil {
-		t.Fatalf("scripts/test.sh failed: %v\n%s", runErr, output)
-	}
+	cmd.Dir = f.repoRoot
+	cmd.Env = append([]string(nil), f.env...)
+	return cmd
+}
 
-	content, err := os.ReadFile(callLog)
+// commands returns the fake-go commands the script ran, in order.
+func (f *testScriptFixture) commands() []string {
+	f.t.Helper()
+	content, err := os.ReadFile(f.callLog)
 	if err != nil {
-		t.Fatalf("read fake-go call log: %v", err)
+		f.t.Fatalf("read fake-go call log: %v", err)
 	}
 	return strings.Fields(string(content))
 }
 
-func testScriptEnvironment(testEnvRoot string, tempRoot string, expected string, callerBinary string) []string {
+// coverProfiles returns the -coverprofile paths the script passed to go test.
+// One path per line: fixture paths contain spaces, so fields would split them.
+func (f *testScriptFixture) coverProfiles() []string {
+	f.t.Helper()
+	content, err := os.ReadFile(f.coverLog)
+	if err != nil {
+		f.t.Fatalf("read fake-go coverage log: %v", err)
+	}
+	var profiles []string
+	for _, line := range strings.Split(string(content), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			profiles = append(profiles, line)
+		}
+	}
+	return profiles
+}
+
+func runTestScriptWithFakeGo(t *testing.T, callerBinary string) []string {
+	t.Helper()
+
+	fixture := newTestScriptFixture(t, callerBinary)
+	output, runErr := fixture.command("./cmd/bd").CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("scripts/test.sh failed: %v\n%s", runErr, output)
+	}
+	return fixture.commands()
+}
+
+func testScriptEnvironment(testEnvRoot string, tempRoot string, expected string, callerBinary string, coverLog string) []string {
 	home := filepath.Join(testEnvRoot, "home")
 	env := []string{
 		"PATH=/usr/bin:/bin",
@@ -203,6 +415,7 @@ func testScriptEnvironment(testEnvRoot string, tempRoot string, expected string,
 		testScriptExpectedBaseEnv + "=" + filepath.Base(expected),
 		testScriptNativeSuffixEnv + "=" + nativeExecutableSuffix(),
 		testScriptLaunchProbeEnv + "=1",
+		testScriptCoverLogEnv + "=" + portableTestScriptPath(coverLog),
 	}
 	if callerBinary != "" {
 		env = append(env, "BEADS_TEST_BD_BINARY="+portableTestScriptPath(callerBinary))
