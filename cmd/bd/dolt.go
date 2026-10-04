@@ -1274,7 +1274,7 @@ var doltKillallCmd = &cobra.Command{
 	Long: `Find and kill orphan dolt sql-server processes not tracked by the
 canonical PID file for the current repo's Dolt data directory.
 
-Under an orchestrator, the canonical server lives at $GT_ROOT/.beads/. Any other
+Under an orchestrator, the canonical server lives at $GT_TOWN_ROOT/.beads/. Any other
 dolt sql-server processes using that shared data directory are considered
 orphans and will be killed.
 

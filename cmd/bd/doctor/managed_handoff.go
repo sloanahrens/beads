@@ -9,6 +9,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/doltserver"
+	"github.com/steveyegge/beads/internal/utils"
 )
 
 // CheckManagedHandoffPort detects the #3926 split-brain risk where a managed
@@ -61,8 +62,8 @@ func CheckManagedHandoffPort(repoPath string) DoctorCheck {
 		filepath.Join(beadsDir, doltserver.PortFileName),
 		localPort,
 	)
-	if gtRoot := strings.TrimSpace(os.Getenv("GT_ROOT")); gtRoot != "" {
-		detail += fmt.Sprintf("\nGT_ROOT=%s", gtRoot)
+	if townRoot := strings.TrimSpace(utils.TownRoot()); townRoot != "" {
+		detail += fmt.Sprintf("\nGT_TOWN_ROOT=%s", townRoot)
 	}
 
 	return DoctorCheck{

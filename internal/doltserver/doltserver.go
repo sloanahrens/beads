@@ -42,6 +42,7 @@ import (
 	"github.com/steveyegge/beads/internal/lockfile"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/testtier"
+	"github.com/steveyegge/beads/internal/utils"
 )
 
 // ErrServerNotRunning is returned by Stop when the Dolt server is not running.
@@ -983,8 +984,8 @@ func EnsureRunningDetailed(beadsDir string) (port int, startedByUs bool, err err
 	serverDir := resolveServerDir(beadsDir)
 
 	// Inform when an orchestrator is also running on this machine
-	if IsSharedServerMode() && os.Getenv("GT_ROOT") != "" {
-		fmt.Fprintf(os.Stderr, "Info: Orchestrator detected (GT_ROOT set). Shared server uses port %d to avoid conflict.\n", DefaultSharedServerPort)
+	if IsSharedServerMode() && utils.TownRoot() != "" {
+		fmt.Fprintf(os.Stderr, "Info: Orchestrator detected (GT_TOWN_ROOT set). Shared server uses port %d to avoid conflict.\n", DefaultSharedServerPort)
 	}
 
 	state, err := IsRunning(serverDir)

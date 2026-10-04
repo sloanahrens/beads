@@ -22,6 +22,7 @@ func resetFormulaSearchTestContext(t *testing.T) {
 	t.Helper()
 	t.Setenv("BEADS_DIR", "")
 	t.Setenv("GT_ROOT", "")
+	t.Setenv("GT_TOWN_ROOT", "")
 	resetFormulaSearchCaches()
 	t.Cleanup(resetFormulaSearchCaches)
 }

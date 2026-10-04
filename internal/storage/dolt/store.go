@@ -438,7 +438,8 @@ type Config struct {
 
 	// AutoStart enables transparent server auto-start when connection fails.
 	// When true and the host is localhost, bd will start a dolt sql-server
-	// automatically if one isn't running. Disabled under orchestrator (GT_ROOT set).
+	// automatically if one isn't running. Disabled under orchestrator
+	// (GT_TOWN_ROOT set).
 	AutoStart bool
 
 	// DisableAutoStart suppresses implicit server startup even when standalone

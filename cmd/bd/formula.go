@@ -30,7 +30,7 @@ Search paths (in order):
   1. <resolved-beads-dir>/formulas/ (active project)
   2. <checkout-root>/.beads/formulas/ (repo-local formulas)
   3. ~/.beads/formulas/ (user)
-  4. $GT_ROOT/.beads/formulas/ (shared workspace root, if GT_ROOT set)
+  4. $GT_TOWN_ROOT/.beads/formulas/ (shared workspace root, if GT_TOWN_ROOT set)
 
 Commands:
   list    List available formulas from all search paths
@@ -56,7 +56,7 @@ Search paths (in order of priority):
   1. <resolved-beads-dir>/formulas/ (active project - highest priority)
   2. <checkout-root>/.beads/formulas/ (repo-local formulas)
   3. ~/.beads/formulas/ (user)
-  4. $GT_ROOT/.beads/formulas/ (shared workspace root, if GT_ROOT set)
+  4. $GT_TOWN_ROOT/.beads/formulas/ (shared workspace root, if GT_TOWN_ROOT set)
 
 Formulas in earlier paths shadow those with the same name in later paths.
 

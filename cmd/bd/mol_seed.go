@@ -22,7 +22,7 @@ Formula search paths (checked in order):
   1. <resolved-beads-dir>/formulas/ (active project)
   2. <checkout-root>/.beads/formulas/ (repo-local formulas)
   3. ~/.beads/formulas/ (user level)
-  4. $GT_ROOT/.beads/formulas/ (shared workspace root, if GT_ROOT set)
+  4. $GT_TOWN_ROOT/.beads/formulas/ (shared workspace root, if GT_TOWN_ROOT set)
 
 Examples:
   bd mol seed mol-feature                 # Verify specific formula

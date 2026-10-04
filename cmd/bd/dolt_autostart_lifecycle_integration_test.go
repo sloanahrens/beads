@@ -30,6 +30,7 @@ func TestE2E_AutoStartedRepoLocalServerPersistsAcrossCommands(t *testing.T) {
 
 	env := append(os.Environ(),
 		"BEADS_TEST_MODE=",
+		"GT_TOWN_ROOT=",
 		"GT_ROOT=",
 		"BEADS_DOLT_AUTO_START=",
 		"BEADS_DOLT_SERVER_PORT=",

@@ -105,6 +105,7 @@ func TestSharedServerConcurrent(t *testing.T) {
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_ASKPASS=",
 		"SSH_ASKPASS=",
+		"GT_TOWN_ROOT=",
 		"GT_ROOT=",
 	}
 

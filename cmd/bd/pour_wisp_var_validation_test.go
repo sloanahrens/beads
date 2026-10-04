@@ -37,10 +37,11 @@ id = "publish"
 title = "Publish with {{policy}} / {{slug}}"
 `
 
-// writeVarValidationFormula writes the shared fixture under a temp GT_ROOT so
+// writeVarValidationFormula writes the shared fixture under a temp town root so
 // pour/wisp's DefaultSearchPaths() resolution (which always passes a nil
 // search-path list) discovers it by name without perturbing the real
-// project's formula registry.
+// project's formula registry. Both the GT_TOWN_ROOT name and its deprecated
+// GT_ROOT alias point at the temp root so the fixture is found either way.
 func writeVarValidationFormula(t *testing.T) {
 	t.Helper()
 	gtRoot := t.TempDir()
@@ -52,6 +53,7 @@ func writeVarValidationFormula(t *testing.T) {
 	if err := os.WriteFile(formulaPath, []byte(varValidationFormulaTOML), 0o600); err != nil {
 		t.Fatalf("write formula fixture: %v", err)
 	}
+	t.Setenv("GT_TOWN_ROOT", gtRoot)
 	t.Setenv("GT_ROOT", gtRoot)
 }
 

@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/steveyegge/beads/internal/utils"
 )
 
 // isOrchestratorRoot returns true when path looks like a multi-project
@@ -35,8 +37,9 @@ func isOrchestratorRoot(path string) bool {
 // findTownRoot walks up from the current working directory looking for
 // mayor/town.json — the same primary marker gt's own workspace package uses
 // (see gastownhall/gastown internal/cmd/handoff.go's detectTownRootFromCwd).
-// Falls back to GT_TOWN_ROOT then GT_ROOT (gt's env-var fallback chain,
-// already how the rest of this codebase detects an orchestrator — see
+// Falls back to the town-root environment variables — GT_TOWN_ROOT, then the
+// deprecated GT_ROOT alias, via utils.TownRootEnvNames (gt's env-var fallback
+// chain, already how the rest of this codebase detects an orchestrator — see
 // formula.go, molecules.go, doltserver.go) when cwd detection fails, e.g. a
 // detached worktree or a cwd outside the town tree entirely.
 //
@@ -59,7 +62,7 @@ func findTownRoot() string {
 		}
 	}
 
-	for _, envName := range []string{"GT_TOWN_ROOT", "GT_ROOT"} {
+	for _, envName := range utils.TownRootEnvNames() {
 		envRoot := os.Getenv(envName)
 		if envRoot == "" {
 			continue
