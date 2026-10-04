@@ -352,7 +352,10 @@ func TestBootstrapRefusesLegacyAncestorConfigWithoutMigratingIt(t *testing.T) {
 	}
 }
 
-func TestInitProxiedServerRefusesHistoricalExternalWorkspaceBeforeMutation(t *testing.T) {
+// bd init --proxied-server is refused outright now that proxied-server mode is
+// gone, so this no longer reaches the legacy-server check. What it still pins is
+// that the refusal happens before anything in a historical workspace is touched.
+func TestInitProxiedServerIsRefusedBeforeMutatingAHistoricalWorkspace(t *testing.T) {
 	bd := buildBDUnderTest(t)
 	repoDir := t.TempDir()
 	initGitRepo(t, repoDir)
@@ -379,9 +382,10 @@ func TestInitProxiedServerRefusesHistoricalExternalWorkspaceBeforeMutation(t *te
 	if err == nil {
 		t.Fatalf("bd init --proxied-server unexpectedly accepted historical external workspace:\n%s", output)
 	}
-	if !strings.Contains(string(output), "legacy Dolt server workspace") ||
-		!strings.Contains(string(output), "explicit migration is required") {
-		t.Fatalf("bd init --proxied-server did not report the expected migration refusal:\n%s", output)
+	// Proxied-server mode was removed (be-xu2.2), so --proxied-server is refused
+	// outright and points at the migration path, before anything is written.
+	if !strings.Contains(string(output), "proxied-server mode was removed") {
+		t.Fatalf("bd init --proxied-server did not report the expected removed-mode refusal:\n%s", output)
 	}
 	if after := legacyUpgradeTreeDigest(t, beadsDir); after != before {
 		t.Fatalf("bd init --proxied-server mutated historical source: before=%s after=%s", before, after)

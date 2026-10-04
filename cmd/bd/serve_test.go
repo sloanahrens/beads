@@ -29,7 +29,9 @@ import (
 // `bd serve` with no arguments is the same server it has always been.
 func TestServeFlags(t *testing.T) {
 	var got []string
-	serveCmd.Flags().VisitAll(func(f *pflag.Flag) { got = append(got, f.Name) })
+	// LocalFlags, not Flags: once another test has run a command, Flags() also
+	// holds the root's persistent flags, which made this test order dependent.
+	serveCmd.LocalFlags().VisitAll(func(f *pflag.Flag) { got = append(got, f.Name) })
 	sort.Strings(got)
 
 	want := []string{
