@@ -107,6 +107,16 @@ func TestIsRetryableError(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "untyped 1105 could not resolve initial root",
+			err:      errors.New("Error 1105 (HY000): could not resolve initial root for database `beads_x`"),
+			expected: true,
+		},
+		{
+			name:     "typed 1105 could not resolve initial root",
+			err:      &mysql.MySQLError{Number: 1105, Message: "could not resolve initial root for database beads_x"},
+			expected: true,
+		},
+		{
 			name:     "typed 1105 with connection-like wording is not retryable",
 			err:      &mysql.MySQLError{Number: 1105, Message: "connection lost while validating commit"},
 			expected: false,

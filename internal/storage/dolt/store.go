@@ -611,7 +611,7 @@ func isRetryableError(err error) bool {
 	if schema.IsMigrationLockError(err) {
 		return true
 	}
-	// A decoded 1105 is a definite server response. Preserve the two explicit
+	// A decoded 1105 is a definite server response. Preserve the explicit
 	// server-startup recoveries below, but do not let any other 1105 enter the
 	// general retry or circuit-breaker path just because its message happens to
 	// contain connection-like wording.
@@ -619,6 +619,7 @@ func isRetryableError(err error) bool {
 	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1105 {
 		message := strings.ToLower(mysqlErr.Message)
 		if strings.Contains(message, "no root value found") ||
+			strings.Contains(message, "could not resolve initial root") ||
 			strings.Contains(message, "database is read only") {
 			return true
 		}
@@ -675,6 +676,12 @@ func isRetryableError(err error) bool {
 	// the server hasn't finished initializing the database's root value.
 	// This is transient and resolves on retry.
 	if strings.Contains(errStr, "no root value found") {
+		return true
+	}
+	// Same snapshot race, other phrasing: an information_schema walk reaches a
+	// database created after the session's snapshot and reports
+	// "could not resolve initial root for database X" (be-pv7).
+	if strings.Contains(errStr, "could not resolve initial root") {
 		return true
 	}
 	return false
@@ -2631,6 +2638,36 @@ func initSchemaOnDBWithRetryAndGate(ctx context.Context, db *sql.DB, gate func(c
 	return initSchemaOnDBWithRetryAndGateBootstrapHeal(ctx, db, gate, nil, "")
 }
 
+// gateOnce makes a migration gate answer once per open. The gate asks whether
+// applying pending migrations could fork a database other clients depend on;
+// once it has passed, the answer cannot change for the rest of this retry loop,
+// but the database can: a first pass that dies mid-migration leaves it at v1
+// with migrations pending, and re-running the gate would then refuse the open
+// that is finishing its own bootstrap (be-pv7). Refusals and transient errors
+// are not latched, so a database that was already initialized is still refused
+// on the first attempt.
+//
+// This assumes a pass is monotonic within one open: a database that passed as
+// fresh, current, or operator-overridden does not become forkable while this
+// open is still retrying. A gate that could pass and then legitimately fail
+// closed must not be wrapped in gateOnce.
+func gateOnce(gate func(context.Context, *sql.DB) error) func(context.Context, *sql.DB) error {
+	if gate == nil {
+		return nil
+	}
+	passed := false
+	return func(ctx context.Context, db *sql.DB) error {
+		if passed {
+			return nil
+		}
+		if err := gate(ctx, db); err != nil {
+			return err
+		}
+		passed = true
+		return nil
+	}
+}
+
 // initSchemaOnDBWithRetryAndGateBootstrapHeal shares one capability across the
 // outer retry loop. Once consumed, no later retry can issue another reset.
 func initSchemaOnDBWithRetryAndGateBootstrapHeal(
@@ -2649,6 +2686,7 @@ func initSchemaOnDBWithRetryAndGateBootstrapHeal(
 	// schema migration can time out once and still retry.
 	schemaBO.MaxElapsedTime = serverRetryMaxElapsed
 	var applied int
+	gate = gateOnce(gate)
 	err := backoff.Retry(func() error {
 		if gate != nil {
 			if gateErr := gate(ctx, db); gateErr != nil {
@@ -2690,9 +2728,12 @@ func (s *DoltStore) initSchema(ctx context.Context, bootstrapHeal *schema.FreshB
 	// also refuses when NO remote is configured at all — a shared dolt
 	// sql-server can have other connected bd clients depending on its current
 	// schema regardless of Dolt remote status (CheckRemoteMigrateGateForServer).
-	// The gate runs inside the retry loop, before each migration attempt: its
-	// reads can hit transient startup/catalog races (retryable) while a gate
-	// refusal is permanent and never retried into a migration.
+	// The gate runs inside the retry loop, before the first migration attempt
+	// and until it has passed once (gateOnce): its reads can hit transient
+	// startup/catalog races (retryable) while a gate refusal is permanent and
+	// never retried into a migration. It is not re-asked after a pass, because
+	// a first pass that dies mid-migration leaves the database at v1 and the
+	// gate would then refuse the open finishing its own bootstrap.
 	// Use the on-disk fallback: a freshly (auto-)started server can report an
 	// empty dolt_remotes table even though remotes are persisted in .dolt/config
 	// (GH#2315), so an SQL-only check would miss the remote on the first write
