@@ -44,7 +44,7 @@ endif
 endif
 
 .PHONY: all build doctor-build test test-integration test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force safe-install check-forward-only check-on-main help check-up-to-date fmt fmt-check check-testing-short
-.PHONY: gate gate-lint gate-test ci-pr-core ci-pr-policy ci-pr-lint ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
+.PHONY: gate gate-lint gate-test presubmit ci-pr-core ci-pr-policy ci-pr-lint ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
 .PHONY: api-gen api-check
 
 # Default target
@@ -235,6 +235,15 @@ gate-lint:
 
 gate-test:
 	@$(MAKE) test
+
+# Fast local presubmit: lint, build, and the tests of only the packages whose
+# Go files differ from origin/main. `gt done` runs this before pushing a branch
+# for landing, and the Forgejo gate runs the full `make gate` on the candidate.
+# A subset of the unit tier by design: no Docker container, no Dolt server, and
+# no coverage. See scripts/presubmit.sh (and `scripts/presubmit.sh --list` to
+# see which packages it would test).
+presubmit:
+	@./scripts/presubmit.sh
 
 # Opt-in architecture experiment. Install gocyclo v0.6.0 first;
 # report is advisory while check exercises the local baseline guard.
@@ -527,6 +536,7 @@ help:
 	@echo "  make gate         - Landing gate: ci-pr-lint, then make test (never the integration tier)"
 	@echo "  make gate-lint    - First stage of make gate (ci-pr-lint)"
 	@echo "  make gate-test    - Second stage of make gate (make test)"
+	@echo "  make presubmit    - Fast local check: lint, build, tests of changed packages only (no containers)"
 	@echo "  make ci-pr-core  - Run required PR core Go test wrapper"
 	@echo "  make ci-pr-policy - Run required PR policy wrapper"
 	@echo "  make ci-pr-lint  - Run required PR formatting and lint wrapper"
