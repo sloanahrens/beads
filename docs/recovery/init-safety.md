@@ -3,10 +3,11 @@ title: Recovery Playbooks
 description: Step-by-step recovery for bd init and bd dolt push/pull refusals, including the primary-key fork playbook
 ---
 
-Last reviewed: 2026-06-09
+Last reviewed: 2026-10-05
 
 Freshness source: `cmd/bd/init.go`, `cmd/bd/init_safety.go`,
-`cmd/bd/init_safety_test.go`, and `cmd/bd/dolt.go`.
+`cmd/bd/init_safety_test.go`, `cmd/bd/dolt.go`, and
+`cmd/bd/protocol/exit_codes_init_test.go`.
 
 This document lives next to the ADRs and matches the structure of `bd`'s
 error messages: each named refusal in `bd init` and `bd dolt push`/`pull`
@@ -122,17 +123,46 @@ for why the token is never echoed in `bd`'s error messages.
 
 ## init-local-exists
 
-**Exit code:** `11` (`ExitLocalExistsRefused`)
+**Exit code:** `11` (`ExitLocalExistsRefused`) — the interactive prompt
+declined. The non-interactive forms of the same refusal exit `12`; see
+[init-token-missing](#init-token-missing). A plain `bd init` (no
+`--reinit-local`) on an already-initialized workspace is refused before this
+check, with exit `1`.
 
 **Symptom**
+
+Plain `bd init` refuses an initialized workspace before proposing anything:
+
+```
+⚠ Found existing Dolt database: <path>
+
+This workspace is already initialized.
+
+To use the existing database:
+  Just run bd commands normally (e.g., bd list)
+
+If the database is genuinely corrupt and unrecoverable:
+  bd export > issue-export.jsonl        # Export issue records first
+  bd init --reinit-local --prefix <prefix>    # Then reinitialize
+
+Aborting.
+```
+
+`bd init --reinit-local` with existing issues prompts
+`Type 'destroy N issues' to confirm: `. Declining exits `11`:
+
+```
+Aborted. Database was NOT modified.
+```
+
+Run non-interactively, the same guard takes the destroy-token instead and
+exits `12` when it is missing or wrong:
 
 ```
 Refusing to destroy N issues in non-interactive mode.
   See 'bd help init-safety' for the required --destroy-token format.
+  Or export issue records first: bd export > issue-export.jsonl
 ```
-
-Or, in interactive mode, you declined the typed `destroy N issues`
-confirmation.
 
 **Why this happens**
 
@@ -145,12 +175,14 @@ permanently destroy them.
 
 ```
 bd export > issue-export.jsonl
-bd init --reinit-local
+bd init --reinit-local --prefix <prefix>
 ```
 
 `issue-export.jsonl` lets you re-import individual issues if needed. It is not
 a full database backup; use `bd backup` when the Dolt database is healthy
-enough to create a restorable backup before reinitializing.
+enough to create a restorable backup before reinitializing. Non-interactively,
+add `--destroy-token=DESTROY-<prefix>` (see
+[init-token-missing](#init-token-missing)).
 
 ### 2. Investigate why you hit this
 
@@ -233,9 +265,20 @@ bd bootstrap                                 # re-clone from the remote
 bd import /tmp/beads-local.jsonl             # re-apply local-only work
 ```
 
-`bd import` has upsert semantics: issues that only existed on this clone are
-re-created, newer local edits are applied, and rows older than what the
-remote already has are skipped. Spot-check with `bd stats` afterwards.
+`bd bootstrap` re-clones only when no local database is present — with one
+still there it reports `Database already exists at <path>` (or names the
+server database) and clones nothing. For a workspace-local database the
+directory is `.beads/dolt/`, the default. A workspace on a shared Dolt server
+has no local data directory of its own — the database lives on that server.
+Either way, `bd bootstrap --dry-run` names what it found before anything is
+removed.
+
+`bd import` has upsert semantics: a row rewrites the bootstrapped issue only
+when the row's `updated_at` is strictly newer, and older rows are skipped as
+stale — so re-running the import is safe and converges. Rows tied on
+`updated_at` keep the local columns (labels, comments, and dependencies still
+merge); `--allow-stale` forces an older snapshot over newer local rows.
+Spot-check with `bd stats` afterwards.
 
 ### Prevention (upgrades across PK-reshaping migrations)
 
