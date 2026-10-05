@@ -95,7 +95,7 @@ func TestPresubmitRunsLintAndBuildWithoutGoChanges(t *testing.T) {
 	if strings.Contains(calls, "go test") {
 		t.Errorf("presubmit ran a test command with no Go file changed:\n%s", calls)
 	}
-	if !strings.Contains(out, "no changed Go package") {
+	if !strings.Contains(out, "no testable changed Go package") {
 		t.Errorf("presubmit output does not say no Go package changed:\n%s", out)
 	}
 }
@@ -150,6 +150,15 @@ var presubmitChangedFiles = []string{
 	"examples/demo/demo.go",
 }
 
+// The container bootstrap and Dolt server call that make a package need
+// infrastructure. Assembled from two pieces so this file does not itself look
+// like such a package: it lives in scripts/, a directory presubmit scans like
+// any other.
+const (
+	presubmitContainerBootstrap = "testutil.EnsureDolt" + "ContainerForTestMain()"
+	presubmitDoltServerStart    = "doltserver." + "Start("
+)
+
 var presubmitBaseFiles = map[string]string{
 	"go.mod":              "module example.com/fixture\n\ngo 1.21\n",
 	"root.go":             "package fixture\n",
@@ -173,7 +182,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if err := EnsureDoltContainerForTestMain(); err != nil {
+	if err := ` + presubmitContainerBootstrap + `; err != nil {
 		os.Exit(1)
 	}
 	os.Exit(m.Run())
@@ -189,7 +198,7 @@ package integpkg
 import "testing"
 
 func TestHeavy(t *testing.T) {
-	_ = doltserver.Start(t.TempDir())
+	_ = ` + presubmitDoltServerStart + `t.TempDir())
 }
 `,
 }

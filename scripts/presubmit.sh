@@ -70,29 +70,41 @@ if ! resolve_base_ref; then
 fi
 
 # A changed file's package is the directory that holds it, so no `go list` (and
-# no compilation) is needed to name the packages. `.` is the module root.
+# no compilation) is needed to name the packages. `.` is the module root. -z
+# keeps a path with a space or a quote in it one record long.
 changed_go_dirs() {
-    git diff --name-only "$base_ref" -- '*.go' | while IFS= read -r path; do
+    git diff --name-only -z "$base_ref" -- '*.go' | while IFS= read -r -d '' path; do
         [[ -n "$path" ]] || continue
         dirname "$path"
     done | sort -u
 }
 
-# A package cannot be checked here when its own default-build test files wire
-# up a Docker container or a local Dolt sql-server (via a TestMain, a direct
-# doltserver.Start, or testcontainers): the unit tier this target runs under
-# starts neither. Test files behind //go:build integration are ignored —
-# `make test` does not build them either, and a package that keeps its
-# infrastructure tests there still has runnable unit tests (cmd/bd is the
-# big one), so skipping the whole package would throw away the check that
-# matters most.
+# A package is skipped when its own default-build test files wire up a Docker
+# container or a local Dolt sql-server: a TestMain calling
+# EnsureDoltContainerForTestMain, a direct doltserver.Start, or testcontainers.
+# The unit tier this target runs under starts none of that, and a suite that
+# brings its own server has nothing left to check here — the Forgejo gate runs
+# the whole tier on the candidate. This is deliberately conservative: cmd/bd
+# and the module root skip too, because their TestMains do build a container,
+# and cmd/bd's suite is only fast when scripts/test.sh has prebuilt the bd
+# binary it spawns — a bare `go test ./cmd/bd` is the pathological slow case
+# this target exists to avoid.
+#
+# Test files behind //go:build integration are ignored: `make test` does not
+# build them either, so a package that keeps its heavy tests there (and wires
+# no container in the default build) is still tested.
+#
+# This is a text scan, not a parse: whole-line comments are dropped so a test
+# that only documents the wiring (`// doltserver.Start() writes ...`) is not
+# mistaken for one that starts a server.
 package_needs_infra() {
     local file
     while IFS= read -r -d '' file; do
         if grep -qE '^//go:build .*\bintegration\b' "$file"; then
             continue
         fi
-        if grep -qE 'EnsureDoltContainerForTestMain\(|doltserver\.Start\(|testcontainers' "$file"; then
+        if grep -vE '^[[:space:]]*//' "$file" |
+            grep -qE 'EnsureDoltContainerForTestMain\(|doltserver\.Start\(|testcontainers'; then
             return 0
         fi
     done < <(find "$1" -maxdepth 1 -name '*_test.go' -print0)
@@ -135,7 +147,7 @@ echo "presubmit: build (go build -tags $BEADS_BUILD_TAGS ./...)"
 go build -tags "$BEADS_BUILD_TAGS" ./...
 
 if ((${#packages[@]} == 0)); then
-    echo "presubmit: no changed Go package; lint and build only"
+    echo "presubmit: no testable changed Go package; lint and build only"
     exit 0
 fi
 
