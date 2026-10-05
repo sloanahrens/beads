@@ -114,11 +114,14 @@ func TestResolveCloseTargets(t *testing.T) {
 				t.Fatalf("chdir repoDir: %v", err)
 			}
 
-			results, cleanup, err := resolveCloseTargets(ctx, primaryStore, tc.inputIDs)
+			results, unresolved, cleanup, err := resolveCloseTargets(ctx, primaryStore, tc.inputIDs)
 			if err != nil {
 				t.Fatalf("resolveCloseTargets: %v", err)
 			}
 			defer cleanup()
+			if len(unresolved) != 0 {
+				t.Fatalf("resolveCloseTargets left %d ids unresolved: %+v", len(unresolved), unresolved)
+			}
 
 			if len(results) != len(tc.inputIDs) {
 				t.Fatalf("got %d results, want %d", len(results), len(tc.inputIDs))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -108,7 +109,7 @@ the flags appear in the command line.`,
 			return HandleErrorRespectJSON("--suggest-next only works when closing a single issue")
 		}
 
-		results, cleanup, resolveErr := resolveCloseTargets(ctx, store, args)
+		results, unresolved, cleanup, resolveErr := resolveCloseTargets(ctx, store, args)
 		defer cleanup()
 		if resolveErr != nil {
 			return handleClassifiedRespectJSON(resolveErr)
@@ -147,6 +148,17 @@ the flags appear in the command line.`,
 		// command exit non-zero (partial when something else closed): a
 		// success code that means "some of it" strands work (B1-02).
 		var closeFailures []idOutcome
+
+		// Arguments that never resolved. They are reported beside the batch's
+		// own failures rather than aborting the command, so one unresolvable
+		// id cannot discard the work the rest of the batch did, and each id
+		// keeps its own kind — a matched-but-unreachable prefix route is
+		// route_unreachable, not not_found (B1-05, be-sut).
+		for _, u := range unresolved {
+			msg := fmt.Sprintf("Error resolving %s: %v", u.ID, u.Err)
+			fmt.Fprintln(os.Stderr, msg)
+			closeFailures = append(closeFailures, idOutcome{ID: u.ID, Kind: errorKindOf(u.Err), Message: msg})
+		}
 
 		for i, id := range resolvedIDs {
 			res := outcomes[i]
@@ -652,6 +664,15 @@ func resolveReasonFile(cmd *cobra.Command, hasExistingReason bool) (string, bool
 	return content, true, nil
 }
 
+// unresolvedCloseTarget is one argument `bd close` could not resolve to a live
+// issue. Resolution failures are per-argument, not per-command: the batch
+// still closes every id that did resolve, and the caller reports each failure
+// with its own kind.
+type unresolvedCloseTarget struct {
+	ID  string
+	Err error
+}
+
 // resolveCloseTargets resolves a batch of partial issue IDs for `bd close`,
 // preserving input order. For each ID it tries the local store first, then
 // explicit prefix routing via routes.jsonl, then a shared contributor-routed
@@ -664,8 +685,15 @@ func resolveReasonFile(cmd *cobra.Command, hasExistingReason bool) (string, bool
 // Each returned RoutedResult.Store points to whichever store actually owns the
 // issue. The caller invokes cleanup() once when done; per-result Close() is a
 // no-op for routed-via-shared-handle entries because they don't own the handle.
-func resolveCloseTargets(ctx context.Context, localStore storage.DoltStorage, ids []string) ([]*RoutedResult, func(), error) {
+//
+// An id that resolves to nothing is reported in unresolved, not as a batch
+// error: one unknown argument must not discard the rest of the batch. A
+// matched prefix route whose database cannot be asked keeps its typed
+// routeUnreachableError in that slot, so the caller reports route_unreachable
+// rather than a definite "not found" (B1-05, be-sut).
+func resolveCloseTargets(ctx context.Context, localStore storage.DoltStorage, ids []string) ([]*RoutedResult, []unresolvedCloseTarget, func(), error) {
 	results := make([]*RoutedResult, 0, len(ids))
+	var unresolved []unresolvedCloseTarget
 	var sharedRouted storage.DoltStorage
 	var sharedRoutedTried bool
 	cleanup := func() {
@@ -701,13 +729,23 @@ func resolveCloseTargets(ctx context.Context, localStore storage.DoltStorage, id
 			continue
 		} else if !isNotFoundErr(err) {
 			cleanup()
-			return nil, func() {}, fmt.Errorf("resolving ID %s: %w", id, err)
+			return nil, nil, func() {}, fmt.Errorf("resolving ID %s: %w", id, err)
 		}
 		// Write-intent: a prefix-routed target opens writable so the close
 		// commits on the target head (#4141). Contributor auto-routing below
 		// stays read-only: it hydrates foreign projects that must not be mutated.
-		if r, err := resolveViaPrefixRoutingWithAccess(ctx, id, true); err == nil {
+		r, prefixErr := resolveViaPrefixRoutingWithAccess(ctx, id, true)
+		if prefixErr == nil {
 			results = append(results, r)
+			continue
+		}
+		var unreachable *routeUnreachableError
+		if errors.As(prefixErr, &unreachable) {
+			// The prefix matched a route but the target database could not be
+			// asked: UNKNOWN, not a miss. Report it rather than letting the
+			// auto-routing fallback turn it into "no issue found matching"
+			// (B1-05).
+			unresolved = append(unresolved, unresolvedCloseTarget{ID: id, Err: prefixErr})
 			continue
 		}
 		// Contributor auto-routing uses one shared store for the whole batch.
@@ -718,8 +756,7 @@ func resolveCloseTargets(ctx context.Context, localStore storage.DoltStorage, id
 				continue
 			}
 		}
-		cleanup()
-		return nil, func() {}, fmt.Errorf("resolving ID %s: no issue found matching %q", id, id)
+		unresolved = append(unresolved, unresolvedCloseTarget{ID: id, Err: fmt.Errorf("no issue found matching %q", id)})
 	}
-	return results, cleanup, nil
+	return results, unresolved, cleanup, nil
 }
