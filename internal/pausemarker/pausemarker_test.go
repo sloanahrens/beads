@@ -50,6 +50,7 @@ func TestRead(t *testing.T) {
 		name       string
 		create     bool // write body to the marker path
 		mkdir      bool // make the marker path a directory instead
+		emptyPath  bool // pass "" as the path instead of a temp file
 		body       string
 		wantState  State
 		wantActor  string
@@ -132,11 +133,19 @@ func TestRead(t *testing.T) {
 			mkdir:   true,
 			wantErr: "pausemarker: read",
 		},
+		{
+			name:      "empty path is an error, never none",
+			emptyPath: true,
+			wantErr:   "empty marker path",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "dolt.pause")
+			if tt.emptyPath {
+				path = ""
+			}
 			switch {
 			case tt.mkdir:
 				if err := os.Mkdir(path, 0o700); err != nil {
@@ -179,6 +188,11 @@ func TestRead(t *testing.T) {
 	}
 }
 
+// TestNilClockUsesTheSystemClock is the one test that cannot use the fake
+// clock: a nil clock is the feature under test, so the system clock is the
+// point. It reads a missing marker, one that cannot expire for thousands of
+// years, and one that expired decades ago, so nothing depends on when the test
+// runs - and it never sleeps.
 func TestNilClockUsesTheSystemClock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dolt.pause")
 
@@ -187,10 +201,17 @@ func TestNilClockUsesTheSystemClock(t *testing.T) {
 		t.Fatalf("Read(missing, nil) = %+v, %v; want none, nil", status, err)
 	}
 
-	writeRaw(t, path, markerBody("gt-daemon", "dolt restart", time.Now().Add(time.Hour)))
+	farFuture := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	writeRaw(t, path, markerBody("gt-daemon", "dolt restart", farFuture))
 	status, err = Read(path, nil)
 	if err != nil || status.State != Active {
 		t.Fatalf("Read(active, nil) = %+v, %v; want active, nil", status, err)
+	}
+
+	writeRaw(t, path, markerBody("gt-daemon", "dolt restart", time.Date(1970, 1, 2, 0, 0, 0, 0, time.UTC)))
+	status, err = Read(path, nil)
+	if err != nil || status.State != Expired {
+		t.Fatalf("Read(expired, nil) = %+v, %v; want expired, nil", status, err)
 	}
 }
 

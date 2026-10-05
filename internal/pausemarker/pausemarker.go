@@ -51,6 +51,12 @@ type Status struct {
 // KindStoreUnavailable is the machine-mode failure kind a caller reports when
 // Wait gives up: the same string cmd/bd puts in its envelope. cmd/bd is
 // package main, so an internal package cannot import the constant from it.
+//
+// Note for the wiring bead: cmd/bd's errorKindOf classifies by concrete type,
+// so a *PausedError reaching it lands on kindInternal until errorKindOf grows
+// a case for it (errors.As-able *PausedError -> KindStoreUnavailable with
+// QualifierPaused in detail). Kind and Qualifier below exist to make that case
+// a two-line addition rather than a re-derivation.
 const KindStoreUnavailable = "store_unavailable"
 
 // QualifierPaused says why the store is unavailable. A paused store is down on
@@ -95,8 +101,13 @@ type marker struct {
 // cannot be read as a marker - a permission error, malformed JSON, an until
 // that is not RFC 3339 - is an error, never a silent None. A caller that
 // cannot tell whether the store is paused must not read silence as permission
-// to write.
+// to write, so an empty path is an error too: it can only come from a caller
+// that never set the marker path, and answering None there would be exactly
+// that mistake.
 func Read(path string, clock Clock) (Status, error) {
+	if path == "" {
+		return Status{}, errors.New("pausemarker: read: empty marker path")
+	}
 	if clock == nil {
 		clock = SystemClock{}
 	}
