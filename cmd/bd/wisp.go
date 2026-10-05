@@ -616,9 +616,12 @@ A wisp is considered abandoned if:
 Abandoned wisps are deleted without creating a digest. Use 'bd mol squash'
 if you want to preserve a summary before garbage collection.
 
-Use --closed to purge ALL closed wisps (regardless of age). This is the
-fastest way to reclaim space from accumulated wisp bloat. Safe by default:
-requires --force to actually delete.
+Use --closed to purge closed wisps (regardless of age). This is the fastest
+way to reclaim space from accumulated wisp bloat. Safe by default: requires
+--force to actually delete. Pinned and configured infra wisps are never
+purged, and neither is a closed wisp that is a step of a molecule which is
+not itself closed — deleting those would erase completed work from a molecule
+that is still running (be-96h).
 
 Note: This uses time-based cleanup, appropriate for ephemeral wisps.
 For graph-pressure staleness detection (blocking other work), see 'bd mol stale'.
@@ -943,6 +946,56 @@ func runWispPurgeClosed(ctx context.Context, dryRun bool, force bool, excludeTyp
 	}
 	if infraCount > 0 && !jsonOutput {
 		fmt.Printf("Skipping %d configured infra issue(s) protected from GC\n", infraCount)
+	}
+
+	// A completed step of a molecule is itself a CLOSED wisp, so the
+	// sanctioned mid-cycle `bd mol wisp gc --closed` would otherwise delete
+	// the running patrol's own finished steps and regress its progress: a
+	// patrol that ran its own GC mid-cycle went 2/28 complete -> 0/26 (be-96h).
+	// Protect any closed wisp whose parent molecule is still open, the same
+	// guarantee the age-based path gives live steps via isProtectedWisp
+	// (GH#4394). Roots are resolved with the shared parent/molecule walk
+	// (findParentMolecules) so a wisp with no molecule parent, and a wisp
+	// whose molecule is itself closed, remain purgeable.
+	openMoleculeCount := 0
+	if len(closedIssues) > 0 {
+		candidateIDs := make([]string, len(closedIssues))
+		for i, issue := range closedIssues {
+			candidateIDs[i] = issue.ID
+		}
+		roots := findParentMolecules(ctx, store, candidateIDs)
+		if len(roots) > 0 {
+			rootIDs := make([]string, 0, len(roots))
+			seenRoot := make(map[string]bool, len(roots))
+			for _, rootID := range roots {
+				if !seenRoot[rootID] {
+					seenRoot[rootID] = true
+					rootIDs = append(rootIDs, rootID)
+				}
+			}
+			rootIssues, err := store.GetIssuesByIDs(ctx, rootIDs)
+			if err != nil {
+				return HandleError("reading parent molecules for wisp purge: %v", err)
+			}
+			openRoots := make(map[string]bool, len(rootIssues))
+			for _, root := range rootIssues {
+				if root.Status != types.StatusClosed {
+					openRoots[root.ID] = true
+				}
+			}
+			kept := make([]*types.Issue, 0, len(closedIssues))
+			for _, issue := range closedIssues {
+				if rootID, ok := roots[issue.ID]; ok && openRoots[rootID] {
+					openMoleculeCount++
+					continue
+				}
+				kept = append(kept, issue)
+			}
+			closedIssues = kept
+		}
+	}
+	if openMoleculeCount > 0 && !jsonOutput {
+		fmt.Printf("Skipping %d step(s) of open molecules (protected from cleanup)\n", openMoleculeCount)
 	}
 
 	if len(closedIssues) == 0 {
