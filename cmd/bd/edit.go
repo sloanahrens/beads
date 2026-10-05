@@ -148,6 +148,22 @@ Examples:
 			fieldToEdit: newValue,
 		}
 
+		// Editing the acceptance criteria has two spellings to keep in step,
+		// like `bd update --acceptance`: the acceptance_criteria column this
+		// editor was seeded with, and the description's own '## Acceptance'
+		// section, which is what `bd show` prints as the criteria. Writing only
+		// the column would leave every line a reader can see unchanged.
+		if fieldToEdit == "acceptance_criteria" {
+			rewritten, err := rewriteAcceptanceSection(issue.Description, newValue)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Your edits are preserved in: %s\n", tmpPath)
+				return HandleErrorRespectJSON("%v", err)
+			}
+			if rewritten != issue.Description {
+				updates["description"] = rewritten
+			}
+		}
+
 		err = issueStore.UpdateIssue(ctx, id, updates, actor)
 		if err != nil {
 			if accessor, ok := storage.UnwrapStore(issueStore).(storage.RawDBAccessor); ok {

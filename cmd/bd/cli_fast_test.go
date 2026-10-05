@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // Fast CLI tests converted from scripttest suite
@@ -379,6 +381,138 @@ func TestCLI_UpdateAcceptanceRefusesAmbiguousDescription(t *testing.T) {
 	}
 	if updated[0]["description"] != description {
 		t.Errorf("refused write changed the description:\n%v", updated[0]["description"])
+	}
+}
+
+// resetCommandFlag restores one of a command's flags to its default, now and
+// again when the test ends.
+//
+// runBDInProcess drives rootCmd.Execute inside the test process, and cobra
+// keeps a flag's value and Changed bit across Execute calls. Without this, a
+// test that passes --acceptance leaves the acceptance write armed for every
+// later create in the package, which is how
+// TestCLI_CreateWithoutAcceptanceLeavesDescriptionAlone first failed.
+func resetCommandFlag(t *testing.T, cmd *cobra.Command, name string) {
+	t.Helper()
+	reset := func() {
+		flag := cmd.Flags().Lookup(name)
+		if flag == nil {
+			return
+		}
+		flag.Changed = false
+		_ = flag.Value.Set(flag.DefValue)
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+// TestCLI_CreateAcceptanceSyncsDescriptionSection covers the create half of
+// the same two-spellings problem bd update --acceptance was fixed for: a
+// description that already carries a '## Acceptance' section, created with
+// --acceptance, must not be stored with the column and the section
+// disagreeing. The section is what bd show prints as the criteria, so a create
+// that wrote only the column would print the block it was handed rather than
+// the criteria it was given.
+func TestCLI_CreateAcceptanceSyncsDescriptionSection(t *testing.T) {
+	resetCommandFlag(t, createCmd, "acceptance")
+	resetCommandFlag(t, createCmd, "description")
+	tmpDir := setupCLITestDB(t)
+	description := "## Goal\n\nclose the gap\n\n## Acceptance\n\n- [ ] make check pass\n"
+	out := runBDInProcess(t, tmpDir, "create", "Spec-shaped bead",
+		"--description", description, "--acceptance", "- [x] make check pass", "--json")
+
+	var issue map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+		t.Fatalf("Failed to parse create output: %v", err)
+	}
+	if got := issue["acceptance_criteria"]; got != "- [x] make check pass" {
+		t.Errorf("acceptance_criteria = %v, want the criteria that were written", got)
+	}
+	stored, _ := issue["description"].(string)
+	if !strings.Contains(stored, "- [x] make check pass") || strings.Contains(stored, "- [ ]") {
+		t.Errorf("description's acceptance section was not updated:\n%s", stored)
+	}
+	if !strings.Contains(stored, "## Goal\n\nclose the gap") {
+		t.Errorf("create did not carry the rest of the description:\n%s", stored)
+	}
+}
+
+// TestCLI_CreateWithoutAcceptanceLeavesDescriptionAlone is the other side of
+// the create contract: a description carrying a '## Acceptance' section is the
+// spec-dispatcher shape, and a create that writes no acceptance column has
+// nothing to keep the section in step with, so the description is stored
+// verbatim.
+func TestCLI_CreateWithoutAcceptanceLeavesDescriptionAlone(t *testing.T) {
+	resetCommandFlag(t, createCmd, "acceptance")
+	resetCommandFlag(t, createCmd, "description")
+	tmpDir := setupCLITestDB(t)
+	description := "## Goal\n\nclose the gap\n\n## Acceptance\n\n- [ ] make check pass\n"
+	out := runBDInProcess(t, tmpDir, "create", "Dispatcher-shaped bead", "--description", description, "--json")
+
+	var issue map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+		t.Fatalf("Failed to parse create output: %v", err)
+	}
+	if got, _ := issue["description"].(string); got != description {
+		t.Errorf("description = %q, want it stored verbatim", got)
+	}
+}
+
+// TestCLI_CreateAcceptanceRefusesAmbiguousDescription is the refusal half: a
+// description naming two acceptance sections names no single place to write,
+// so the create fails instead of guessing.
+func TestCLI_CreateAcceptanceRefusesAmbiguousDescription(t *testing.T) {
+	resetCommandFlag(t, createCmd, "acceptance")
+	resetCommandFlag(t, createCmd, "description")
+	tmpDir := setupCLITestDB(t)
+	description := "## Acceptance\n\n- [ ] one\n\n## Acceptance Criteria\n\n- [ ] two\n"
+	stdout, stderr, err := runBDInProcessAllowError(t, tmpDir, "create", "Two acceptance sections",
+		"--description", description, "--acceptance", "- [x] one", "--json")
+	if err == nil {
+		t.Fatalf("expected the ambiguous acceptance create to fail, stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+// TestCLI_EditAcceptanceSyncsDescriptionSection covers the edit half: bd edit
+// --acceptance seeds $EDITOR from the acceptance_criteria column, and what the
+// editor writes back has to reach the description's '## Acceptance' section
+// too, or the round trip leaves the lines bd show prints exactly as they were.
+func TestCLI_EditAcceptanceSyncsDescriptionSection(t *testing.T) {
+	resetCommandFlag(t, createCmd, "acceptance")
+	resetCommandFlag(t, createCmd, "description")
+	resetCommandFlag(t, editCmd, "acceptance")
+	tmpDir := setupCLITestDB(t)
+	description := "## Goal\n\nclose the gap\n\n## Acceptance\n\n- [ ] make check pass\n"
+	out := runBDInProcess(t, tmpDir, "create", "Spec-shaped bead", "--description", description, "--json")
+
+	var issue map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+		t.Fatalf("Failed to parse create output: %v", err)
+	}
+	id := issue["id"].(string)
+
+	// The editor stands in for the user: it overwrites the seeded temp file
+	// with the criteria they typed.
+	editor := filepath.Join(tmpDir, "editor.sh")
+	script := "#!/bin/sh\nprintf '%s' '- [x] make check pass' > \"$1\"\n"
+	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake editor: %v", err)
+	}
+	t.Setenv("EDITOR", editor)
+
+	runBDInProcess(t, tmpDir, "edit", id, "--acceptance")
+
+	out = runBDInProcess(t, tmpDir, "show", id, "--json")
+	var updated []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+		t.Fatalf("Failed to parse show output: %v", err)
+	}
+	if got := updated[0]["acceptance_criteria"]; got != "- [x] make check pass" {
+		t.Errorf("acceptance_criteria = %v, want the criteria the editor wrote", got)
+	}
+	rewritten, _ := updated[0]["description"].(string)
+	if !strings.Contains(rewritten, "- [x] make check pass") || strings.Contains(rewritten, "- [ ]") {
+		t.Errorf("description's acceptance section was not updated:\n%s", rewritten)
 	}
 }
 

@@ -151,6 +151,19 @@ var createCmd = &cobra.Command{
 			return err
 		}
 		acceptance, _ := cmd.Flags().GetString("acceptance")
+		// An acceptance write has two spellings to keep in step: the
+		// acceptance_criteria column, and the description's own
+		// '## Acceptance' section when it has one. A create that supplies both
+		// would otherwise store the column and the section disagreeing, and the
+		// next `bd show` would print the stale block as if it were the criteria
+		// just written (see rewriteAcceptanceSection).
+		if cmd.Flags().Changed("acceptance") {
+			rewritten, err := rewriteAcceptanceSection(description, acceptance)
+			if err != nil {
+				return HandleErrorRespectJSON("%v", err)
+			}
+			description = rewritten
+		}
 		notes, _ := cmd.Flags().GetString("notes")
 		specID, _ := cmd.Flags().GetString("spec-id")
 
