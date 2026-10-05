@@ -938,7 +938,6 @@ git status                  # Check changed files
 - ` + "`bd close <id1> <id2> ...`" + ` - Close multiple issues at once (more efficient)
 - ` + "`bd close <id> --reason=\"explanation\"`" + ` - Close with reason
 - **Tip**: When creating multiple issues/tasks/epics, use parallel subagents for efficiency
-- **WARNING**: Do NOT use ` + "`bd edit`" + ` - it opens $EDITOR (vim/nano) which blocks agents
 
 ### Dependencies & Blocking
 - ` + "`bd dep add <issue> <depends-on>`" + ` - Add dependency (issue depends on depends-on)

@@ -26,7 +26,6 @@ func TestReadonlyModeBlocksWrites(t *testing.T) {
 		{"sync"},
 		{"import"},
 		{"reopen"},
-		{"edit"},
 		{"comment add"},
 		{"dep add"},
 		{"dep remove"},

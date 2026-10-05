@@ -5,7 +5,7 @@ argument-hint: "[issue-id]"
 
 View or add comments to a beads issue.
 
-Comments are separate from issue properties (title, description, etc.) because they serve a different purpose: they're a **discussion thread** rather than **singular editable fields**. Use `bd comments` for threaded conversations and `bd edit` for core issue metadata.
+Comments are separate from issue properties (title, description, etc.) because they serve a different purpose: they're a **discussion thread** rather than **singular editable fields**. Use `bd comments` for threaded conversations and `bd update` for core issue metadata.
 
 ## View Comments
 

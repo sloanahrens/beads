@@ -18,11 +18,9 @@ bd dolt push          # Push to Dolt remote
 sources for whether work is blocked. `bd list` shows active blocker
 annotations but use `bd ready`/`bd blocked` for accurate blocking status.
 
-## Agent Warning: Interactive Commands
+## Updating Issue Fields
 
-**DO NOT use `bd edit`** - it opens an interactive editor ($EDITOR) which AI agents cannot use.
-
-Use `bd update` with flags instead:
+Use `bd update` with flags:
 ```bash
 bd update <id> --description "new description"
 bd update <id> --title "new title"

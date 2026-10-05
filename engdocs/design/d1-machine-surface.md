@@ -23,7 +23,7 @@ In machine mode bd:
   pre-run, skips Dolt auto-push, skips tips;
 - replaces `os.Stdin` with `/dev/null` unless an argument asks for stdin (`-`,
   `--flag=-`, `--stdin`), so no prompt or implicit piped read can block;
-- refuses `bd edit` and `--watch`/`--follow` style streaming modes with
+- refuses `--watch`/`--follow` style streaming modes with
   `invalid_args` (machine mode never blocks);
 - captures stdout: `os.Stdout` becomes a pipe for the life of the command, and the
   one envelope is written to the real stdout at exit (section 2).

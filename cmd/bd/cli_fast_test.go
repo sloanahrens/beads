@@ -473,46 +473,18 @@ func TestCLI_CreateAcceptanceRefusesAmbiguousDescription(t *testing.T) {
 	}
 }
 
-// TestCLI_EditAcceptanceSyncsDescriptionSection covers the edit half: bd edit
-// --acceptance seeds $EDITOR from the acceptance_criteria column, and what the
-// editor writes back has to reach the description's '## Acceptance' section
-// too, or the round trip leaves the lines bd show prints exactly as they were.
-func TestCLI_EditAcceptanceSyncsDescriptionSection(t *testing.T) {
-	resetCommandFlag(t, createCmd, "acceptance")
-	resetCommandFlag(t, createCmd, "description")
-	resetCommandFlag(t, editCmd, "acceptance")
-	tmpDir := setupCLITestDB(t)
-	description := "## Goal\n\nclose the gap\n\n## Acceptance\n\n- [ ] make check pass\n"
-	out := runBDInProcess(t, tmpDir, "create", "Spec-shaped bead", "--description", description, "--json")
-
-	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
-		t.Fatalf("Failed to parse create output: %v", err)
+// TestCLI_EditCommandIsUnknown pins the be-bxp removal: bd edit was the one
+// command that opened $EDITOR, and with it gone the name resolves to nothing.
+// The error text is not just cosmetic — envelope.go keys its invalid_args
+// mapping on the "unknown command" prefix, so a machine caller gets a typed
+// error rather than an untyped failure.
+func TestCLI_EditCommandIsUnknown(t *testing.T) {
+	_, _, err := rootCmd.Find([]string{"edit"})
+	if err == nil {
+		t.Fatal("bd edit is still a registered command")
 	}
-	id := issue["id"].(string)
-
-	// The editor stands in for the user: it overwrites the seeded temp file
-	// with the criteria they typed.
-	editor := filepath.Join(tmpDir, "editor.sh")
-	script := "#!/bin/sh\nprintf '%s' '- [x] make check pass' > \"$1\"\n"
-	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing fake editor: %v", err)
-	}
-	t.Setenv("EDITOR", editor)
-
-	runBDInProcess(t, tmpDir, "edit", id, "--acceptance")
-
-	out = runBDInProcess(t, tmpDir, "show", id, "--json")
-	var updated []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &updated); err != nil {
-		t.Fatalf("Failed to parse show output: %v", err)
-	}
-	if got := updated[0]["acceptance_criteria"]; got != "- [x] make check pass" {
-		t.Errorf("acceptance_criteria = %v, want the criteria the editor wrote", got)
-	}
-	rewritten, _ := updated[0]["description"].(string)
-	if !strings.Contains(rewritten, "- [x] make check pass") || strings.Contains(rewritten, "- [ ]") {
-		t.Errorf("description's acceptance section was not updated:\n%s", rewritten)
+	if !strings.Contains(err.Error(), `unknown command "edit"`) {
+		t.Errorf("bd edit: err = %v, want cobra's unknown-command error for a deleted command", err)
 	}
 }
 
