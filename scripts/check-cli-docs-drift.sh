@@ -91,7 +91,18 @@ regen_worktree() {
     git -C "$PROJECT_ROOT" worktree add --detach --quiet "$dir" "$sha"
     (
         cd "$dir"
-        if [ -x scripts/resolve-docs-bd.sh ] && [ -n "$(scripts/resolve-docs-bd.sh)" ]; then
+        # Distinguish "this commit has no pin" (empty output, exit 0 — the
+        # else branch below is for it) from "the pin could not be resolved"
+        # (non-zero). Folding the second into the first would regenerate
+        # against this commit's own source and compare two wrong binaries.
+        pin_out=""
+        if [ -x scripts/resolve-docs-bd.sh ]; then
+            if ! pin_out="$(scripts/resolve-docs-bd.sh)"; then
+                echo "Error: cannot regenerate docs at ${sha:0:12}: docs/cli-docs.pin did not resolve." >&2
+                exit 1
+            fi
+        fi
+        if [ -n "$pin_out" ]; then
             ./scripts/generate-cli-docs.sh >/dev/null
         else
             CGO_ENABLED=0 go build -tags gms_pure_go -o "$dir/.docs-bd" ./cmd/bd/
