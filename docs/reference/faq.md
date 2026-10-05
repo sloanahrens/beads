@@ -244,15 +244,14 @@ Dolt is a SQL database and comfortably handles far more issues than a typical pr
 
 ### What if my database gets too large?
 
-`bd gc` runs the full lifecycle: deletes old closed issues, squashes old Dolt commits, and runs Dolt garbage collection to reclaim disk space.
+`bd gc` runs Dolt garbage collection, reclaiming the disk space held by data nothing references anymore.
 
 ```bash
-bd gc --dry-run          # Preview all phases
-bd gc                    # Delete issues closed 90+ days ago, compact, GC
-bd gc --older-than 30    # More aggressive decay window
+bd gc --dry-run    # Preview what GC would reclaim
+bd gc              # Run Dolt GC
 ```
 
-For semantic summarization of old closed issues instead of deletion, see `bd admin compact`. Or split the project:
+For semantic summarization of old closed issues, see `bd admin compact`. Or split the project:
 
 ```bash
 cd ~/project/frontend && bd init --prefix fe
