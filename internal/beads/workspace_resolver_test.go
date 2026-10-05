@@ -2,6 +2,7 @@ package beads
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,5 +69,143 @@ func TestFindBeadsDir_AgreesWithWorkspaceResolveThroughRedirect(t *testing.T) {
 	}
 	if got := FindDatabasePath(); !strings.HasPrefix(got, rigBeads+string(filepath.Separator)) {
 		t.Errorf("FindDatabasePath() with BEADS_DIR = %q, want a path under %q", got, rigBeads)
+	}
+}
+
+// setupDiscoveryRepo creates a plain git repo (not a worktree) whose root
+// .beads is a valid ancestor workspace, and returns the canonical repo root.
+// The caller chdirs into a subdirectory; FindBeadsDir's step 2 walk stops at
+// the repo root and step 4 checks it, so an ancestor workspace is what a
+// walk-past would bind to.
+func setupDiscoveryRepo(t *testing.T) string {
+	t.Helper()
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", repo).CombinedOutput(); err != nil {
+		t.Skipf("git not available: %v (%s)", err, out)
+	}
+	ancestor := filepath.Join(repo, ".beads")
+	if err := os.MkdirAll(filepath.Join(ancestor, "embeddeddolt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ancestor, "metadata.json"), []byte(`{"backend":"dolt","dolt_database":"ancestor"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEADS_DIR", "")
+	t.Setenv("BEADS_DB", "")
+	t.Cleanup(git.ResetCaches)
+	return repo
+}
+
+// chdir is a small wrapper so every discovery test resets the git caches after
+// the process working directory moves.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	t.Chdir(dir)
+	git.ResetCaches()
+}
+
+// be-929: a .beads/redirect the walk cannot follow ends discovery. The
+// directory is a deliberate pointer at a workspace; returning an unrelated
+// ancestor workspace instead would aim writes at the wrong database.
+func TestFindBeadsDir_BrokenRedirectEndsWalk(t *testing.T) {
+	cases := []struct {
+		name     string
+		redirect func(repo, source string) string
+		target   func(repo, source string) string
+	}{
+		{
+			name:     "target missing",
+			redirect: func(repo, _ string) string { return filepath.Join(repo, "gone", ".beads") + "\n" },
+			target:   func(repo, _ string) string { return filepath.Join(repo, "gone", ".beads") },
+		},
+		{
+			name: "target has no workspace files",
+			redirect: func(repo, _ string) string {
+				return filepath.Join(repo, "empty", ".beads") + "\n"
+			},
+			target: func(repo, _ string) string { return filepath.Join(repo, "empty", ".beads") },
+		},
+		{
+			name:     "redirect loop",
+			redirect: func(_, source string) string { return source + "\n" },
+			target:   func(_, source string) string { return source },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := setupDiscoveryRepo(t)
+			source := filepath.Join(repo, "sub", ".beads")
+			if err := os.MkdirAll(source, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "target has no workspace files" {
+				if err := os.MkdirAll(filepath.Join(repo, "empty", ".beads"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(source, "redirect"), []byte(tc.redirect(repo, source)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			chdir(t, filepath.Join(repo, "sub"))
+
+			var got string
+			stderr := captureStderr(t, func() { got = FindBeadsDir() })
+
+			if got != "" {
+				t.Errorf("FindBeadsDir() = %q, want \"\" (broken redirect must not bind to an ancestor workspace)", got)
+			}
+			if n := strings.Count(stderr, "refusing to search parent directories"); n != 1 {
+				t.Errorf("want exactly one walk-refusal warning, got %d: %q", n, stderr)
+			}
+			if sourcePath := source; !strings.Contains(stderr, sourcePath) {
+				t.Errorf("warning should name the .beads directory %q, got: %q", sourcePath, stderr)
+			}
+			if targetPath := tc.target(repo, source); !strings.Contains(stderr, targetPath) {
+				t.Errorf("warning should name the redirect target %q, got: %q", targetPath, stderr)
+			}
+		})
+	}
+}
+
+// A good redirect found by the walk still resolves to its target.
+func TestFindBeadsDir_GoodRedirectFollowedInWalk(t *testing.T) {
+	repo := setupDiscoveryRepo(t)
+	target := filepath.Join(repo, "real", ".beads")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "metadata.json"), []byte(`{"backend":"dolt","dolt_database":"real"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(repo, "sub", ".beads")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "redirect"), []byte("../real/.beads\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, filepath.Join(repo, "sub"))
+
+	if got := FindBeadsDir(); got != target {
+		t.Errorf("FindBeadsDir() = %q, want %q (good redirect still followed)", got, target)
+	}
+}
+
+// A .beads directory with no redirect is skipped as before: the walk
+// continues to the ancestor workspace.
+func TestFindBeadsDir_NoRedirectStillWalksToAncestor(t *testing.T) {
+	repo := setupDiscoveryRepo(t)
+	if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, filepath.Join(repo, "sub"))
+
+	want := filepath.Join(repo, ".beads")
+	if got := FindBeadsDir(); got != want {
+		t.Errorf("FindBeadsDir() = %q, want %q (no redirect should walk up as before)", got, want)
 	}
 }
