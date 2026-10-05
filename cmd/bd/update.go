@@ -513,6 +513,17 @@ pointless).`,
 			// earlier transaction) silently erased concurrent writers' keys —
 			// both processes exited 0, one process's committed write vanished.
 			patch := basePatch
+			// An acceptance write has two spellings to keep in step: the
+			// acceptance_criteria column, and the description's own
+			// '## Acceptance' section when it has one. The patch is per-issue
+			// because the description it edits is (see syncAcceptanceSection).
+			patch, err = syncAcceptanceSection(patch, issue.Description)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", id, err)
+				recordFailure(id, kindRefused, err.Error())
+				closeIfUnmutated(result)
+				continue
+			}
 			// GH#3233: --defer="" restores ready visibility only if the issue
 			// was actually deferred. Other statuses (blocked, in_progress, …)
 			// shouldn't be clobbered just because defer_until was stale.
