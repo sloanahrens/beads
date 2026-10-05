@@ -316,6 +316,72 @@ func TestCLI_Update(t *testing.T) {
 	}
 }
 
+// TestCLI_UpdateAcceptanceSyncsDescriptionSection is the regression for the
+// spec-dispatcher shape: a bead whose criteria are a '## Acceptance' section
+// of its description, with nothing in the acceptance_criteria column. The
+// write has to reach the section, because that is what a reader of bd show
+// sees as the criteria; writing only the column left the '- [ ]' lines in
+// place and made the update look applied when nothing visible had moved.
+func TestCLI_UpdateAcceptanceSyncsDescriptionSection(t *testing.T) {
+	tmpDir := setupCLITestDB(t)
+	description := "## Goal\n\nclose the gap\n\n## Acceptance\n\n- [ ] make check pass\n"
+	out := runBDInProcess(t, tmpDir, "create", "Spec-shaped bead", "--description", description, "--json")
+
+	var issue map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+		t.Fatalf("Failed to parse create output: %v", err)
+	}
+	id := issue["id"].(string)
+
+	runBDInProcess(t, tmpDir, "update", id, "--acceptance", "- [x] make check pass")
+
+	out = runBDInProcess(t, tmpDir, "show", id, "--json")
+	var updated []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+		t.Fatalf("Failed to parse show output: %v", err)
+	}
+	if got := updated[0]["acceptance_criteria"]; got != "- [x] make check pass" {
+		t.Errorf("acceptance_criteria = %v, want the criteria that were written", got)
+	}
+	rewritten, _ := updated[0]["description"].(string)
+	if !strings.Contains(rewritten, "- [x] make check pass") || strings.Contains(rewritten, "- [ ]") {
+		t.Errorf("description's acceptance section was not updated:\n%s", rewritten)
+	}
+}
+
+// TestCLI_UpdateAcceptanceRefusesAmbiguousDescription is the other half of the
+// same regression: an acceptance write that cannot be applied (here, a
+// description naming two acceptance sections and so no single place to write)
+// must exit nonzero and change nothing, not print success.
+func TestCLI_UpdateAcceptanceRefusesAmbiguousDescription(t *testing.T) {
+	tmpDir := setupCLITestDB(t)
+	description := "## Acceptance\n\n- [ ] one\n\n## Acceptance Criteria\n\n- [ ] two\n"
+	out := runBDInProcess(t, tmpDir, "create", "Two acceptance sections", "--description", description, "--json")
+
+	var issue map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+		t.Fatalf("Failed to parse create output: %v", err)
+	}
+	id := issue["id"].(string)
+
+	stdout, stderr, err := runBDInProcessAllowError(t, tmpDir, "update", id, "--acceptance", "- [x] one")
+	if err == nil {
+		t.Fatalf("expected the ambiguous acceptance write to fail, stdout=%q stderr=%q", stdout, stderr)
+	}
+
+	out = runBDInProcess(t, tmpDir, "show", id, "--json")
+	var updated []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+		t.Fatalf("Failed to parse show output: %v", err)
+	}
+	if got, ok := updated[0]["acceptance_criteria"]; ok {
+		t.Errorf("refused write still stored acceptance_criteria = %v", got)
+	}
+	if updated[0]["description"] != description {
+		t.Errorf("refused write changed the description:\n%v", updated[0]["description"])
+	}
+}
+
 func TestCLI_UpdateLabels(t *testing.T) {
 	// Note: Not using t.Parallel() because inProcessMutex serializes execution anyway
 	tmpDir := setupCLITestDB(t)
