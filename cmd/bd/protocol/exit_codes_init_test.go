@@ -4,8 +4,9 @@
 // scriptable API:
 //
 //	10  init-safety: remote divergence refused
-//	11  init-safety: local data exists, refused
-//	12  init-safety: destroy-token missing or wrong
+//	11  init-safety: local data exists, refused (destroy confirm declined, or
+//	    no valid destroy-token supplied non-interactively)
+//	12  init-safety: --discard-remote destroy-token missing or wrong
 //	130 interactive prompt canceled (SIGINT)
 //
 // The clause is about the NUMBERS, not about bd's Go constants, so these tests
@@ -13,10 +14,10 @@
 // spelling still has to exit 10 when it refuses a divergent init. New stable
 // codes require a spec revision.
 //
-// The refusal codes (10/11/12) are cheap to drive: `bd init` refuses before it
-// opens any store, so those tests need only a built binary and a temp git repo.
-// 130 is the exception — cancellation is only reachable on the success path, so
-// that test pays a full store creation before the prompt it interrupts.
+// Codes 10 and 12 are cheap to drive: `bd init` refuses before it opens any
+// store, so those tests need only a built binary and a temp git repo. Code 11
+// and 130 are the exceptions — both are refused only after an existing (11) or
+// freshly built (130) store, so they pay a store creation and a Dolt container.
 package protocol
 
 import (
@@ -166,15 +167,26 @@ func TestProtocol_ExitCode12_DestroyTokenMissing(t *testing.T) {
 	}
 }
 
-// TestProtocol_ExitCode11_LocalExistsRefused is the §E3 gap: exit 11 is
-// returned only from the INTERACTIVE typed-confirmation abort in
-// `bd init --reinit-local` (cmd/bd/init.go, guarded by term.IsTerminal on
-// stdin). The non-interactive branch of the same guard returns 12 instead, so
-// no piped-stdin subprocess can produce 11 — pinning it needs a PTY-backed run
-// helper, tracked in wy-vh5y8. Un-skip when that lands.
+// TestProtocol_ExitCode11_LocalExistsRefused pins §E3's exit 11: `bd init
+// --reinit-local` against a workspace whose database already holds issues must
+// refuse with 11 — "local data exists" — so an agent can tell that class apart
+// from "destroy-token missing" (12). The interactive decline and the
+// non-interactive missing-token refusal are one refusal class; this drives the
+// non-interactive one, so it pins 11 through a piped-stdin subprocess and needs
+// no PTY harness (wy-vh5y8 covers the interactive prompt).
 func TestProtocol_ExitCode11_LocalExistsRefused(t *testing.T) {
-	t.Skip("exit 11 is reachable only through an interactive TTY prompt; needs a PTY harness (wy-vh5y8)")
-	_ = exitLocalExistsRefused
+	t.Parallel()
+	w := newWorkspace(t)
+	w.create("existing issue")
+
+	out, code := w.runExpectError("init", "--reinit-local", "--prefix", w.prefix,
+		"--quiet", "--non-interactive", "--skip-hooks", "--skip-agents")
+	if code != exitLocalExistsRefused {
+		t.Errorf("exit code = %d, want %d (§E3 local-exists refusal)\n%s", code, exitLocalExistsRefused, out)
+	}
+	if code == exitDestroyTokenMissing {
+		t.Errorf("local-exists refusal collapsed into the destroy-token code — §E3 codes must stay distinct")
+	}
 }
 
 // TestProtocol_ExitCode130_PromptCanceled pins §E3's exit 130: SIGINT at an

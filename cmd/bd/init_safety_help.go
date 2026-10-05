@@ -56,8 +56,10 @@ ADOPTING A REMOTE
 
 DESTROY-TOKEN (non-interactive only)
 
-  When running with no TTY (CI, agents, piped input), --discard-remote
-  requires an explicit --destroy-token value. The token format is:
+  When running with no TTY (CI, agents, piped input), destroying local
+  data requires an explicit --destroy-token value: --reinit-local over an
+  existing local database, or --discard-remote authorizing a
+  remote-history overwrite. The token format is:
 
       DESTROY-<issue-prefix>
 
@@ -75,6 +77,8 @@ EXIT CODES
   10    refused: remote has Dolt history and you selected local history
         without --discard-remote
   11    refused: existing local data and you declined the destroy confirm
+        (interactive), or re-ran with no valid --destroy-token
+        (non-interactive)
   12    refused: --discard-remote passed without a valid --destroy-token
         (non-interactive mode)
 

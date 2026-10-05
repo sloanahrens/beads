@@ -788,7 +788,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			plannedDBPathAbs = filepath.Dir(plannedDBPathAbs)
 		}
 		initGateHandle, gateErr := acquireInitMutationGate(rootCtx, beadsDirAbs, plannedDBPathAbs, func() error {
-			return runInitReinitPreflight(reinitLocal, destroyTokenPrefix, destroyToken)
+			return runInitReinitPreflight(reinitLocal, discardRemote, destroyTokenPrefix, destroyToken)
 		})
 		if gateErr != nil {
 			return gateErr
@@ -2444,8 +2444,12 @@ func countExistingIssues(_ string) (int, error) {
 }
 
 // runInitReinitPreflight confirms the destructive local replacement while the
-// caller holds init's complete exclusive gate set.
-func runInitReinitPreflight(reinitLocal bool, prefix, destroyToken string) error {
+// caller holds init's complete exclusive gate set. discardRemote selects which
+// refusal class a non-interactive missing/wrong token belongs to: a
+// `--discard-remote` invocation is missing authorization for the cross-boundary
+// overwrite (ExitDestroyTokenMissing), while a plain `--reinit-local` is
+// refusing because local data exists (ExitLocalExistsRefused).
+func runInitReinitPreflight(reinitLocal, discardRemote bool, prefix, destroyToken string) error {
 	if !reinitLocal {
 		return nil
 	}
@@ -2487,7 +2491,15 @@ func runInitReinitPreflight(reinitLocal bool, prefix, destroyToken string) error
 	fmt.Fprintf(os.Stderr, "Refusing to destroy %d issues in non-interactive mode.\n", count)
 	fmt.Fprintf(os.Stderr, "  See 'bd help init-safety' for the required --destroy-token format.\n")
 	fmt.Fprintf(os.Stderr, "  Or export issue records first: bd export > issue-export.jsonl\n")
-	return &exitError{Code: ExitDestroyTokenMissing}
+	// §E3 (cmd/bd/protocol/exit_codes_init_test.go) keeps the two refusal
+	// classes distinct so an agent can branch: a --discard-remote invocation
+	// without a valid --destroy-token is the destroy-token refusal (12); a
+	// plain --reinit-local that did not confirm destruction is the local-exists
+	// refusal (11). See ExitLocalExistsRefused / ExitDestroyTokenMissing.
+	if discardRemote {
+		return &exitError{Code: ExitDestroyTokenMissing}
+	}
+	return &exitError{Code: ExitLocalExistsRefused}
 }
 
 // checkExistingBeadsData checks for existing database files

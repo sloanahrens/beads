@@ -26,13 +26,15 @@ const (
 	// `--discard-remote`. Ambiguous identity source.
 	ExitRemoteDivergenceRefused = 10
 
-	// ExitLocalExistsRefused signals `bd init` was called against a
-	// directory that already has beads data, without `--force` or
-	// `--reinit-local`. The existing local-safety refusal.
+	// ExitLocalExistsRefused signals `bd init --reinit-local` refused to
+	// destroy an existing local database: the interactive confirmation was
+	// declined, or non-interactive mode supplied no valid destroy-token to
+	// confirm it. The local-data-safety refusal.
 	ExitLocalExistsRefused = 11
 
-	// ExitDestroyTokenMissing signals `--discard-remote` was passed in
-	// non-interactive mode without a valid `--destroy-token`. The caller
+	// ExitDestroyTokenMissing signals a `--discard-remote` invocation in
+	// non-interactive mode lacked a valid `--destroy-token`, so the
+	// cross-boundary overwrite of remote history is unauthorized. The caller
 	// must look up the token format via `bd help init-safety`.
 	ExitDestroyTokenMissing = 12
 )
