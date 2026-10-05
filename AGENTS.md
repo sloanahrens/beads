@@ -71,11 +71,9 @@ enabled one subcommand at a time, each human-vetted (GH#3794). Do not lift the
 embedded-mode gate in `cmd/bd/doctor.go` wholesale, and keep database-layer
 checks and fixes server-gated until the driver interface covers them.
 
-## Agent Warning: Interactive Commands
+## Updating Issue Fields
 
-**DO NOT use `bd edit`** - it opens an interactive editor ($EDITOR) which AI agents cannot use.
-
-Use `bd update` with flags instead:
+Use `bd update` with flags:
 ```bash
 bd update <id> --description "new description"
 bd update <id> --title "new title"

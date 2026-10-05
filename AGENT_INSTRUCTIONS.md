@@ -185,7 +185,7 @@ cleanup, and next-session hand-off).
 
 ## Agent Session Workflow
 
-**WARNING: DO NOT use `bd edit`** - it opens an interactive editor ($EDITOR) which AI agents cannot use. Use `bd update` with flags instead:
+Use `bd update` with flags to change issue fields:
 ```bash
 bd update <id> --description "new description"
 bd update <id> --title "new title"

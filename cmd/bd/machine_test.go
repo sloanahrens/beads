@@ -119,12 +119,12 @@ func TestMachineModeSkipsMoleculeScan(t *testing.T) {
 
 func TestMachineModeRefusesInteractive(t *testing.T) {
 	withMachineMode(t, false)
-	if err := machineRefusesInteractive("bd edit"); err != nil {
+	if err := machineRefusesInteractive("bd list --watch"); err != nil {
 		t.Fatalf("refused outside machine mode: %v", err)
 	}
 	machineMode = true
-	if err := machineRefusesInteractive("bd edit"); err == nil {
-		t.Fatal("bd edit allowed under machine mode")
+	if err := machineRefusesInteractive("bd list --watch"); err == nil {
+		t.Fatal("bd list --watch allowed under machine mode")
 	}
 }
 
