@@ -3,8 +3,92 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// writeRoutesFile creates <beadsDir>/routes.jsonl with content and returns the
+// file's path.
+func writeRoutesFile(t *testing.T, beadsDir, content string) string {
+	t.Helper()
+	if err := os.MkdirAll(beadsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	routesPath := filepath.Join(beadsDir, "routes.jsonl")
+	if err := os.WriteFile(routesPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return routesPath
+}
+
+// be-xkj: a malformed line in routes.jsonl must not be skipped silently. It is
+// warned about (file + 1-based line number) and skipped, while the valid routes
+// on other lines still load and the read never fails. Blank lines and comments
+// stay quiet — they are not typos.
+func TestLoadPrefixRoutes_WarnsOnMalformedLines(t *testing.T) {
+	beadsDir := filepath.Join(t.TempDir(), ".beads")
+	routesPath := writeRoutesFile(t, beadsDir, strings.Join([]string{
+		`# comment`,                       // 1: comment, silent
+		``,                                // 2: blank, silent
+		`{"prefix":"hq-","path":"."}`,     // 3: valid
+		`{"prefix":"om-","path":}`,        // 4: invalid JSON
+		`{"prefix":"","path":"om/rig"}`,   // 5: empty prefix
+		`{"prefix":"zz-","path":""}`,      // 6: empty path
+		`   `,                             // 7: whitespace-only, silent
+		`{"prefix":"be-","path":"beads"}`, // 8: valid
+	}, "\n")+"\n")
+
+	var routes []prefixRoute
+	var err error
+	stderr := captureStderr(t, func() { routes, err = loadPrefixRoutes(beadsDir) })
+	if err != nil {
+		t.Fatalf("a bad line must not fail the read: %v", err)
+	}
+	if len(routes) != 2 || routes[0].Prefix != "hq-" || routes[1].Prefix != "be-" {
+		t.Fatalf("valid routes must still load, got %+v", routes)
+	}
+
+	if got := strings.Count(stderr, "Warning:"); got != 3 {
+		t.Fatalf("want exactly 3 warnings (one per bad line), got %d: %q", got, stderr)
+	}
+	for _, want := range []string{routesPath, "line 4", "line 5", "line 6"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("warning must name %q, got %q", want, stderr)
+		}
+	}
+	for _, unwanted := range []string{"line 3", "line 8"} {
+		if strings.Contains(stderr, unwanted) {
+			t.Errorf("valid route on %q must not warn, got %q", unwanted, stderr)
+		}
+	}
+}
+
+// be-xkj: the warning is advisory. Machine mode (BD_MACHINE / --json) implies a
+// machine-readable stdout, so a malformed routes.jsonl must add nothing there;
+// the warning belongs on stderr.
+func TestLoadPrefixRoutes_MachineModeKeepsStdoutClean(t *testing.T) {
+	beadsDir := filepath.Join(t.TempDir(), ".beads")
+	writeRoutesFile(t, beadsDir, "{\"prefix\":\"om-\",\"path\":}\n{\"prefix\":\"hq-\",\"path\":\".\"}\n")
+
+	oldMachine := machineMode
+	machineMode = true
+	defer func() { machineMode = oldMachine }()
+
+	stdout := captureStdout(t, func() error {
+		if _, err := loadPrefixRoutes(beadsDir); err != nil {
+			return err
+		}
+		return nil
+	})
+	if stdout != "" {
+		t.Errorf("machine mode: stdout must stay empty, got %q", stdout)
+	}
+
+	stderr := captureStderr(t, func() { _, _ = loadPrefixRoutes(beadsDir) })
+	if !strings.Contains(stderr, "line 1") {
+		t.Errorf("the warning must still reach stderr in machine mode, got %q", stderr)
+	}
+}
 
 // be-v1o: a rig-scoped agent (refinery, witness, polecat) runs bd from a rig
 // directory whose .beads redirects to <rig>/mayor/rig/.beads. That directory

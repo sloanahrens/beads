@@ -328,6 +328,12 @@ func samePath(a, b string) bool {
 }
 
 // loadPrefixRoutes loads prefix-to-path routes from routes.jsonl in the beads directory.
+//
+// A non-blank, non-comment line must be a JSON object with a non-empty prefix
+// and path. Anything else is skipped — one bad line must never break reads —
+// but it is announced on stderr with the file and 1-based line number. A
+// silently dropped route only surfaces much later as a "not found", far from
+// the typo that caused it (be-xkj).
 func loadPrefixRoutes(beadsDir string) ([]prefixRoute, error) {
 	routesPath := filepath.Join(beadsDir, "routes.jsonl")
 	file, err := os.Open(routesPath) //nolint:gosec // G304: path is constructed from trusted beads directory
@@ -338,18 +344,23 @@ func loadPrefixRoutes(beadsDir string) ([]prefixRoute, error) {
 
 	var routes []prefixRoute
 	scanner := bufio.NewScanner(file)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		var route prefixRoute
 		if err := json.Unmarshal([]byte(line), &route); err != nil {
+			WarnError("%s: line %d: skipping malformed route: %v", routesPath, lineNo, err)
 			continue
 		}
-		if route.Prefix != "" && route.Path != "" {
-			routes = append(routes, route)
+		if route.Prefix == "" || route.Path == "" {
+			WarnError("%s: line %d: skipping route with empty prefix or path", routesPath, lineNo)
+			continue
 		}
+		routes = append(routes, route)
 	}
 	return routes, scanner.Err()
 }
