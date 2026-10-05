@@ -11,7 +11,6 @@ import (
 	"github.com/steveyegge/beads/internal/timeparsing"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
-	"github.com/steveyegge/beads/internal/utils"
 )
 
 var deferCmd = &cobra.Command{
@@ -71,11 +70,6 @@ Examples:
 
 		ctx := rootCtx
 
-		_, err := utils.ResolvePartialIDs(ctx, store, args)
-		if err != nil {
-			return handleClassified(err)
-		}
-
 		deferredIssues := []*types.Issue{}
 
 		if store == nil {
@@ -92,11 +86,28 @@ Examples:
 		deferred := 0
 
 		for _, id := range args {
-			fullID, err := utils.ResolvePartialID(ctx, store, id)
+			// Routed resolution: a cross-rig id is served by the store that
+			// owns it, and a matched-but-unreachable prefix route keeps its
+			// typed route_unreachableError instead of collapsing into a
+			// definite "not found" (B1-05, be-sut). Resolution stays per-id so
+			// one unresolvable argument does not discard the rest.
+			result, err := resolveAndGetIssueForMutation(ctx, store, id)
 			if err != nil {
+				if result != nil {
+					result.Close()
+				}
 				fail(id, errorKindOf(err), fmt.Sprintf("Error resolving %s: %v", id, err))
 				continue
 			}
+			if result == nil || result.Issue == nil {
+				if result != nil {
+					result.Close()
+				}
+				fail(id, kindNotFound, fmt.Sprintf("Issue %s not found", id))
+				continue
+			}
+			fullID := result.ResolvedID
+			issueStore := result.Store
 
 			updates := map[string]interface{}{
 				"status": string(types.StatusDeferred),
@@ -105,36 +116,28 @@ Examples:
 				updates["defer_until"] = *deferUntil
 			}
 			if reason != "" {
-				issue, err := store.GetIssue(ctx, fullID)
-				if err != nil {
-					fail(fullID, errorKindOf(err), fmt.Sprintf("Error loading %s: %v", fullID, err))
-					continue
-				}
-				if issue == nil {
-					fail(fullID, kindNotFound, fmt.Sprintf("Issue %s not found", fullID))
-					continue
-				}
-				notes := issue.Notes
+				notes := result.Issue.Notes
 				if notes != "" {
 					notes += "\n"
 				}
 				updates["notes"] = notes + reason
 			}
 
-			if err := store.UpdateIssue(ctx, fullID, updates, actor); err != nil {
+			if err := issueStore.UpdateIssue(ctx, fullID, updates, actor); err != nil {
+				result.Close()
 				fail(fullID, errorKindOf(err), fmt.Sprintf("Error deferring %s: %v", fullID, err))
 				continue
 			}
 			deferred++
 
 			if jsonOutput {
-				issue, _ := store.GetIssue(ctx, fullID)
-				if issue != nil {
+				if issue, _ := issueStore.GetIssue(ctx, fullID); issue != nil {
 					deferredIssues = append(deferredIssues, issue)
 				}
 			} else {
 				fmt.Printf("%s Deferred %s\n", ui.RenderAccent("*"), fullID)
 			}
+			result.Close()
 		}
 
 		if jsonOutput && len(deferredIssues) > 0 {

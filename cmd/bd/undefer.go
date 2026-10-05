@@ -8,7 +8,6 @@ import (
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
-	"github.com/steveyegge/beads/internal/utils"
 )
 
 var undeferCmd = &cobra.Command{
@@ -37,11 +36,6 @@ Examples:
 
 		ctx := rootCtx
 
-		_, err := utils.ResolvePartialIDs(ctx, store, args)
-		if err != nil {
-			return handleClassified(err)
-		}
-
 		undeferredIssues := []*types.Issue{}
 
 		if store == nil {
@@ -58,22 +52,30 @@ Examples:
 		undeferred := 0
 
 		for _, id := range args {
-			fullID, err := utils.ResolvePartialID(ctx, store, id)
+			// Routed resolution, for the same reasons as bd defer (B1-05,
+			// be-sut): the store that owns a cross-rig id serves the update,
+			// and an unreachable route stays route_unreachable.
+			result, err := resolveAndGetIssueForMutation(ctx, store, id)
 			if err != nil {
+				if result != nil {
+					result.Close()
+				}
 				fail(id, errorKindOf(err), fmt.Sprintf("Error resolving %s: %v", id, err))
 				continue
 			}
+			if result == nil || result.Issue == nil {
+				if result != nil {
+					result.Close()
+				}
+				fail(id, kindNotFound, fmt.Sprintf("Issue %s not found", id))
+				continue
+			}
+			issue := result.Issue
+			fullID := result.ResolvedID
+			issueStore := result.Store
 
-			issue, err := store.GetIssue(ctx, fullID)
-			if err != nil {
-				fail(fullID, errorKindOf(err), fmt.Sprintf("Error getting %s: %v", fullID, err))
-				continue
-			}
-			if issue == nil {
-				fail(fullID, kindNotFound, fmt.Sprintf("Issue %s not found", fullID))
-				continue
-			}
 			if issue.Status != types.StatusDeferred {
+				result.Close()
 				fail(fullID, kindRefused, fmt.Sprintf("%s is not deferred (status: %s)", fullID, string(issue.Status)))
 				continue
 			}
@@ -83,20 +85,21 @@ Examples:
 				"defer_until": nil,
 			}
 
-			if err := store.UpdateIssue(ctx, fullID, updates, actor); err != nil {
+			if err := issueStore.UpdateIssue(ctx, fullID, updates, actor); err != nil {
+				result.Close()
 				fail(fullID, errorKindOf(err), fmt.Sprintf("Error undeferring %s: %v", fullID, err))
 				continue
 			}
 			undeferred++
 
 			if jsonOutput {
-				issue, _ := store.GetIssue(ctx, fullID)
-				if issue != nil {
+				if issue, _ := issueStore.GetIssue(ctx, fullID); issue != nil {
 					undeferredIssues = append(undeferredIssues, issue)
 				}
 			} else {
 				fmt.Printf("%s Undeferred %s (now open)\n", ui.RenderPass("*"), fullID)
 			}
+			result.Close()
 		}
 
 		if len(args) > 0 {
