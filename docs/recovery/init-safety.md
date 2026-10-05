@@ -123,8 +123,10 @@ for why the token is never echoed in `bd`'s error messages.
 
 ## init-local-exists
 
-**Exit code:** `11` (`ExitLocalExistsRefused`) — the interactive prompt
-declined. The non-interactive forms of the same refusal exit `12`; see
+**Exit code:** `11` (`ExitLocalExistsRefused`) — the destroy confirm was
+declined interactively, or no valid `--destroy-token` was supplied
+non-interactively. A `--discard-remote` invocation whose token is missing or
+wrong is the cross-boundary refusal `12` instead; see
 [init-token-missing](#init-token-missing). A plain `bd init` (no
 `--reinit-local`) on an already-initialized workspace is refused before this
 check, with exit `1`.
@@ -156,7 +158,8 @@ Aborted. Database was NOT modified.
 ```
 
 Run non-interactively, the same guard takes the destroy-token instead and
-exits `12` when it is missing or wrong:
+exits `11` when it is missing or wrong — the refusal is still "local data
+exists", not "you must authorize a remote overwrite":
 
 ```
 Refusing to destroy N issues in non-interactive mode.
