@@ -274,7 +274,16 @@ func renderSingleDeletePreview(
 }
 
 // deleteIssue removes an issue from the database.
+//
+// An absent store is refused rather than dereferenced: the request cannot be
+// served, and a nil panic in a test binary takes every test scheduled after it
+// with it. The refusal is a typed storage.ErrUnsupported, the vocabulary the
+// store's capability accessors already use for the same fact — see
+// DoltStore.Deleter, which returns exactly this for a nil receiver.
 func deleteIssue(ctx context.Context, issueID string) error {
+	if store == nil {
+		return &storage.ErrUnsupported{Op: "DeleteIssue", Backend: "nil"}
+	}
 	return store.DeleteIssue(ctx, issueID)
 }
 
