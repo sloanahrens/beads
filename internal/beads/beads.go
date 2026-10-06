@@ -130,10 +130,40 @@ func followRedirectLenient(beadsDir string) string {
 	return target
 }
 
+// noteFollowedRedirect emits the diagnostics that accompany a redirect this
+// package followed: a warning when the target is itself a redirect (chains
+// are not followed on purpose) and the BD_DEBUG_ROUTING trace.
+func noteFollowedRedirect(beadsDir, target string, redirected bool) {
+	if !redirected {
+		return
+	}
+	if workspace.HasChainedRedirect(target) {
+		fmt.Fprintf(os.Stderr, "Warning: redirect chains not allowed, ignoring redirect in %s\n", target)
+	}
+	if os.Getenv("BD_DEBUG_ROUTING") != "" {
+		fmt.Fprintf(os.Stderr, "[routing] Followed redirect from %s -> %s\n", beadsDir, target)
+	}
+}
+
+// followRedirectStrict follows one redirect and reports a refused one as an
+// error, so a caller that must fail closed can tell "no redirect here" from
+// "a redirect I cannot use". It emits the same followed-redirect diagnostics
+// as followRedirectWarn, but no warning for the refusal: what the refusal
+// means depends on the caller (FindBeadsDir's walk stops; the lenient callers
+// fall back to beadsDir), so the caller owns that message.
+func followRedirectStrict(beadsDir string) (string, bool, error) {
+	target, redirected, err := workspace.FollowRedirect(beadsDir)
+	if err != nil {
+		return beadsDir, false, err
+	}
+	noteFollowedRedirect(beadsDir, target, redirected)
+	return target, redirected, nil
+}
+
 // followRedirectWarn is the workspace.FollowFunc this package hands to
 // workspace.Discover: warnings as FollowRedirect, never an error.
 func followRedirectWarn(beadsDir string) (string, bool, error) {
-	target, redirected, err := workspace.FollowRedirect(beadsDir)
+	target, redirected, err := followRedirectStrict(beadsDir)
 	if err != nil {
 		var rerr *workspace.RedirectError
 		switch {
@@ -146,16 +176,28 @@ func followRedirectWarn(beadsDir string) (string, bool, error) {
 		}
 		return beadsDir, false, nil
 	}
-	if !redirected {
-		return beadsDir, false, nil
+	return target, redirected, nil
+}
+
+// warnBrokenRedirectInWalk reports a .beads/redirect that FindBeadsDir's
+// ancestor walk refused to follow. Discovery stops at that directory rather
+// than continuing upward (be-929): a redirect names the workspace the
+// directory belongs to, so an ancestor workspace's database is not a
+// substitute for the one the redirect points at.
+func warnBrokenRedirectInWalk(beadsDir string, err error) {
+	var rerr *workspace.RedirectError
+	if !errors.As(err, &rerr) {
+		fmt.Fprintf(os.Stderr, "Warning: cannot follow .beads redirect in %s (%v); refusing to search parent directories\n", beadsDir, err)
+		return
 	}
-	if workspace.HasChainedRedirect(target) {
-		fmt.Fprintf(os.Stderr, "Warning: redirect chains not allowed, ignoring redirect in %s\n", target)
+	switch {
+	case errors.Is(err, workspace.ErrRedirectLoop):
+		fmt.Fprintf(os.Stderr, "Warning: .beads redirect in %s points at %s, which points back at this directory; refusing to search parent directories\n", beadsDir, rerr.Target)
+	case rerr.Missing:
+		fmt.Fprintf(os.Stderr, "Warning: .beads redirect in %s points at %s, which does not exist; refusing to search parent directories\n", beadsDir, rerr.Target)
+	default:
+		fmt.Fprintf(os.Stderr, "Warning: .beads redirect in %s points at %s, which holds no workspace files; refusing to search parent directories\n", beadsDir, rerr.Target)
 	}
-	if os.Getenv("BD_DEBUG_ROUTING") != "" {
-		fmt.Fprintf(os.Stderr, "[routing] Followed redirect from %s -> %s\n", beadsDir, target)
-	}
-	return target, true, nil
 }
 
 func canonicalizeBeadsDirPath(beadsDir string) string {
@@ -570,7 +612,18 @@ func FindBeadsDir() string {
 
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
-			beadsDir = FollowRedirect(beadsDir)
+			// A .beads/redirect names the workspace this directory belongs
+			// to. If it cannot be followed the walk ends here (be-929):
+			// continuing to a parent would let an unrelated ancestor
+			// workspace's database stand in for the one it names.
+			target, redirected, redirectErr := followRedirectStrict(beadsDir)
+			if redirectErr != nil {
+				warnBrokenRedirectInWalk(beadsDir, redirectErr)
+				return ""
+			}
+			if redirected {
+				beadsDir = target
+			}
 			if HasBeadsProjectFiles(beadsDir) {
 				return beadsDir
 			}
