@@ -180,13 +180,20 @@ test:
 	@TEST_COVER=1 ./scripts/test.sh
 
 # Integration tier (be-b23): the unit tier plus every test that needs a real
-# Dolt store (-tags integration, embedded Dolt, the Docker Dolt container).
+# Dolt store (-tags integration, the Docker Dolt container).
 # BD_TEST_TIER=integration is require-mode: an unavailable Dolt server or
 # container fails the test instead of skipping it. Needs Docker and dolt.
 # Proxied-server tests stay opt-in (BEADS_TEST_PROXIED_SERVER=1).
+#
+# This recipe must NOT set BEADS_TEST_EMBEDDED_DOLT. Embedded Dolt was removed
+# (be-xu2.2) and the shared test Dolt container is the only store this tier can
+# open, but cmd/bd's startTestDoltServer still treated that variable as "no
+# container needed" and returned a no-op: every store-opening test in the
+# package then failed require-mode with "Dolt test server not available"
+# (be-613). TestUnitTierPolicy pins its absence.
 test-integration:
 	@echo "Running tests (integration tier)..."
-	@BEADS_TEST_ENV_RUN_DOLT=1 BEADS_TEST_EMBEDDED_DOLT=1 TEST_TAGS=integration \
+	@BEADS_TEST_ENV_RUN_DOLT=1 TEST_TAGS=integration \
 		TEST_TIMEOUT=$${TEST_TIMEOUT:-45m} ./scripts/test.sh
 
 # Run the opt-in ICU regex path test suite (no skip list).

@@ -18,7 +18,9 @@ import (
 //     cmd/bd helpers strip every BEADS_* and BD_* variable before spawning it
 //     (a -X flag naming a symbol that does not exist is silently ignored, so
 //     the symbol's existence is checked too);
-//   - make test-integration opts into Dolt and the integration build tag.
+//   - make test-integration opts into Dolt and the integration build tag, and
+//     leaves BEADS_TEST_EMBEDDED_DOLT unset so the shared test Dolt container
+//     starts (be-613).
 func TestUnitTierPolicy(t *testing.T) {
 	makefile := readRepoFile(t, "../Makefile")
 	testRecipe := makeRecipe(t, makefile, "test")
@@ -36,6 +38,13 @@ func TestUnitTierPolicy(t *testing.T) {
 		if !strings.Contains(integRecipe, want) {
 			t.Errorf("make test-integration recipe lacks %q:\n%s", want, integRecipe)
 		}
+	}
+	// be-613: embedded Dolt was removed (be-xu2.2), so the shared test Dolt
+	// container is the only store the integration tier can open. Setting this
+	// variable made cmd/bd's startTestDoltServer skip that container and fail
+	// every store-opening test in require-mode.
+	if strings.Contains(integRecipe, "BEADS_TEST_EMBEDDED_DOLT") {
+		t.Errorf("make test-integration recipe sets BEADS_TEST_EMBEDDED_DOLT; the tier must let the Dolt container start:\n%s", integRecipe)
 	}
 
 	runner := readRepoFile(t, "test.sh")

@@ -18,9 +18,11 @@ import (
 // reach and migrate hq mid test-run, bricking every other bd client
 // town-wide until the mayor rolled the cursor back.
 //
-// This test asserts two things: GT_DOLT_PORT is explicitly unset (it is not
-// BD_-prefixed, so nothing else here would catch it), and EVERY BD_-prefixed
-// env var is unset, not just a hand-enumerated few — internal/config/config.go
+// This test asserts two things: the two non-BD_-prefixed vars that decide
+// which Dolt a test process reaches or starts are explicitly unset —
+// GT_DOLT_PORT (be-9yi) and BEADS_TEST_EMBEDDED_DOLT (be-613) — and EVERY
+// BD_-prefixed env var is unset, not just a hand-enumerated few —
+// internal/config/config.go
 // binds v.SetEnvPrefix("BD") + v.AutomaticEnv(), so any "BD_<KEY>" env var
 // can silently override any config key (including the remote-migrate escape
 // hatch BD_ALLOW_REMOTE_MIGRATE itself), and a hand-enumerated unset list
@@ -43,6 +45,7 @@ unset BEADS_TEST_ENV_ACTIVE BEADS_TEST_ENV_DISABLE BEADS_TEST_ENV_KEEP
 unset BD_DISABLE_METRICS BEADS_TEST_MODE
 beads_test_env_enter
 echo "GT_DOLT_PORT=${GT_DOLT_PORT-<unset>}"
+echo "BEADS_TEST_EMBEDDED_DOLT=${BEADS_TEST_EMBEDDED_DOLT-<unset>}"
 echo "BD_DOLT_AUTO_COMMIT=${BD_DOLT_AUTO_COMMIT-<unset>}"
 echo "BD_ALLOW_REMOTE_MIGRATE=${BD_ALLOW_REMOTE_MIGRATE-<unset>}"
 echo "BD_ACTOR=${BD_ACTOR-<unset>}"
@@ -55,6 +58,7 @@ echo "metrics:BEADS_TEST_MODE=${BEADS_TEST_MODE-<unset>}"
 	// "ci/lib/test-env.sh" resolves without hard-coding the repo root.
 	cmd.Env = append(os.Environ(),
 		"GT_DOLT_PORT=3307",
+		"BEADS_TEST_EMBEDDED_DOLT=1",
 		"BD_DOLT_AUTO_COMMIT=off",
 		"BD_ALLOW_REMOTE_MIGRATE=1",
 		"BD_ACTOR=beads/polecats/nitro",

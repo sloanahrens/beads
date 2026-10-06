@@ -3,23 +3,24 @@
 package main
 
 import (
-	"os"
+	"strings"
 	"testing"
 
 	"github.com/steveyegge/beads/internal/configfile"
 )
 
-// be-nqt: migrate-personal opened the planning workspace with a bare
-// dolt.New, i.e. server mode regardless of how that workspace was
-// initialized. An embedded planning repo (what `bd init` creates by default)
-// therefore failed with "Dolt server unreachable at 127.0.0.1:0", and the
-// end-to-end test's skip clause matched "server" in that output and hid it.
-// The planning store must be opened the way every other foreign workspace is:
-// by its own metadata.json.
-func TestOpenMigrationPlanningStore_HonorsEmbeddedPlanningWorkspace(t *testing.T) {
-	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
-		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt tests")
-	}
+// TestOpenMigrationPlanningStore_RefusesEmbeddedPlanningWorkspace pins the
+// shape be-nqt gave migrate-personal, in the world after embedded Dolt was
+// removed (be-xu2.2): the planning workspace is opened by its own
+// metadata.json, exactly as create/--repo opens any foreign workspace, and an
+// embedded workspace's metadata meets the same fail-closed refusal as any
+// other — naming the removal.
+//
+// The message is the assertion. A bare dolt.New (the pre-be-nqt shape, server
+// mode regardless of metadata) fails this the other way: it connects to
+// 127.0.0.1:0 and reports "Dolt server unreachable", which reads as a
+// connectivity problem rather than a workspace that can no longer be opened.
+func TestOpenMigrationPlanningStore_RefusesEmbeddedPlanningWorkspace(t *testing.T) {
 	planningBeadsDir := t.TempDir()
 	cfg := &configfile.Config{
 		Database:     "dolt",
@@ -30,11 +31,11 @@ func TestOpenMigrationPlanningStore_HonorsEmbeddedPlanningWorkspace(t *testing.T
 		t.Fatalf("save planning config: %v", err)
 	}
 
-	store, err := openMigrationPlanningStore(t.Context(), planningBeadsDir)
-	if err != nil {
-		t.Fatalf("openMigrationPlanningStore on an embedded planning workspace: %v", err)
+	_, err := openMigrationPlanningStore(t.Context(), planningBeadsDir)
+	if err == nil {
+		t.Fatal("openMigrationPlanningStore opened an embedded planning workspace; want the embedded-removal refusal")
 	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("close: %v", err)
+	if !strings.Contains(err.Error(), embeddedRemovedErrMsg) {
+		t.Errorf("want the embedded-removal refusal, got: %v", err)
 	}
 }
