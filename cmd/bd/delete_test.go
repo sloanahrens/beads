@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/issueops"
 )
@@ -310,24 +312,28 @@ func TestDeleteIssueWrapper(t *testing.T) {
 	})
 }
 
+// TestDeleteIssueUnsupportedStorage pins the contract for a store that cannot
+// serve the request: deleteIssue refuses with a typed storage.ErrUnsupported
+// instead of dereferencing the absent store.
+//
+// The pinned message used to be "delete operation not supported by this storage
+// backend", the string a type assertion to an optional deleter interface
+// produced. storage.DoltStorage carries DeleteIssue unconditionally now, so
+// that assertion is gone and the string with it; the surviving refusal — and
+// the one the store's own capability accessors return — is the typed error.
+// The test needs no store, so it does not gate on the test container.
 func TestDeleteIssueUnsupportedStorage(t *testing.T) {
-	if testDoltServerPort == 0 {
-		t.Skip("skipping: Dolt test container not available")
-	}
-
 	oldStore := store
 	defer func() { store = oldStore }()
 
-	// Set store to nil - the type assertion will fail
 	store = nil
 
-	ctx := context.Background()
-	err := deleteIssue(ctx, "any-id")
-	if err == nil {
-		t.Error("Expected error when storage is nil")
+	err := deleteIssue(context.Background(), "any-id")
+	var unsupported *storage.ErrUnsupported
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("Expected storage.ErrUnsupported from a nil store, got %v", err)
 	}
-	expectedMsg := "delete operation not supported by this storage backend"
-	if err.Error() != expectedMsg {
-		t.Errorf("Expected error %q, got %q", expectedMsg, err.Error())
+	if unsupported.Op != "DeleteIssue" {
+		t.Errorf("Expected Op %q, got %q", "DeleteIssue", unsupported.Op)
 	}
 }
