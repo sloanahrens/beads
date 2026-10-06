@@ -67,6 +67,14 @@ beads_test_env_enter() {
     unset BEADS_DOLT_SERVER_SOCKET
     unset BEADS_DOLT_PASSWORD
 
+    # be-613: embedded Dolt was removed (be-xu2.2), but cmd/bd's
+    # startTestDoltServer still read BEADS_TEST_EMBEDDED_DOLT as "no container
+    # needed". An inherited value therefore suppressed the shared test Dolt
+    # container and failed every store-opening test in the integration tier's
+    # require-mode. Like GT_DOLT_PORT it is not BD_-prefixed, so the sweep
+    # below cannot catch it; strip it whether or not the repo reads it.
+    unset BEADS_TEST_EMBEDDED_DOLT
+
     # be-9yi: GT_DOLT_PORT is Gas Town's own env var (not read anywhere in
     # this repo's Go code), pointing agent shells at a live, shared,
     # production dolt sql-server. It is not BD_-prefixed, so the sweep below

@@ -1,18 +1,11 @@
 //go:build cgo
 
-// be-u8z9: CLI-layer behavioral tests for BEADS_MAX_ROWS / --max-rows on the
-// command paths beyond `bd list`. Each subtest:
-//   - inits a fresh rig (own DB so the row counts are exact)
-//   - exercises the command via exec.Command(bd, ...)
-//   - asserts the process exited with code 2 (cap exceeded) and that stderr
-//     names the source ("--max-rows=N" or "BEADS_MAX_ROWS=N").
-//
-// The doctor-family commands (lint, doctor-conventions, doctor-pollution)
-// are env-only by design (designer §4); they do NOT register --max-rows
-// as a flag. A separate subtest asserts cobra rejects the flag.
-//
-// Gating matches the other embedded-dolt CLI tests: requires
-// BEADS_TEST_EMBEDDED_DOLT=1 to opt in.
+// be-u8z9: unit tests for the BEADS_MAX_ROWS / --max-rows fetch bump in
+// workapi.WithFetchOneExtra. The CLI-layer behavioral tests this file once
+// carried (each initializing a rig, driving the command via exec.Command(bd),
+// and asserting exit code 2 plus the stderr source) were deleted with
+// embedded Dolt (be-xu2.2); they gated on BEADS_TEST_EMBEDDED_DOLT, which no
+// longer exists.
 
 package main
 
@@ -28,16 +21,15 @@ import (
 // >N-matches truncation probe (GH#3212) with a MaxRows cap equal to the
 // user's --limit (be-x42v.4 round-3 follow-up).
 //
-// The end-to-end LimitEqualsCap_TruncatesNotErrors subprocess test in
-// TestEmbeddedMaxRowsList can only assert the *absence* of the false cap
-// error and the trimmed row count — it can't observe the truncation
-// *notice* text, which printTruncationHint gates on ui.IsStderrTerminal()
-// and is unconditionally suppressed for a subprocess's piped stderr (see
-// list_embedded_test.go's limit_truncation_hint subtest, which documents
-// the same TTY constraint). This unit test instead asserts the underlying
-// signal directly: with Limit==MaxRows, both must bump by one so the query
-// still over-fetches by one row (restoring len(results) > effectiveLimit
-// detection) while EnforceMaxRowsCap doesn't trip on that extra row.
+// The end-to-end LimitEqualsCap_TruncatesNotErrors subprocess test could only
+// assert the *absence* of the false cap error and the trimmed row count — it
+// couldn't observe the truncation *notice* text, which printTruncationHint
+// gates on ui.IsStderrTerminal() and is unconditionally suppressed for a
+// subprocess's piped stderr. That subprocess test went with embedded Dolt
+// (be-xu2.2). This unit test asserts the underlying signal directly: with
+// Limit==MaxRows, both must bump by one so the query still over-fetches by
+// one row (restoring len(results) > effectiveLimit detection) while
+// EnforceMaxRowsCap doesn't trip on that extra row.
 func TestWithFetchOneExtra_LimitEqualsCap_BumpsBothForTruncationProbe(t *testing.T) {
 	got := workapi.WithFetchOneExtra(types.IssueFilter{Limit: 5, MaxRows: 5, MaxRowsSource: "--max-rows"})
 	if got.Limit != 6 {

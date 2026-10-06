@@ -19,9 +19,8 @@ import (
 // failure at the Nth call (1-based; 0 = never fail).
 //
 // Tests that need a real, persisting engine (durable committed prefixes,
-// readiness recomputation, event dedup) live in import_chunking_embedded_test.go
-// and run against embedded Dolt behind BEADS_TEST_EMBEDDED_DOLT; the shared
-// helpers below are reused by both files.
+// readiness recomputation, event dedup) lived in import_chunking_embedded_test.go
+// behind BEADS_TEST_EMBEDDED_DOLT and went with embedded Dolt (be-xu2.2).
 type chunkRecordingStore struct {
 	storage.DoltStorage
 	batches [][]*types.Issue

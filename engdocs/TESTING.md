@@ -34,8 +34,9 @@ the docs, link, and diff checks instead.
 `make test` is the **unit tier**: every package, no Dolt server, no Docker,
 minutes not hours. `make test-integration` is the **integration tier**: the
 unit tier plus every test that needs a real Dolt store, built with
-`-tags integration`, with embedded Dolt and the Docker Dolt container enabled
-and a 45m per-package timeout.
+`-tags integration`, with the shared Docker Dolt container enabled and a 45m
+per-package timeout. (Embedded Dolt is gone — be-xu2.2 — so the container is
+the only store this tier can open.)
 
 The unit tier is enforced at runtime, not by review. The test environment
 exports `BD_TEST_TIER=unit`, and `scripts/test.sh` also links that tier into

@@ -50,9 +50,6 @@ func ssEnvInt(key string, def int) int {
 //	BEADS_TEST_SS_DIRS     — number of project directories  (default: 50)
 //	BEADS_TEST_SS_CLIENTS  — number of concurrent clients   (default: 500)
 //	BEADS_TEST_SS_MAXPROCS — max concurrent subprocesses    (default: GOMAXPROCS*4)
-//
-// Recommended: set BEADS_TEST_EMBEDDED_DOLT=1 to skip the unrelated
-// singleton Dolt container that TestMain starts for other tests in this package.
 func TestSharedServerConcurrent(t *testing.T) {
 	if os.Getenv("BEADS_TEST_SHARED_SERVER") == "" {
 		t.Skip("skipping: set BEADS_TEST_SHARED_SERVER=1 to run")
