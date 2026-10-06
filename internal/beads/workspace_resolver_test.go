@@ -209,3 +209,73 @@ func TestFindBeadsDir_NoRedirectStillWalksToAncestor(t *testing.T) {
 		t.Errorf("FindBeadsDir() = %q, want %q (no redirect should walk up as before)", got, want)
 	}
 }
+
+// be-929, worktree case: a broken redirect found by the walk ends discovery,
+// so the shared worktree .beads (step 3c) is never substituted for the
+// workspace the redirect names.
+func TestFindBeadsDir_BrokenRedirectDoesNotFallThroughToWorktreeSharedBeads(t *testing.T) {
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := filepath.Join(tmp, "main")
+	if out, err := exec.Command("git", "init", "-b", "main", main).CombinedOutput(); err != nil {
+		t.Skipf("git not available: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", main, "config", "user.email", "test@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.email: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", main, "config", "user.name", "Test User").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.name: %v (%s)", err, out)
+	}
+
+	// The shared .beads that step 3c would fall back to.
+	shared := filepath.Join(main, ".beads")
+	if err := os.MkdirAll(filepath.Join(shared, "embeddeddolt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "metadata.json"), []byte(`{"backend":"dolt","dolt_database":"shared"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(main, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", main, "add", "README.md").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", main, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v (%s)", err, out)
+	}
+
+	wt := filepath.Join(tmp, "wt")
+	if out, err := exec.Command("git", "-C", main, "worktree", "add", wt, "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v (%s)", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("git", "-C", main, "worktree", "remove", "--force", wt).Run()
+	})
+
+	source := filepath.Join(wt, "sub", ".beads")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(tmp, "gone", ".beads")
+	if err := os.WriteFile(filepath.Join(source, "redirect"), []byte(missing+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("BEADS_DIR", "")
+	t.Setenv("BEADS_DB", "")
+	t.Cleanup(git.ResetCaches)
+	chdir(t, filepath.Join(wt, "sub"))
+
+	var got string
+	stderr := captureStderr(t, func() { got = FindBeadsDir() })
+
+	if got != "" {
+		t.Errorf("FindBeadsDir() = %q, want \"\" (broken redirect must not fall through to the shared worktree .beads %q)", got, shared)
+	}
+	if n := strings.Count(stderr, "refusing to search parent directories"); n != 1 {
+		t.Errorf("want exactly one walk-refusal warning, got %d: %q", n, stderr)
+	}
+}
