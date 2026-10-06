@@ -1,0 +1,427 @@
+//go:build cgo && integration
+
+package main
+
+import (
+	"context"
+	"testing"
+
+	"github.com/steveyegge/beads/internal/types"
+)
+
+func TestConfigCommands(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Test SetConfig
+	err := store.SetConfig(ctx, "test.key", "test-value")
+	if err != nil {
+		t.Fatalf("SetConfig failed: %v", err)
+	}
+
+	// Test GetConfig
+	value, err := store.GetConfig(ctx, "test.key")
+	if err != nil {
+		t.Fatalf("GetConfig failed: %v", err)
+	}
+	if value != "test-value" {
+		t.Errorf("Expected 'test-value', got '%s'", value)
+	}
+
+	// Test GetConfig for non-existent key
+	value, err = store.GetConfig(ctx, "nonexistent.key")
+	if err != nil {
+		t.Fatalf("GetConfig for nonexistent key failed: %v", err)
+	}
+	if value != "" {
+		t.Errorf("Expected empty string for nonexistent key, got '%s'", value)
+	}
+
+	// Test SetConfig update
+	err = store.SetConfig(ctx, "test.key", "updated-value")
+	if err != nil {
+		t.Fatalf("SetConfig update failed: %v", err)
+	}
+	value, err = store.GetConfig(ctx, "test.key")
+	if err != nil {
+		t.Fatalf("GetConfig after update failed: %v", err)
+	}
+	if value != "updated-value" {
+		t.Errorf("Expected 'updated-value', got '%s'", value)
+	}
+
+	// Test GetAllConfig
+	err = store.SetConfig(ctx, "jira.url", "https://example.atlassian.net")
+	if err != nil {
+		t.Fatalf("SetConfig for jira.url failed: %v", err)
+	}
+	err = store.SetConfig(ctx, "jira.project", "PROJ")
+	if err != nil {
+		t.Fatalf("SetConfig for jira.project failed: %v", err)
+	}
+
+	config, err := store.GetAllConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetAllConfig failed: %v", err)
+	}
+
+	// Should have at least our test keys (may have default compaction config too)
+	if len(config) < 3 {
+		t.Errorf("Expected at least 3 config entries, got %d", len(config))
+	}
+
+	if config["test.key"] != "updated-value" {
+		t.Errorf("Expected 'updated-value' for test.key, got '%s'", config["test.key"])
+	}
+	if config["jira.url"] != "https://example.atlassian.net" {
+		t.Errorf("Expected jira.url in config, got '%s'", config["jira.url"])
+	}
+	if config["jira.project"] != "PROJ" {
+		t.Errorf("Expected jira.project in config, got '%s'", config["jira.project"])
+	}
+
+	// Test DeleteConfig
+	err = store.DeleteConfig(ctx, "test.key")
+	if err != nil {
+		t.Fatalf("DeleteConfig failed: %v", err)
+	}
+
+	value, err = store.GetConfig(ctx, "test.key")
+	if err != nil {
+		t.Fatalf("GetConfig after delete failed: %v", err)
+	}
+	if value != "" {
+		t.Errorf("Expected empty string after delete, got '%s'", value)
+	}
+
+	// Test DeleteConfig for non-existent key (should not error)
+	err = store.DeleteConfig(ctx, "nonexistent.key")
+	if err != nil {
+		t.Fatalf("DeleteConfig for nonexistent key failed: %v", err)
+	}
+}
+
+func TestConfigNamespaces(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Test various namespace conventions
+	namespaces := map[string]string{
+		"jira.url":                    "https://example.atlassian.net",
+		"jira.project":                "PROJ",
+		"jira.status_map.todo":        "open",
+		"linear.team_id":              "team-123",
+		"github.org":                  "myorg",
+		"custom.my_integration.field": "value",
+	}
+
+	for key, val := range namespaces {
+		err := store.SetConfig(ctx, key, val)
+		if err != nil {
+			t.Fatalf("SetConfig for %s failed: %v", key, err)
+		}
+	}
+
+	// Verify all set correctly
+	for key, expected := range namespaces {
+		value, err := store.GetConfig(ctx, key)
+		if err != nil {
+			t.Fatalf("GetConfig for %s failed: %v", key, err)
+		}
+		if value != expected {
+			t.Errorf("Expected '%s' for %s, got '%s'", expected, key, value)
+		}
+	}
+
+	// Test GetAllConfig returns all
+	config, err := store.GetAllConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetAllConfig failed: %v", err)
+	}
+
+	for key, expected := range namespaces {
+		if config[key] != expected {
+			t.Errorf("Expected '%s' for %s in GetAllConfig, got '%s'", expected, key, config[key])
+		}
+	}
+}
+
+func TestCustomStatusConfig(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t.Run("categorized format round-trips", func(t *testing.T) {
+		err := store.SetConfig(ctx, "status.custom", "review:active,testing:wip")
+		if err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		detailed, err := store.GetCustomStatusesDetailed(ctx)
+		if err != nil {
+			t.Fatalf("GetCustomStatusesDetailed failed: %v", err)
+		}
+		if len(detailed) != 2 {
+			t.Fatalf("expected 2 statuses, got %d", len(detailed))
+		}
+		if detailed[0].Name != "review" || detailed[0].Category != types.CategoryActive {
+			t.Errorf("status[0] = {%q, %q}, want {review, active}", detailed[0].Name, detailed[0].Category)
+		}
+		if detailed[1].Name != "testing" || detailed[1].Category != types.CategoryWIP {
+			t.Errorf("status[1] = {%q, %q}, want {testing, wip}", detailed[1].Name, detailed[1].Category)
+		}
+	})
+
+	t.Run("flat format returns CategoryUnspecified", func(t *testing.T) {
+		err := store.SetConfig(ctx, "status.custom", "review,testing")
+		if err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		detailed, err := store.GetCustomStatusesDetailed(ctx)
+		if err != nil {
+			t.Fatalf("GetCustomStatusesDetailed failed: %v", err)
+		}
+		if len(detailed) != 2 {
+			t.Fatalf("expected 2 statuses, got %d", len(detailed))
+		}
+		for _, s := range detailed {
+			if s.Category != types.CategoryUnspecified {
+				t.Errorf("status %q has category %q, want unspecified", s.Name, s.Category)
+			}
+		}
+	})
+
+	t.Run("mixed format returns both categorized and uncategorized", func(t *testing.T) {
+		err := store.SetConfig(ctx, "status.custom", "review:active,legacy")
+		if err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		detailed, err := store.GetCustomStatusesDetailed(ctx)
+		if err != nil {
+			t.Fatalf("GetCustomStatusesDetailed failed: %v", err)
+		}
+		if len(detailed) != 2 {
+			t.Fatalf("expected 2 statuses, got %d", len(detailed))
+		}
+		if detailed[0].Category != types.CategoryActive {
+			t.Errorf("review should be active, got %q", detailed[0].Category)
+		}
+		if detailed[1].Category != types.CategoryUnspecified {
+			t.Errorf("legacy should be unspecified, got %q", detailed[1].Category)
+		}
+	})
+
+	t.Run("GetCustomStatuses returns just names (backward compat)", func(t *testing.T) {
+		err := store.SetConfig(ctx, "status.custom", "review:active,testing:wip,qa:done")
+		if err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		names, err := store.GetCustomStatuses(ctx)
+		if err != nil {
+			t.Fatalf("GetCustomStatuses failed: %v", err)
+		}
+		if len(names) != 3 {
+			t.Fatalf("expected 3 names, got %d", len(names))
+		}
+		want := []string{"review", "testing", "qa"}
+		for i, name := range names {
+			if name != want[i] {
+				t.Errorf("name[%d] = %q, want %q", i, name, want[i])
+			}
+		}
+	})
+
+	t.Run("cache invalidation on SetConfig", func(t *testing.T) {
+		// Set first value
+		err := store.SetConfig(ctx, "status.custom", "alpha:active")
+		if err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		detailed1, err := store.GetCustomStatusesDetailed(ctx)
+		if err != nil {
+			t.Fatalf("GetCustomStatusesDetailed failed: %v", err)
+		}
+		if len(detailed1) != 1 || detailed1[0].Name != "alpha" {
+			t.Fatalf("expected [alpha], got %+v", detailed1)
+		}
+
+		// Set different value — cache should be invalidated
+		err = store.SetConfig(ctx, "status.custom", "beta:wip,gamma:done")
+		if err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		detailed2, err := store.GetCustomStatusesDetailed(ctx)
+		if err != nil {
+			t.Fatalf("GetCustomStatusesDetailed failed: %v", err)
+		}
+		if len(detailed2) != 2 {
+			t.Fatalf("expected 2 statuses after cache invalidation, got %d", len(detailed2))
+		}
+		if detailed2[0].Name != "beta" || detailed2[0].Category != types.CategoryWIP {
+			t.Errorf("status[0] = {%q, %q}, want {beta, wip}", detailed2[0].Name, detailed2[0].Category)
+		}
+		if detailed2[1].Name != "gamma" || detailed2[1].Category != types.CategoryDone {
+			t.Errorf("status[1] = {%q, %q}, want {gamma, done}", detailed2[1].Name, detailed2[1].Category)
+		}
+	})
+}
+
+// TestConfigSetMany tests the batch config set functionality used by 'bd config set-many'.
+func TestConfigSetMany(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t.Run("batch set multiple DB keys", func(t *testing.T) {
+		pairs := map[string]string{
+			"ado.state_map.open":        "New",
+			"ado.state_map.in_progress": "Active",
+			"ado.state_map.closed":      "Closed",
+		}
+		for k, v := range pairs {
+			if err := store.SetConfig(ctx, k, v); err != nil {
+				t.Fatalf("SetConfig(%s) failed: %v", k, err)
+			}
+		}
+
+		// Verify all values were set correctly
+		for k, expected := range pairs {
+			got, err := store.GetConfig(ctx, k)
+			if err != nil {
+				t.Fatalf("GetConfig(%s) failed: %v", k, err)
+			}
+			if got != expected {
+				t.Errorf("GetConfig(%s) = %q, want %q", k, got, expected)
+			}
+		}
+
+		// Verify they appear in GetAllConfig
+		all, err := store.GetAllConfig(ctx)
+		if err != nil {
+			t.Fatalf("GetAllConfig failed: %v", err)
+		}
+		for k, expected := range pairs {
+			if all[k] != expected {
+				t.Errorf("GetAllConfig[%s] = %q, want %q", k, all[k], expected)
+			}
+		}
+	})
+
+	t.Run("batch set overwrites existing values", func(t *testing.T) {
+		// Set initial values
+		if err := store.SetConfig(ctx, "test.batch.a", "old-a"); err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		if err := store.SetConfig(ctx, "test.batch.b", "old-b"); err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+
+		// Overwrite with batch
+		updates := map[string]string{
+			"test.batch.a": "new-a",
+			"test.batch.b": "new-b",
+			"test.batch.c": "new-c",
+		}
+		for k, v := range updates {
+			if err := store.SetConfig(ctx, k, v); err != nil {
+				t.Fatalf("SetConfig(%s) failed: %v", k, err)
+			}
+		}
+
+		for k, expected := range updates {
+			got, err := store.GetConfig(ctx, k)
+			if err != nil {
+				t.Fatalf("GetConfig(%s) failed: %v", k, err)
+			}
+			if got != expected {
+				t.Errorf("GetConfig(%s) = %q, want %q", k, got, expected)
+			}
+		}
+	})
+
+	t.Run("batch set with empty value", func(t *testing.T) {
+		if err := store.SetConfig(ctx, "test.empty", ""); err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		got, err := store.GetConfig(ctx, "test.empty")
+		if err != nil {
+			t.Fatalf("GetConfig failed: %v", err)
+		}
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("batch set mixed namespaces in single operation", func(t *testing.T) {
+		// Simulates what set-many does: multiple keys from different
+		// namespaces all written to the DB in one logical batch.
+		mixed := map[string]string{
+			"jira.url":             "https://jira.example.com",
+			"jira.project":         "BEADS",
+			"ado.state_map.open":   "New",
+			"ado.state_map.closed": "Done",
+			"custom.pipeline":      "review,qa,deploy",
+			"status.custom":        "awaiting_review,awaiting_testing",
+		}
+		for k, v := range mixed {
+			if err := store.SetConfig(ctx, k, v); err != nil {
+				t.Fatalf("SetConfig(%s) failed: %v", k, err)
+			}
+		}
+
+		// Verify every key was persisted
+		for k, expected := range mixed {
+			got, err := store.GetConfig(ctx, k)
+			if err != nil {
+				t.Fatalf("GetConfig(%s) failed: %v", k, err)
+			}
+			if got != expected {
+				t.Errorf("GetConfig(%s) = %q, want %q", k, got, expected)
+			}
+		}
+
+		// Verify all appear in GetAllConfig
+		all, err := store.GetAllConfig(ctx)
+		if err != nil {
+			t.Fatalf("GetAllConfig failed: %v", err)
+		}
+		for k, expected := range mixed {
+			if all[k] != expected {
+				t.Errorf("GetAllConfig[%s] = %q, want %q", k, all[k], expected)
+			}
+		}
+	})
+
+	t.Run("batch set preserves previously written keys", func(t *testing.T) {
+		// Write batch 1
+		if err := store.SetConfig(ctx, "retain.alpha", "aaa"); err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+		if err := store.SetConfig(ctx, "retain.beta", "bbb"); err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+
+		// Write batch 2 (different keys)
+		if err := store.SetConfig(ctx, "retain.gamma", "ggg"); err != nil {
+			t.Fatalf("SetConfig failed: %v", err)
+		}
+
+		// Verify batch 1 keys are still intact after batch 2
+		got, err := store.GetConfig(ctx, "retain.alpha")
+		if err != nil {
+			t.Fatalf("GetConfig failed: %v", err)
+		}
+		if got != "aaa" {
+			t.Errorf("retain.alpha = %q, want %q", got, "aaa")
+		}
+
+		got, err = store.GetConfig(ctx, "retain.beta")
+		if err != nil {
+			t.Fatalf("GetConfig failed: %v", err)
+		}
+		if got != "bbb" {
+			t.Errorf("retain.beta = %q, want %q", got, "bbb")
+		}
+	})
+}
