@@ -155,9 +155,11 @@ func TestBulkDeleteNoResurrection(t *testing.T) {
 	}
 
 	for _, id := range toDelete {
+		// An absent row is an error — the store wraps storage.ErrNotFound
+		// rather than returning (nil, nil).
 		issue, err := s.GetIssue(ctx, id)
-		if err != nil {
-			t.Fatalf("GetIssue failed for %s: %v", id, err)
+		if !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("GetIssue for deleted %s: expected ErrNotFound, got issue=%v err=%v", id, issue, err)
 		}
 		if issue != nil {
 			t.Errorf("Deleted issue %s was resurrected!", id)
@@ -213,10 +215,11 @@ func TestDeleteIssueWrapper(t *testing.T) {
 			t.Fatalf("deleteIssue failed: %v", err)
 		}
 
-		// Verify issue is gone
+		// Verify issue is gone. An absent row is an error — the store wraps
+		// storage.ErrNotFound rather than returning (nil, nil).
 		deleted, err := s.GetIssue(ctx, issue.ID)
-		if err != nil {
-			t.Fatalf("GetIssue failed: %v", err)
+		if !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("GetIssue after delete: expected ErrNotFound, got issue=%v err=%v", deleted, err)
 		}
 		if deleted != nil {
 			t.Error("Issue should be completely deleted")
