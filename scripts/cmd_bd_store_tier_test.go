@@ -29,18 +29,16 @@ var cmdBdStoreHelpers = []string{
 }
 
 // cmdBdStoreGrandfathered lists the store-opening cmd/bd tests that predate
-// this check and still compile in the unit tier, tracked in be-7w3.
-// be-vyu retagged cmd/bd's store-opening files wholesale, but a census keyed
-// on skip messages ("Dolt test server not available") did not see these:
-// skipIfNoDolt reports "Dolt test server not running" instead, and its tests
-// skip silently in the unit tier. Delete each entry when its test moves behind
-// the integration tag; the entry goes inert on its own, so the fix does not
-// have to touch this list.
-var cmdBdStoreGrandfathered = map[string]bool{
-	"import_from_jsonl_test.go: TestImportFromLocalJSONL":               true,
-	"import_from_jsonl_test.go: TestImportFromLocalJSONL_LegacyFormats": true,
-	"init_test.go: TestVerifyMetadataSuccess":                           true,
-}
+// this check and still compile in the unit tier. It is empty: be-vyu retagged
+// cmd/bd's store-opening files wholesale, and be-7w3 moved the last three —
+// which a census keyed on skip messages missed, because skipIfNoDolt reports
+// "Dolt test server not running" rather than "Dolt test server not available",
+// so their tests skipped silently in the unit tier.
+//
+// The list stays as the way to land a change to this check ahead of the retag
+// it flags. Add an entry only for a test whose file is being retagged in a
+// follow-up, and delete it there.
+var cmdBdStoreGrandfathered = map[string]bool{}
 
 // TestCmdBdStoreTestsCarryTheIntegrationTag fails when a cmd/bd test that
 // needs a Dolt server is compiled in the unit tier. TESTING.md calls the tier
