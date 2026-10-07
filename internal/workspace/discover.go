@@ -35,6 +35,12 @@ type FollowFunc func(beadsDir string) (target string, redirected bool, err error
 // a git worktree root (or jj secondary workspace root) whose .beads owns no
 // database defers to the shared/primary workspace that does. Then the git
 // worktree shared fallback (<git-common-dir>/../.beads), then the jj primary.
+//
+// The upward walk is bounded by the nearest repo root: inside a git repository
+// or jujutsu workspace it stops at the root of that tree (checking the root
+// itself), because a directory above it belongs to a different project whose
+// .beads must not stand in for this one. Outside any repo the walk runs to the
+// filesystem root. See isRepoRoot for how the bound is detected.
 func Discover(startDir string, follow FollowFunc) (source, resolved string, err error) {
 	if startDir == "" {
 		return "", "", nil
@@ -106,13 +112,17 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 	for dir := startDir; dir != "/" && dir != "."; {
 		beadsDir := filepath.Join(dir, ".beads")
 		if isDir(beadsDir) {
-			target, _, ferr := follow(beadsDir)
+			target, redirected, ferr := follow(beadsDir)
 			if ferr != nil {
 				return beadsDir, "", ferr
 			}
 			hasDB := HasDatabase(target)
 			isWorktreeRoot := false
-			if !hasDB && isLinkedWorktreeRoot(dir) {
+			// A .beads that declares a redirect is a deliberate pointer (a
+			// per-worktree topic override), not the tracked metadata a
+			// checkout of the parent's .beads leaves behind, so it never
+			// defers to the shared database.
+			if !hasDB && !redirected && isLinkedWorktreeRoot(dir) {
 				loadGit()
 				isWorktreeRoot = repoRoot != "" && utils.PathsEqual(dir, repoRoot)
 			}
@@ -122,11 +132,19 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 				// A worktree root can carry tracked .beads metadata without
 				// owning the ignored database directory: prefer the shared
 				// worktree database.
-			case isJJSecondaryRoot && jjPrimaryHasDB && !hasDB:
+			case isJJSecondaryRoot && jjPrimaryHasDB && !hasDB && !redirected:
 				// Same for a jj secondary workspace: prefer the primary's DB.
 			case HasProjectFiles(target):
 				return beadsDir, target, nil
 			}
+		}
+		// The nearest repo root ends the walk, and is checked itself before
+		// stopping: inside a repo, an ancestor above the root belongs to a
+		// different project. A linked worktree's .git file and a jj secondary
+		// workspace's .jj directory are both markers this stops at, so the
+		// walk never escapes into the shared checkout that way.
+		if isRepoRoot(dir) {
+			break
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -150,6 +168,26 @@ func Discover(startDir string, follow FollowFunc) (source, resolved string, err 
 		return jjPrimarySource, jjPrimaryResolved, nil
 	}
 	return "", "", nil
+}
+
+// isRepoRoot reports whether dir is the root of the repository tree the walk
+// must not escape: a git repository, whose .git is a directory in a plain
+// checkout and a file in a linked worktree or submodule, or a jujutsu
+// workspace, which carries a .jj directory. The nearest such directory walking
+// up from a path is the walk bound.
+//
+// Stat only: config loading runs discovery on every bd invocation, so the
+// common path must not spawn git. This deliberately does not consult git
+// itself, whose --show-toplevel would answer for the primary checkout when
+// run inside a jj secondary workspace.
+func isRepoRoot(dir string) bool {
+	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+		return true
+	}
+	if info, err := os.Stat(filepath.Join(dir, ".jj")); err == nil && info.IsDir() {
+		return true
+	}
+	return false
 }
 
 // isLinkedWorktreeRoot reports whether dir is the root of a linked git

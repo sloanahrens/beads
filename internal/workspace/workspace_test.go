@@ -311,3 +311,169 @@ func TestResolve_ServerModeMainCheckoutSpawnsNoGit(t *testing.T) {
 		t.Errorf("discovery spawned git %d time(s); want none", strings.Count(string(data), "called"))
 	}
 }
+
+// runGit runs a git command in dir, skipping the test when git is unavailable.
+// The empty global/system config keeps the developer's own git state out.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+// initRepo creates a real git repository at dir with one commit, so the tree
+// carries the .git directory the walk bounds on.
+func initRepo(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "init", "-q", "-b", "main")
+	writeFile(t, filepath.Join(dir, "README"), "repo\n")
+	runGit(t, dir, "add", "README")
+	runGit(t, dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "init")
+}
+
+// writeWorkspace gives a .beads directory the marker files discovery accepts.
+func writeWorkspace(t *testing.T, beadsDir string) {
+	t.Helper()
+	writeFile(t, filepath.Join(beadsDir, "config.yaml"), "issue-prefix: hq\n")
+	writeFile(t, filepath.Join(beadsDir, "metadata.json"), `{"backend":"dolt"}`+"\n")
+}
+
+// be-8ff: the walk stops at the nearest repo root. A workspace above the repo
+// root belongs to a different project, so a cwd inside the repo with no .beads
+// of its own resolves to nothing -- database and config alike.
+func TestDiscover_RepoRootBoundsWalk(t *testing.T) {
+	town := realTempDir(t)
+	ancestorBeads := filepath.Join(town, ".beads")
+	writeWorkspace(t, ancestorBeads)
+
+	repo := filepath.Join(town, "repo")
+	initRepo(t, repo)
+	sub := filepath.Join(repo, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if source, resolved, err := Discover(sub, FollowRedirect); err != nil || source != "" || resolved != "" {
+		t.Errorf("Discover(%s) = (%q, %q, %v), want no workspace: %s is above the repo root",
+			sub, source, resolved, err, ancestorBeads)
+	}
+	if ws, err := Resolve(sub, noEnv); !errors.Is(err, ErrNoWorkspace) {
+		t.Errorf("Resolve(%s) = %+v, %v; want ErrNoWorkspace so no config comes from %s",
+			sub, ws, err, ancestorBeads)
+	}
+}
+
+// A nested clone is its own repo: the outer repo's .beads is above the inner
+// clone's root and is not the inner project's workspace.
+func TestDiscover_NestedCloneBoundsWalk(t *testing.T) {
+	town := realTempDir(t)
+	outer := filepath.Join(town, "outer")
+	initRepo(t, outer)
+	writeWorkspace(t, filepath.Join(outer, ".beads"))
+
+	inner := filepath.Join(outer, "inner")
+	initRepo(t, inner)
+	sub := filepath.Join(inner, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if source, resolved, err := Discover(sub, FollowRedirect); err != nil || source != "" || resolved != "" {
+		t.Errorf("Discover(%s) = (%q, %q, %v), want no workspace: the outer .beads is above the inner clone's root",
+			sub, source, resolved, err)
+	}
+}
+
+// A linked worktree is bounded by the worktree root, so a workspace above the
+// main checkout is out of reach, while the shared database at that main
+// checkout is still found through the worktree fallback.
+func TestDiscover_WorktreeRootBoundsWalk(t *testing.T) {
+	town := realTempDir(t)
+	writeWorkspace(t, filepath.Join(town, ".beads"))
+
+	main := filepath.Join(town, "main")
+	initRepo(t, main)
+	sharedBeads := filepath.Join(main, ".beads")
+	writeWorkspace(t, sharedBeads)
+
+	worktree := filepath.Join(town, "wt")
+	runGit(t, main, "worktree", "add", "-q", worktree, "HEAD")
+	t.Cleanup(func() { _ = exec.Command("git", "-C", main, "worktree", "remove", "--force", worktree).Run() })
+	sub := filepath.Join(worktree, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	source, resolved, err := Discover(sub, FollowRedirect)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if source != sharedBeads || resolved != sharedBeads {
+		t.Errorf("Discover(%s) = (%q, %q), want the shared worktree workspace %q",
+			sub, source, resolved, sharedBeads)
+	}
+}
+
+// A jujutsu secondary workspace is bounded by its own root even though it sits
+// inside the primary's working tree, so a workspace above the primary is out
+// of reach.
+func TestDiscover_JJSecondaryRootBoundsWalk(t *testing.T) {
+	town := realTempDir(t)
+	writeWorkspace(t, filepath.Join(town, ".beads"))
+
+	// A colocated jj+git primary: .jj/repo is a directory.
+	primary := filepath.Join(town, "primary")
+	if err := os.MkdirAll(filepath.Join(primary, ".jj", "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initRepo(t, primary)
+
+	// The secondary points at the primary's repo directory with a file.
+	secondary := filepath.Join(primary, "ws", "secondary")
+	if err := os.MkdirAll(filepath.Join(secondary, ".jj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(secondary, ".jj", "repo"), filepath.Join(primary, ".jj", "repo")+"\n")
+
+	if source, resolved, err := Discover(secondary, FollowRedirect); err != nil || source != "" || resolved != "" {
+		t.Errorf("Discover(%s) = (%q, %q, %v), want no workspace: the ancestor %s is above the primary root",
+			secondary, source, resolved, err, filepath.Join(town, ".beads"))
+	}
+}
+
+// Outside any repo there is no bound: the walk runs to the filesystem root,
+// and an ancestor .beads is the workspace for database and config alike.
+func TestDiscover_OutsideRepoWalksToFilesystemRoot(t *testing.T) {
+	town := realTempDir(t)
+	ancestorBeads := filepath.Join(town, ".beads")
+	writeWorkspace(t, ancestorBeads)
+
+	sub := filepath.Join(town, "not", "a", "repo")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	source, resolved, err := Discover(sub, FollowRedirect)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if source != ancestorBeads || resolved != ancestorBeads {
+		t.Errorf("Discover(%s) = (%q, %q), want the ancestor workspace %q",
+			sub, source, resolved, ancestorBeads)
+	}
+	ws, err := Resolve(sub, noEnv)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if ws.BeadsDir != ancestorBeads || ws.ConfigPath != filepath.Join(ancestorBeads, "config.yaml") {
+		t.Errorf("Resolve(%s) = %+v, want workspace %q", sub, ws, ancestorBeads)
+	}
+}

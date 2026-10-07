@@ -1,6 +1,7 @@
 package beads
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -207,6 +208,190 @@ func TestFindBeadsDir_NoRedirectStillWalksToAncestor(t *testing.T) {
 	want := filepath.Join(repo, ".beads")
 	if got := FindBeadsDir(); got != want {
 		t.Errorf("FindBeadsDir() = %q, want %q (no redirect should walk up as before)", got, want)
+	}
+}
+
+// writeWorkspaceFiles gives a .beads directory the marker files discovery
+// accepts as an existing workspace.
+func writeWorkspaceFiles(t *testing.T, beadsDir string) {
+	t.Helper()
+	if err := os.MkdirAll(beadsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{"backend":"dolt"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, "config.yaml"), []byte("issue-prefix: hq\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// initTestRepo creates a real git repository at dir with one commit, so the
+// tree carries the .git entry the walk bounds on.
+func initTestRepo(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := initGitRepoWithCommit(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// be-8ff: FindBeadsDir and workspace.Resolve (through workspace.Discover)
+// answer with the same .beads -- or with no workspace at all -- in every
+// layout the walk bound distinguishes. The ancestor .beads above the town is
+// valid in every case, so a layout that must not reach it fails loudly when
+// the bound is missing.
+func TestFindBeadsDir_AgreesWithResolveOnWalkBound(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	cases := []struct {
+		name string
+		// build returns the cwd to discover from, inside the town tree.
+		build func(t *testing.T, town string) string
+		// want is the .beads discovery must land on, "" for none.
+		want func(town string) string
+		// brokenRedirect is true when the walk must fail closed rather than
+		// find no workspace at all (be-929).
+		brokenRedirect bool
+	}{
+		{
+			name: "plain repo under an ancestor .beads",
+			build: func(t *testing.T, town string) string {
+				repo := filepath.Join(town, "repo")
+				initTestRepo(t, repo)
+				return filepath.Join(repo, "sub")
+			},
+			want: func(string) string { return "" },
+		},
+		{
+			name: "nested clone under the outer repo's .beads",
+			build: func(t *testing.T, town string) string {
+				outer := filepath.Join(town, "outer")
+				initTestRepo(t, outer)
+				writeWorkspaceFiles(t, filepath.Join(outer, ".beads"))
+				inner := filepath.Join(outer, "inner")
+				initTestRepo(t, inner)
+				return filepath.Join(inner, "sub")
+			},
+			want: func(string) string { return "" },
+		},
+		{
+			name: "outside any repo walks to the ancestor .beads",
+			build: func(t *testing.T, town string) string {
+				return filepath.Join(town, "not", "a", "repo")
+			},
+			want: func(town string) string { return filepath.Join(town, ".beads") },
+		},
+		{
+			name: "linked worktree uses the shared database",
+			build: func(t *testing.T, town string) string {
+				main := filepath.Join(town, "main")
+				initTestRepo(t, main)
+				writeWorkspaceFiles(t, filepath.Join(main, ".beads"))
+				worktree := filepath.Join(town, "wt")
+				runGitInDir(t, main, "worktree", "add", "-q", worktree, "HEAD")
+				t.Cleanup(func() {
+					_ = exec.Command("git", "-C", main, "worktree", "remove", "--force", worktree).Run()
+				})
+				return filepath.Join(worktree, "sub")
+			},
+			want: func(town string) string { return filepath.Join(town, "main", ".beads") },
+		},
+		{
+			name: "jj secondary uses the primary database",
+			build: func(t *testing.T, town string) string {
+				primary := filepath.Join(town, "primary")
+				// A colocated jj+git primary: .jj/repo is a directory.
+				if err := os.MkdirAll(filepath.Join(primary, ".jj", "repo"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				initTestRepo(t, primary)
+				writeWorkspaceFiles(t, filepath.Join(primary, ".beads"))
+
+				// The secondary points at the primary's repo with a file.
+				secondary := filepath.Join(primary, "ws", "secondary")
+				if err := os.MkdirAll(filepath.Join(secondary, ".jj"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(secondary, ".jj", "repo"),
+					[]byte(filepath.Join(primary, ".jj", "repo")+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return secondary
+			},
+			want: func(town string) string { return filepath.Join(town, "primary", ".beads") },
+		},
+		{
+			name: "broken redirect inside the repo ends discovery",
+			build: func(t *testing.T, town string) string {
+				repo := filepath.Join(town, "repo")
+				initTestRepo(t, repo)
+				sub := filepath.Join(repo, "sub")
+				if err := os.MkdirAll(filepath.Join(sub, ".beads"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(sub, ".beads", workspace.RedirectFileName),
+					[]byte(filepath.Join(town, "gone", ".beads")+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return sub
+			},
+			want:           func(string) string { return "" },
+			brokenRedirect: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			town, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeWorkspaceFiles(t, filepath.Join(town, ".beads"))
+			cwd := tc.build(t, town)
+			if err := os.MkdirAll(cwd, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			t.Setenv("BEADS_DIR", "")
+			t.Setenv("BEADS_DB", "")
+			t.Cleanup(git.ResetCaches)
+			chdir(t, cwd)
+
+			want := tc.want(town)
+			got := FindBeadsDir()
+			if got != want {
+				t.Errorf("FindBeadsDir() = %q, want %q", got, want)
+			}
+			if !tc.brokenRedirect {
+				if from := FindBeadsDirFrom(cwd); from != want {
+					t.Errorf("FindBeadsDirFrom() = %q, want %q", from, want)
+				}
+			}
+
+			ws, err := workspace.Resolve(cwd, os.Getenv)
+			switch {
+			case want != "":
+				if err != nil {
+					t.Fatalf("workspace.Resolve: %v", err)
+				}
+				if ws.BeadsDir != want {
+					t.Errorf("Resolve().BeadsDir = %q, want %q", ws.BeadsDir, want)
+				}
+			case tc.brokenRedirect:
+				if !errors.Is(err, workspace.ErrRedirectTarget) {
+					t.Errorf("workspace.Resolve() = %+v, %v; want ErrRedirectTarget", ws, err)
+				}
+			default:
+				if !errors.Is(err, workspace.ErrNoWorkspace) {
+					t.Errorf("workspace.Resolve() = %+v, %v; want ErrNoWorkspace", ws, err)
+				}
+			}
+		})
 	}
 }
 

@@ -524,266 +524,50 @@ func hasBeadsDatabase(beadsDir string) bool {
 	return workspace.HasDatabase(beadsDir)
 }
 
-// FindBeadsDir finds the .beads/ directory in the current directory tree.
+// FindBeadsDir finds the .beads/ directory for the process working directory.
 // Returns empty string if not found.
 //
 // Resolution order:
-//  1. BEADS_DIR environment variable (highest priority)
-//  2. Walk up from CWD toward repo root boundary, checking each directory
-//     for .beads/ with valid project files. For worktrees, stops at the
-//     worktree root; for non-worktrees, stops at the git root.
-//  3. Worktree-specific fallback: per-worktree redirect, worktree's own
-//     .beads (separate-DB mode), shared .beads via git-common-dir.
-//  4. Extended walk from the boundary to the main repo root (worktrees)
-//     or checks the git root itself (non-worktrees).
+//  1. BEADS_DIR environment variable (highest priority). A value that does not
+//     name an existing directory holding workspace files is ignored and
+//     discovery continues from CWD.
+//  2. workspace.Discover(cwd): walk up from CWD, following each
+//     .beads/redirect, bounded by the nearest repo root -- a directory holding
+//     .git or .jj, checked itself -- or by the filesystem root when CWD is
+//     outside any repo; then the git worktree shared .beads and the jj primary
+//     fallbacks.
 //
-// Validates that directories contain actual project files (metadata.json,
-// config.yaml, dolt/, embeddeddolt/, or *.db).
-// Redirect files are supported: if a .beads/redirect file exists, its
-// contents are used as the actual .beads directory path.
+// The walk bound is the one config loading and the workspace gate use, so the
+// database, the config.yaml and redirects all resolve to the same .beads from
+// any cwd (be-8ff). A directory above the repo root belongs to a different
+// project and never supplies this workspace's .beads.
+//
+// A .beads/redirect the walk cannot follow ends discovery here with a warning
+// and an empty result (be-929): a redirect names the workspace its directory
+// belongs to, and an ancestor workspace must not stand in for it.
 func FindBeadsDir() string {
-	// 1. Check BEADS_DIR environment variable (preferred)
+	// 1. BEADS_DIR, validated: a directory without workspace files is skipped
+	// rather than returned (bd-420).
 	if absBeadsDir, set := beadsDirFromEnv(); set {
-		if info, err := os.Stat(absBeadsDir); err == nil && info.IsDir() {
-			// Validate directory contains actual project files
-			if HasBeadsProjectFiles(absBeadsDir) {
-				return absBeadsDir
-			}
+		if info, err := os.Stat(absBeadsDir); err == nil && info.IsDir() && HasBeadsProjectFiles(absBeadsDir) {
+			return absBeadsDir
 		}
 	}
 
-	// 2. Walk up from CWD toward the repo root, checking each directory for .beads/.
-	// This replaces the former step 1b (CWD-only check) with a proper ancestor walk,
-	// fixing the case where CWD is a subdirectory within a rig (not the rig root itself).
-	// For worktrees, the walk stops at the worktree root boundary to avoid finding
-	// git-tracked .beads/ at the worktree root that has metadata but no database.
-	// The worktree-specific fallback logic (step 3) handles worktree root resolution.
+	// 2. Discovery from CWD through the shared walk. The strict follower
+	// reports a redirect the walk refuses to follow as an error, which is what
+	// makes a broken redirect end discovery instead of falling through to an
+	// ancestor workspace.
 	cwd, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
-
-	gitRoot := findGitRoot()
-
-	// Determine the walk-up boundary: worktree root for worktrees, git root otherwise.
-	// We stop BEFORE the boundary so worktree fallback logic can handle the root's .beads/.
-	isWt := git.IsWorktree()
-	// A jj secondary workspace is inside the primary's git tree but is not a git
-	// worktree. git.GetRepoRoot() returns the PRIMARY workspace root in that case,
-	// so without correction the walk would cross the secondary workspace boundary and
-	// find the secondary's git-tracked .beads/ (which has config files but no DB).
-	// Treat the jj secondary workspace root as the walk boundary, then step 3 below
-	// handles the fallback to the primary's .beads/ exactly like git worktrees do.
-	var jjSecondaryRoot string
-	var isJJSecondary bool
-	if !isWt {
-		jjSecondaryRoot, isJJSecondary = git.JJSecondaryWorkspaceRoot()
+	source, resolved, err := workspace.Discover(cwd, followRedirectStrict)
+	if err != nil {
+		warnBrokenRedirectInWalk(source, err)
+		return ""
 	}
-	walkBoundary := gitRoot
-	if isWt {
-		// For worktrees, stop the walk at the worktree root.
-		// The worktree root's .beads/ may be git-tracked metadata without a real database;
-		// the worktree fallback logic (step 3) handles this correctly.
-		walkBoundary = git.GetRepoRoot()
-	} else if isJJSecondary {
-		walkBoundary = jjSecondaryRoot
-	}
-
-	// Canonicalize both walk start and walk boundary so the `dir == walkBoundary`
-	// comparison below works even when the two come from different sources
-	// (os.Getwd() often returns unresolved symlinks like /var/... on macOS
-	// while git rev-parse returns the canonical /private/var/... form). Without
-	// this, the boundary check silently never matches and the walk overshoots
-	// the worktree root — finding an inherited .beads/ directory there and
-	// short-circuiting the worktree-fallback logic in step 3.
-	cwdCanonical := utils.CanonicalizePath(cwd)
-	walkBoundaryCanonical := ""
-	if walkBoundary != "" {
-		walkBoundaryCanonical = utils.CanonicalizePath(walkBoundary)
-	}
-	for dir := cwdCanonical; dir != "/" && dir != "."; {
-		// Stop at the walk boundary (exclusive — don't check this directory).
-		// For worktrees: stops before worktree root so step 3 handles it.
-		// For non-worktrees: stops before git root (which is checked below in the
-		// post-worktree walk, step 4).
-		if walkBoundaryCanonical != "" && dir == walkBoundaryCanonical {
-			break
-		}
-
-		beadsDir := filepath.Join(dir, ".beads")
-		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
-			// A .beads/redirect names the workspace this directory belongs
-			// to. If it cannot be followed the walk ends here (be-929):
-			// continuing to a parent would let an unrelated ancestor
-			// workspace's database stand in for the one it names.
-			target, redirected, redirectErr := followRedirectStrict(beadsDir)
-			if redirectErr != nil {
-				warnBrokenRedirectInWalk(beadsDir, redirectErr)
-				return ""
-			}
-			if redirected {
-				beadsDir = target
-			}
-			if HasBeadsProjectFiles(beadsDir) {
-				return beadsDir
-			}
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-
-	// 3. Worktree-specific fallback: redirect, own .beads, shared .beads.
-	// This runs after the walk-up so that rig subdirectories win, but before
-	// the extended walk (step 4) so worktree-aware logic is preferred.
-	var mainRepoRoot string
-	if isWt {
-		// 3a. Per-worktree redirect override
-		if target := worktreeRedirectTarget(); target != "" {
-			if info, err := os.Stat(target); err == nil && info.IsDir() {
-				if HasBeadsProjectFiles(target) {
-					return target
-				}
-			}
-		}
-
-		// 3b. Worktree's own .beads (separate-DB mode, no redirect).
-		//
-		// Only accept the worktree-local .beads/ as separate-DB if it owns an
-		// actual database (dolt/, embeddeddolt/, or a *.db file). A worktree
-		// that only has metadata.json / config.yaml / issues.jsonl is almost
-		// certainly carrying tracked artifacts from the parent repo's
-		// working-tree snapshot — `git worktree add` checks them out, but the
-		// dolt/ data directory is gitignored and therefore absent. Returning
-		// such a directory short-circuits the shared-DB fallback (3c) and
-		// causes bd to spawn a sidecar Dolt server against an empty data
-		// directory, which cannot serve the project's database.
-		//
-		// If no fallback is available (non-worktree edge case, or the main
-		// repo itself has no .beads/), fall back to HasBeadsProjectFiles so a
-		// fresh `bd init` can still locate the nascent project directory.
-		if worktreeRoot := git.GetRepoRoot(); worktreeRoot != "" {
-			worktreeBeadsDir := filepath.Join(worktreeRoot, ".beads")
-			if info, err := os.Stat(worktreeBeadsDir); err == nil && info.IsDir() {
-				if hasBeadsDatabase(worktreeBeadsDir) {
-					return worktreeBeadsDir
-				}
-				// Lenient acceptance only when there is no shared .beads with
-				// a real database to fall back to.
-				fallback := GetWorktreeFallbackBeadsDir()
-				fallbackHasDB := false
-				if fallback != "" {
-					if fbInfo, err := os.Stat(fallback); err == nil && fbInfo.IsDir() {
-						resolved := FollowRedirect(fallback)
-						fallbackHasDB = hasBeadsDatabase(resolved)
-					}
-				}
-				if !fallbackHasDB && HasBeadsProjectFiles(worktreeBeadsDir) {
-					return worktreeBeadsDir
-				}
-			}
-		}
-
-		// 3c. Fall back to the canonical shared .beads for this worktree.
-		if fallbackBeadsDir := GetWorktreeFallbackBeadsDir(); fallbackBeadsDir != "" {
-			if info, err := os.Stat(fallbackBeadsDir); err == nil && info.IsDir() {
-				fallbackBeadsDir = FollowRedirect(fallbackBeadsDir)
-				if HasBeadsProjectFiles(fallbackBeadsDir) {
-					return fallbackBeadsDir
-				}
-			}
-		}
-
-		var err error
-		mainRepoRoot, err = git.GetMainRepoRoot()
-		if err != nil {
-			mainRepoRoot = ""
-		}
-	} else if isJJSecondary {
-		// 3'. JJ secondary fallback: mirror of step 3 for git worktrees
-		// (no 3'a — jj has no per-workspace redirect equivalent).
-		jjPrimaryRoot, jjPrimaryErr := git.GetJJPrimaryWorkspaceRoot()
-
-		// 3'b. Only accept the secondary's own .beads/ if it owns a real database.
-		// Otherwise it's git-tracked config inherited from the primary; fall through.
-		if jjSecondaryRoot != "" {
-			secondaryBeadsDir := filepath.Join(jjSecondaryRoot, ".beads")
-			if info, err := os.Stat(secondaryBeadsDir); err == nil && info.IsDir() {
-				if hasBeadsDatabase(secondaryBeadsDir) {
-					return secondaryBeadsDir
-				}
-				// Lenient acceptance only when the primary has no DB to fall back to.
-				primaryFallbackHasDB := false
-				if jjPrimaryErr == nil && jjPrimaryRoot != "" {
-					primaryBeadsDir := filepath.Join(jjPrimaryRoot, ".beads")
-					if pInfo, pErr := os.Stat(primaryBeadsDir); pErr == nil && pInfo.IsDir() {
-						primaryFallbackHasDB = hasBeadsDatabase(FollowRedirect(primaryBeadsDir))
-					}
-				}
-				if !primaryFallbackHasDB && HasBeadsProjectFiles(secondaryBeadsDir) {
-					return secondaryBeadsDir
-				}
-			}
-		}
-
-		// 3'c.
-		if jjPrimaryErr == nil && jjPrimaryRoot != "" {
-			primaryBeadsDir := filepath.Join(jjPrimaryRoot, ".beads")
-			if info, err := os.Stat(primaryBeadsDir); err == nil && info.IsDir() {
-				resolved := FollowRedirect(primaryBeadsDir)
-				if HasBeadsProjectFiles(resolved) {
-					return resolved
-				}
-			}
-			mainRepoRoot = jjPrimaryRoot
-		}
-	}
-
-	// 4. Extended walk: from walk boundary to git/main-repo root.
-	// For non-worktrees, this checks the git root itself (the walk-up in step 2
-	// stopped before it). For worktrees, this walks from worktree root to main
-	// repo root, handling edge cases where .beads/ is between the two.
-	// Skip if there was no walk boundary (step 2 already searched everything).
-	if walkBoundary != "" {
-		extendedRoot := gitRoot
-		if (isWt || isJJSecondary) && mainRepoRoot != "" {
-			extendedRoot = mainRepoRoot
-		}
-		// Canonicalize the extended-root so the `dir == extendedRoot` check
-		// matches when extendedRoot came from a git helper (canonical) and
-		// the starting `dir` came from walkBoundary (also canonicalized
-		// above). Keeps the walk bounded on macOS-style /var → /private/var.
-		extendedRootCanonical := ""
-		if extendedRoot != "" {
-			extendedRootCanonical = utils.CanonicalizePath(extendedRoot)
-		}
-
-		for dir := walkBoundaryCanonical; dir != "/" && dir != "."; {
-			beadsDir := filepath.Join(dir, ".beads")
-			if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
-				beadsDir = FollowRedirect(beadsDir)
-				if HasBeadsProjectFiles(beadsDir) {
-					return beadsDir
-				}
-			}
-
-			// Stop at the extended root
-			if extendedRootCanonical != "" && dir == extendedRootCanonical {
-				break
-			}
-
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-	}
-
-	return ""
+	return resolved
 }
 
 // DatabaseInfo contains information about a discovered beads database
