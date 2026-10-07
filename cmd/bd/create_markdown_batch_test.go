@@ -4,8 +4,9 @@ package main
 
 // End-to-end cover for `bd create --file` on the DIRECT route, which is where
 // this command's behaviour changed when it moved onto issueops.BatchCreator.
-// They run the real bd binary against an isolated embedded-Dolt workspace and
-// reuse create_deps_atomic_test.go's hermetic environment and output helpers.
+// They run the real bd binary against a workspace on the shared test Dolt
+// server and reuse create_deps_atomic_test.go's hermetic environment and output
+// helpers.
 
 import (
 	"os"
@@ -27,8 +28,8 @@ func writeMarkdownPlan(t *testing.T, dir, name, body string) string {
 func TestCreateFromMarkdownFile(t *testing.T) {
 	bd := buildBDForInitTests(t)
 	dir := t.TempDir()
-	runCreateDepsBD(t, bd, dir, "init", "--backend", "dolt", "--prefix", "test",
-		"--quiet", "--non-interactive", "--skip-hooks", "--skip-agents")
+	runCreateDepsBD(t, bd, dir, append([]string{"init", "--backend", "dolt", "--prefix", "test",
+		"--quiet", "--non-interactive", "--skip-hooks", "--skip-agents"}, serverInitArgs(t)...)...)
 
 	t.Run("creates_every_template_in_the_file", func(t *testing.T) {
 		plan := writeMarkdownPlan(t, dir, "plan.md", `## First from file
@@ -76,7 +77,7 @@ Fine.
 ### Dependencies
 test-nosuchissue
 `)
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "--file", plan)
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "--file", plan)
 		if err == nil {
 			t.Fatalf("create --file with an unresolvable dependency exited 0; output:\n%s", out)
 		}

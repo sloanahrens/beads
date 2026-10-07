@@ -14,10 +14,11 @@ package main
 // (--deps, --parent, --waits-for) commit in ONE transaction. Any dep failure
 // fails the command with a nonzero exit and rolls back the create.
 //
-// These tests run the real bd binary against an isolated Dolt-backed
-// workspace. The binary is built with the gms_pure_go embedded-Dolt engine
-// (see buildBDForInitTests), so the tests need no external Dolt server and work
-// in both cgo and pure-Go builds.
+// These tests run the real bd binary against a workspace backed by the shared
+// test Dolt server, the same one every other cmd/bd test uses (see
+// serverInitArgs and sharedServerEnvExtras). There is no embedded engine to
+// fall back on: a bd that opens a store without a server to talk to starts one
+// of its own, detached, and nothing here would ever stop it (be-gnt).
 
 import (
 	"encoding/json"
@@ -33,7 +34,15 @@ import (
 // shell pointing at a shared Dolt server (BEADS_DOLT_SERVER_*) or a real
 // workspace (BEADS_DIR) cannot leak in, then pins BEADS_DIR at the isolated
 // per-test workspace and keeps the child non-interactive.
-func createDepsTestEnv(dir string) []string {
+//
+// Stripping those variables also removes the auto-start opt-out, so the child
+// gets sharedServerEnvExtras back: these tests init against the shared test
+// server (serverInitArgs), and a bd that starts a server of its own here would
+// outlive the workspace t.TempDir is about to delete (be-gnt).
+func createDepsTestEnv(t *testing.T, dir string) []string {
+	t.Helper()
+	beadsDir := filepath.Join(dir, ".beads")
+	requireNoAutoStartedServer(t, beadsDir)
 	var env []string
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "BEADS_") || strings.HasPrefix(e, "BD_") {
@@ -41,10 +50,8 @@ func createDepsTestEnv(dir string) []string {
 		}
 		env = append(env, e)
 	}
-	return append(env,
-		"BEADS_DIR="+filepath.Join(dir, ".beads"),
-		"BD_NON_INTERACTIVE=1",
-	)
+	return append(append(env, "BEADS_DIR="+beadsDir, "BD_NON_INTERACTIVE=1"),
+		sharedServerEnvExtras()...)
 }
 
 // runCreateDepsBD runs bd and returns stdout only. Warnings (e.g. the
@@ -54,7 +61,7 @@ func runCreateDepsBD(t *testing.T, bd, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(bd, args...)
 	cmd.Dir = dir
-	cmd.Env = createDepsTestEnv(dir)
+	cmd.Env = createDepsTestEnv(t, dir)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -66,10 +73,11 @@ func runCreateDepsBD(t *testing.T, bd, dir string, args ...string) string {
 
 // runCreateDepsBDRaw runs bd and returns combined output plus the exit error,
 // for asserting on failure output.
-func runCreateDepsBDRaw(bd, dir string, args ...string) (string, error) {
+func runCreateDepsBDRaw(t *testing.T, bd, dir string, args ...string) (string, error) {
+	t.Helper()
 	cmd := exec.Command(bd, args...)
 	cmd.Dir = dir
-	cmd.Env = createDepsTestEnv(dir)
+	cmd.Env = createDepsTestEnv(t, dir)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -119,8 +127,8 @@ func createDepsExtractID(t *testing.T, out string) string {
 func TestCreateDepsAtomicity(t *testing.T) {
 	bd := buildBDForInitTests(t)
 	dir := t.TempDir()
-	runCreateDepsBD(t, bd, dir, "init", "--backend", "dolt", "--prefix", "test",
-		"--quiet", "--non-interactive", "--skip-hooks", "--skip-agents")
+	runCreateDepsBD(t, bd, dir, append([]string{"init", "--backend", "dolt", "--prefix", "test",
+		"--quiet", "--non-interactive", "--skip-hooks", "--skip-agents"}, serverInitArgs(t)...)...)
 
 	blocker := strings.TrimSpace(runCreateDepsBD(t, bd, dir, "create", "existing blocker", "--silent"))
 	if blocker == "" {
@@ -128,7 +136,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 	}
 
 	t.Run("failed_dep_add_is_fatal_and_rolls_back_create", func(t *testing.T) {
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "orphan candidate", "--json",
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "orphan candidate", "--json",
 			"--deps", "depends-on:test-missing1")
 		if err == nil {
 			t.Errorf("create with unresolvable dep exited 0; output:\n%s", out)
@@ -142,7 +150,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 	})
 
 	t.Run("one_failing_dep_rolls_back_valid_deps_and_create", func(t *testing.T) {
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "partial dep issue", "--json",
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "partial dep issue", "--json",
 			"--deps", "depends-on:"+blocker+",depends-on:test-missing2")
 		if err == nil {
 			t.Errorf("create with one unresolvable dep exited 0; output:\n%s", out)
@@ -156,7 +164,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 	})
 
 	t.Run("waits_for_missing_spawner_is_fatal_and_rolls_back", func(t *testing.T) {
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "waits-for orphan", "--json",
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "waits-for orphan", "--json",
 			"--waits-for", "test-missing3")
 		if err == nil {
 			t.Errorf("create with unresolvable --waits-for exited 0; output:\n%s", out)
@@ -177,7 +185,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 	t.Run("waits_for_gate_without_waits_for_is_rejected", func(t *testing.T) {
 		for _, gate := range []string{"all-children", "TOTALLY-BOGUS"} {
 			title := "gate-no-spawner-" + gate
-			out, err := runCreateDepsBDRaw(bd, dir, "create", title, "--json",
+			out, err := runCreateDepsBDRaw(t, bd, dir, "create", title, "--json",
 				"--waits-for-gate", gate)
 			if err == nil {
 				t.Errorf("create --waits-for-gate %s (no --waits-for) exited 0 (was silently ignored); output:\n%s", gate, out)
@@ -193,7 +201,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 	// After the refactor in create_atomic.go, validation runs pre-write; this
 	// test documents the contract and guards against regressions.
 	t.Run("invalid_waits_for_gate_value_is_rejected_before_write", func(t *testing.T) {
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "invalid-gate-probe", "--json",
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "invalid-gate-probe", "--json",
 			"--waits-for", blocker, "--waits-for-gate", "TOTALLY-BOGUS")
 		if err == nil {
 			t.Errorf("create with invalid --waits-for-gate exited 0; output:\n%s", out)
@@ -218,7 +226,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 		if err := os.WriteFile(mdFile, []byte("# Batch issue\n\nDescription\n"), 0o600); err != nil {
 			t.Fatalf("write markdown plan: %v", err)
 		}
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "--file", mdFile, "--waits-for-gate", "all-children")
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "--file", mdFile, "--waits-for-gate", "all-children")
 		if err == nil {
 			t.Errorf("create --file with --waits-for-gate (no --waits-for) exited 0; output:\n%s", out)
 		}
@@ -233,7 +241,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 		if err := os.WriteFile(graphFile, []byte(plan), 0o600); err != nil {
 			t.Fatalf("write graph plan: %v", err)
 		}
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "--graph", graphFile, "--waits-for-gate", "all-children")
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "--graph", graphFile, "--waits-for-gate", "all-children")
 		if err == nil {
 			t.Errorf("create --graph with --waits-for-gate (no --waits-for) exited 0; output:\n%s", out)
 		}
@@ -255,7 +263,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 		parentOut := runCreateDepsBD(t, bd, dir, "create", "child-id-burn-parent", "--json")
 		parentID := createDepsExtractID(t, parentOut)
 
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "should-not-exist-child", "--json",
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "should-not-exist-child", "--json",
 			"--parent", parentID, "--waits-for-gate", "all-children")
 		if err == nil {
 			t.Errorf("create --parent with --waits-for-gate (no --waits-for) exited 0; output:\n%s", out)
@@ -299,7 +307,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 	})
 
 	t.Run("invalid_dep_type_rejected_before_create", func(t *testing.T) {
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "bad dep type issue", "--json",
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "bad dep type issue", "--json",
 			"--deps", "bogus-type:"+blocker)
 		if err == nil {
 			t.Errorf("create with unknown dep type exited 0; output:\n%s", out)
@@ -319,7 +327,7 @@ func TestCreateDepsAtomicity(t *testing.T) {
 	// absence of an orphan, which a direct parseDepSpecs unit test can't
 	// prove).
 	t.Run("multi_type_same_target_rejected_before_create_no_orphan", func(t *testing.T) {
-		out, err := runCreateDepsBDRaw(bd, dir, "create", "multi-type collision issue", "--json",
+		out, err := runCreateDepsBDRaw(t, bd, dir, "create", "multi-type collision issue", "--json",
 			"--deps", "discovered-from:"+blocker, "--deps", "blocked-by:"+blocker)
 		if err == nil {
 			t.Errorf("create with multi-type same-target --deps exited 0; output:\n%s", out)
