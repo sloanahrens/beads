@@ -63,7 +63,13 @@ crashed instead of skipping it. Only a missing `dolt` binary still skips.
 Proxied-server tests stay opt-in with `BEADS_TEST_PROXIED_SERVER=1`.
 
 `TestUnitTierPolicy` (scripts) and `TestPrebuiltBDCarriesUnitTier` (cmd/bd)
-keep this wiring from drifting.
+keep this wiring from drifting. The store helpers need a static check on top of
+the runtime one: `cmd/bd`'s `newTestStore`, `newTestStoreIsolatedDB`,
+`newTestStoreWithPrefix` and `newParityEnv` consult `testDoltServerPort` before
+any migration runs, so in the unit tier they skip instead of reaching
+`testtier.ErrUnitTier`. `TestCmdBdStoreTestsCarryTheIntegrationTag` (scripts)
+therefore fails, without running anything, when a cmd/bd test resolves to one
+of those four helpers without `integration` in its file's build constraint.
 
 ## Commands and Local Environment
 
