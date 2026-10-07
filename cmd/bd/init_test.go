@@ -2321,7 +2321,15 @@ func TestBareParentWorktreeCoreCommandsWithoutRedirect(t *testing.T) {
 // BEADS_DIR isolates each subtest's workspace and stops bd from walking up into
 // an ambient .beads left by another test or tool; HOME is preserved so bd init's
 // git bootstrap still works.
-func initBackendTestEnv(beadsDir string) []string {
+//
+// Removing every BEADS_*/BD_* variable also removes the auto-start opt-out, so
+// the sharedServerEnvExtras are added back: a `bd init` here either fails before
+// it touches a store (the rejected backends) or is pointed at the shared test
+// server by serverInitArgs. Without them the accepted-backend subtests started a
+// detached server in the workspace and left it there (be-gnt).
+func initBackendTestEnv(t *testing.T, beadsDir string) []string {
+	t.Helper()
+	requireNoAutoStartedServer(t, beadsDir)
 	var env []string
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "BEADS_") || strings.HasPrefix(e, "BD_") {
@@ -2329,7 +2337,7 @@ func initBackendTestEnv(beadsDir string) []string {
 		}
 		env = append(env, e)
 	}
-	return append(env, "BEADS_DIR="+beadsDir)
+	return append(append(env, "BEADS_DIR="+beadsDir), sharedServerEnvExtras()...)
 }
 
 func TestInitBackendFlag(t *testing.T) {
@@ -2343,7 +2351,7 @@ func TestInitBackendFlag(t *testing.T) {
 
 		cmd := exec.Command(bd, "init", "--backend", "sqlite", "--quiet")
 		cmd.Dir = tmpDir
-		cmd.Env = initBackendTestEnv(beadsDir)
+		cmd.Env = initBackendTestEnv(t, beadsDir)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Fatalf("Expected non-zero exit for --backend=sqlite:\n%s", out)
@@ -2364,7 +2372,7 @@ func TestInitBackendFlag(t *testing.T) {
 
 			cmd := exec.Command(bd, "init", "--backend", backend, "--quiet")
 			cmd.Dir = tmpDir
-			cmd.Env = initBackendTestEnv(beadsDir)
+			cmd.Env = initBackendTestEnv(t, beadsDir)
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("Expected non-zero exit for --backend=%s", backend)
@@ -2387,7 +2395,7 @@ func TestInitBackendFlag(t *testing.T) {
 
 		cmd := exec.Command(bd, "init", "--backend", "mongodb", "--quiet")
 		cmd.Dir = tmpDir
-		cmd.Env = initBackendTestEnv(beadsDir)
+		cmd.Env = initBackendTestEnv(t, beadsDir)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Fatal("Expected non-zero exit for a genuinely unknown backend")
@@ -2404,9 +2412,9 @@ func TestInitBackendFlag(t *testing.T) {
 		tmpDir := t.TempDir()
 		beadsDir := filepath.Join(tmpDir, ".beads")
 
-		cmd := exec.Command(bd, "init", "--backend", "dolt", "--quiet")
+		cmd := exec.Command(bd, append([]string{"init", "--backend", "dolt", "--quiet"}, serverInitArgs(t)...)...)
 		cmd.Dir = tmpDir
-		cmd.Env = initBackendTestEnv(beadsDir)
+		cmd.Env = initBackendTestEnv(t, beadsDir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("bd init --backend=dolt should succeed: %v\n%s", err, out)
@@ -2418,9 +2426,9 @@ func TestInitBackendFlag(t *testing.T) {
 		tmpDir := t.TempDir()
 		beadsDir := filepath.Join(tmpDir, ".beads")
 
-		cmd := exec.Command(bd, "init", "--quiet")
+		cmd := exec.Command(bd, append([]string{"init", "--quiet"}, serverInitArgs(t)...)...)
 		cmd.Dir = tmpDir
-		cmd.Env = initBackendTestEnv(beadsDir)
+		cmd.Env = initBackendTestEnv(t, beadsDir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("bd init should default to dolt: %v\n%s", err, out)
