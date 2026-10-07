@@ -50,6 +50,12 @@ endif
 # Default target
 all: build
 
+# Where `make build` writes bd. The default is the checkout root because that
+# root ./bd is the landing contract: scripts/install-bd.sh reads it as BD_NEW.
+# It is also gitignored (/bd), so it lingers invisibly and shadows the installed
+# bd for anything that resolves ./bd. A target that needs a runnable bd only for
+# a one-off check must therefore not build here — scripts/with-scratch-bd.sh
+# builds outside the checkout instead.
 BUILD_DIR := .
 GIT_BUILD := $(shell git rev-parse --short HEAD)
 # Full commit SHA, injected explicitly via ldflags rather than left to Go's
@@ -478,10 +484,18 @@ fmt-check:
 	@./scripts/ci/fmt-check.sh
 
 # Validate documentation references against actual CLI flags
+#
+# The checker needs a runnable bd, and whatever this builds at the checkout root
+# outlives the check: a docs bead's Gate is this target, so the stale ./bd it
+# used to leave behind accumulated in worktrees and had to be chmod-ed (gt
+# doctor's rig-bd-binary check flags an executable bd anywhere under a worktree,
+# and the remedy it prints is chmod 644). with-scratch-bd.sh builds the binary
+# outside the checkout and removes it. `make build` is untouched: the root
+# $(BUILD_DIR)/bd is the landing's contract.
 check-docs:
-	@echo "Building bd for docs checks..."
-	@CGO_ENABLED=0 go build -tags "$(BUILD_TAGS)" -ldflags="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" -o $(BUILD_DIR)/bd ./cmd/bd
-	@./scripts/check-doc-flags.sh ./bd
+	@echo "Building bd for docs checks (outside the checkout)..."
+	@BEADS_SCRATCH_BD_LDFLAGS="-X main.Build=$(GIT_BUILD) -X main.Commit=$(GIT_COMMIT)" \
+		./scripts/with-scratch-bd.sh ./scripts/check-doc-flags.sh
 	@./scripts/check-doc-freshness.sh
 	@go test -tags=gms_pure_go ./test/docsync
 
