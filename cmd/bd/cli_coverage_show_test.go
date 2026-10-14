@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/testutil"
@@ -125,9 +124,6 @@ func runBDForCoverage(t *testing.T, dir string, args ...string) (stdout string, 
 	sandboxMode = false
 	rootCtx = nil
 	rootCancel = nil
-
-	// Give SQLite time to release file locks.
-	time.Sleep(10 * time.Millisecond)
 
 	_ = wOut.Close()
 	_ = wErr.Close()

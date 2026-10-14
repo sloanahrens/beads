@@ -60,7 +60,6 @@ func TestAutoExportGitAddFailureExitsNonZero(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, ".beads", exportAutoStateFile)); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond)
 
 	cmd := exec.Command(bd, "create", "caller visible git add failure", "-p", "2")
 	cmd.Dir = dir

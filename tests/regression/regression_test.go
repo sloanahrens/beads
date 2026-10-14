@@ -291,17 +291,11 @@ func newWorkspace(t *testing.T, bdPath string) *workspace {
 
 func removeWorkspaceDir(t *testing.T, dir string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	var err error
-	for {
-		err = os.RemoveAll(dir)
-		if err == nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("remove workspace dir %s: %v", dir, err)
-		}
-		time.Sleep(50 * time.Millisecond)
+	// No process writes into the workspace once its commands return (daemon
+	// mode is disabled in runEnv and the Dolt server is external), so one
+	// removal is enough.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove workspace dir %s: %v", dir, err)
 	}
 }
 

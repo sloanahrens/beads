@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -125,19 +124,10 @@ func createTempDirWithCleanup(t *testing.T) string {
 	}
 
 	t.Cleanup(func() {
-		// Retry cleanup with delays to handle SQLite file locks
 		// Don't fail the test if cleanup fails - just log it
-		for i := 0; i < 5; i++ {
-			err := os.RemoveAll(tmpDir)
-			if err == nil {
-				return // Success
-			}
-			if i < 4 {
-				time.Sleep(50 * time.Millisecond)
-			}
+		if err := os.RemoveAll(tmpDir); err != nil {
+			t.Logf("Warning: Failed to clean up temp dir %s: %v", tmpDir, err)
 		}
-		// Final attempt failed - log but don't fail test
-		t.Logf("Warning: Failed to clean up temp dir %s (SQLite file locks)", tmpDir)
 	})
 
 	return tmpDir
@@ -194,9 +184,6 @@ func runBDInProcess(t *testing.T, dir string, args ...string) string {
 	// Reset context state
 	rootCtx = nil
 	rootCancel = nil
-
-	// Give SQLite time to release file locks before cleanup
-	time.Sleep(10 * time.Millisecond)
 
 	// Close writers and restore
 	wOut.Close()
@@ -1389,9 +1376,6 @@ func runBDInProcessAllowError(t *testing.T, dir string, args ...string) (string,
 	sandboxMode = false
 	rootCtx = nil
 	rootCancel = nil
-
-	// Give SQLite time to release file locks before cleanup
-	time.Sleep(10 * time.Millisecond)
 
 	wOut.Close()
 	wErr.Close()

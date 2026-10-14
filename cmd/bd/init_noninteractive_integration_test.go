@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestInitNonInteractiveAutoExportDefaultOffAndOptIn(t *testing.T) {
@@ -34,7 +33,6 @@ func TestInitNonInteractiveAutoExportDefaultOffAndOptIn(t *testing.T) {
 	if got := strings.TrimSpace(runBDStdoutForAutoExportInitTest(t, bd, dir, "config", "get", "export.auto")); got != "true" {
 		t.Fatalf("explicit export.auto = %q, want true", got)
 	}
-	time.Sleep(10 * time.Millisecond)
 	runBDForAutoExportInitTest(t, bd, dir, "create", "explicit export issue", "-p", "2")
 	data, err := os.ReadFile(jsonlPath)
 	if err != nil {
