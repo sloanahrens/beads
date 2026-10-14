@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
@@ -49,7 +48,7 @@ func ClaimIssueInTx(ctx context.Context, tx DBTX, id string, actor string) (*Cla
 		return nil, fmt.Errorf("failed to get issue for claim: %w", err)
 	}
 
-	now := time.Now().UTC()
+	now := Now(ctx)
 
 	// Rewrite row_lock with the claim (see lease.go): a concurrent reclaim or
 	// close on the same row is forced to conflict rather than silently

@@ -45,6 +45,26 @@ func readLeaseState(t *testing.T, ctx context.Context, store *DoltStore, id stri
 	return ls
 }
 
+// leaseClock is the injected lease clock for tests that need time to pass: a
+// claim, heartbeat or reclaim made through ctx(...) reads leaseClock.Now, which
+// only moves when the test calls Advance. Nothing waits on the wall clock.
+type leaseClock struct {
+	base   time.Time
+	offset atomic.Int64 // nanoseconds added to base
+}
+
+func newLeaseClock() *leaseClock { return &leaseClock{base: time.Now().UTC()} }
+
+func (c *leaseClock) Now() time.Time {
+	return c.base.Add(time.Duration(c.offset.Load()))
+}
+
+func (c *leaseClock) Advance(d time.Duration) { c.offset.Add(int64(d)) }
+
+func (c *leaseClock) ctx(ctx context.Context) context.Context {
+	return issueops.WithClock(ctx, c.Now)
+}
+
 func seedClaimedIssue(t *testing.T, ctx context.Context, store *DoltStore, id, owner string, ttl time.Duration) {
 	t.Helper()
 	issue := &types.Issue{
@@ -100,11 +120,13 @@ func TestHeartbeatExtendsLeaseAndGuardsOwnership(t *testing.T) {
 	ctx, cancel := testContext(t)
 	defer cancel()
 
-	seedClaimedIssue(t, ctx, store, "lease-hb", "alice", time.Minute)
+	clk := newLeaseClock()
+	cctx := clk.ctx(ctx)
+	seedClaimedIssue(t, cctx, store, "lease-hb", "alice", time.Minute)
 	before := readLeaseState(t, ctx, store, "lease-hb")
 
-	time.Sleep(1100 * time.Millisecond) // DATETIME is second-granular; ensure a tick
-	if err := store.HeartbeatIssue(ctx, "lease-hb", "alice"); err != nil {
+	clk.Advance(dbTick) // DATETIME is second-granular; ensure a tick
+	if err := store.HeartbeatIssue(cctx, "lease-hb", "alice"); err != nil {
 		t.Fatalf("owner heartbeat: %v", err)
 	}
 	after := readLeaseState(t, ctx, store, "lease-hb")
@@ -606,6 +628,8 @@ func TestConcurrentHeartbeatReclaimClose(t *testing.T) {
 	// so the reaper never touches a live claim), while dead claims expire after
 	// 2s and get reclaimed.
 	const ttl = 2 * time.Second
+	clk := newLeaseClock()
+	cctx := clk.ctx(ctx)
 	type job struct {
 		id    string
 		owner string
@@ -619,65 +643,74 @@ func TestConcurrentHeartbeatReclaimClose(t *testing.T) {
 			live:  i%2 == 0,
 		}
 		jobs[i] = j
-		seedClaimedIssue(t, ctx, store, j.id, j.owner, ttl)
+		seedClaimedIssue(t, cctx, store, j.id, j.owner, ttl)
 	}
 
-	raceCtx, stopReaper := context.WithCancel(ctx)
+	// The race runs on an injected clock in rounds. Within a round every live
+	// worker acts while a reaper loops, so heartbeats and closes still contend
+	// with reclaim for the same rows; between rounds the clock steps 500ms, the
+	// cadence a live worker heartbeats at. Dead claims fall due once the clock
+	// passes the 2s TTL, mid-race.
 	var reaperErrs atomic.Int32
-	var reaperDone sync.WaitGroup
-	reaperDone.Add(1)
-	go func() {
-		defer reaperDone.Done()
-		for {
-			select {
-			case <-raceCtx.Done():
-				return
-			default:
-			}
-			if _, err := store.ReclaimExpiredLeases(raceCtx, 0, types.ReclaimFilter{}, "reaper"); err != nil {
-				if raceCtx.Err() == nil {
-					reaperErrs.Add(1)
-				}
-				return
-			}
-			time.Sleep(15 * time.Millisecond)
-		}
-	}()
-
-	var wg sync.WaitGroup
 	var lostClose atomic.Int32
-	for _, j := range jobs {
-		if !j.live {
-			continue // dead workers do nothing; the reaper recovers them
-		}
-		wg.Add(1)
-		go func(j job) {
-			defer wg.Done()
-			hbCtx := issueops.WithLeaseTTL(ctx, ttl)
-			// Heartbeat every 500ms (well within the 2s TTL) to keep the lease
-			// alive while the reaper scans concurrently, then close. Each heartbeat
-			// and close rewrites row_lock, so they race the reaper's row_lock
-			// rewrites; withRetryTx must absorb any conflict.
-			for k := 0; k < 4; k++ {
-				if err := store.HeartbeatIssue(hbCtx, j.id, j.owner); err != nil {
-					// A live worker keeps its lease well in the future, so the
-					// reaper must never preempt it — a failure is a real defect.
-					t.Errorf("live worker %s heartbeat failed: %v", j.owner, err)
+	runRound := func(work func(j job)) {
+		done := make(chan struct{})
+		var reaperDone sync.WaitGroup
+		reaperDone.Add(1)
+		go func() {
+			defer reaperDone.Done()
+			for {
+				if _, err := store.ReclaimExpiredLeases(cctx, 0, types.ReclaimFilter{}, "reaper"); err != nil {
+					reaperErrs.Add(1)
+					return
 				}
-				time.Sleep(500 * time.Millisecond)
+				select {
+				case <-done:
+					return
+				default:
+				}
 			}
-			if err := store.CloseIssue(ctx, j.id, "done", j.owner, ""); err != nil {
-				// A close can only fail here if the reaper reverted the issue to
-				// open and another path re-touched it; with row_lock the close
-				// retries and wins, so a hard failure is a real defect.
-				t.Errorf("live worker %s close failed: %v", j.owner, err)
-				lostClose.Add(1)
+		}()
+		var wg sync.WaitGroup
+		for _, j := range jobs {
+			if !j.live {
+				continue // dead workers do nothing; the reaper recovers them
 			}
-		}(j)
+			wg.Add(1)
+			go func(j job) {
+				defer wg.Done()
+				work(j)
+			}(j)
+		}
+		wg.Wait()
+		close(done)
+		reaperDone.Wait()
 	}
-	wg.Wait()
-	stopReaper()
-	reaperDone.Wait()
+
+	// Heartbeat every 500ms of clock time (well within the 2s TTL) to keep the
+	// lease alive while the reaper scans concurrently, then close. Each
+	// heartbeat and close rewrites row_lock, so they race the reaper's row_lock
+	// rewrites; withRetryTx must absorb any conflict.
+	hbCtx := issueops.WithLeaseTTL(cctx, ttl)
+	for k := 0; k < 6; k++ {
+		runRound(func(j job) {
+			if err := store.HeartbeatIssue(hbCtx, j.id, j.owner); err != nil {
+				// A live worker keeps its lease well in the future, so the
+				// reaper must never preempt it — a failure is a real defect.
+				t.Errorf("live worker %s heartbeat failed: %v", j.owner, err)
+			}
+		})
+		clk.Advance(500 * time.Millisecond)
+	}
+	runRound(func(j job) {
+		if err := store.CloseIssue(cctx, j.id, "done", j.owner, ""); err != nil {
+			// A close can only fail here if the reaper reverted the issue to
+			// open and another path re-touched it; with row_lock the close
+			// retries and wins, so a hard failure is a real defect.
+			t.Errorf("live worker %s close failed: %v", j.owner, err)
+			lostClose.Add(1)
+		}
+	})
 
 	if n := reaperErrs.Load(); n != 0 {
 		t.Errorf("reaper surfaced %d errors; ReclaimExpiredLeases should retry conflicts internally", n)
@@ -686,12 +719,12 @@ func TestConcurrentHeartbeatReclaimClose(t *testing.T) {
 		t.Errorf("%d live-worker closes were lost to a racing reclaim", n)
 	}
 
-	// Final consistency sweep: wait past the TTL (plus the ≤1s DATETIME rounding
+	// Final consistency sweep: advance past the TTL (plus the ≤1s DATETIME rounding
 	// slop) so every dead claim's lease is unambiguously expired, then drain so
 	// dead workers' issues reach their terminal open state regardless of reaper
 	// timing.
-	time.Sleep(ttl + 1500*time.Millisecond)
-	if _, err := store.ReclaimExpiredLeases(ctx, 0, types.ReclaimFilter{}, "final-reaper"); err != nil {
+	clk.Advance(ttl + 1500*time.Millisecond)
+	if _, err := store.ReclaimExpiredLeases(cctx, 0, types.ReclaimFilter{}, "final-reaper"); err != nil {
 		t.Fatalf("final reclaim sweep: %v", err)
 	}
 
@@ -725,12 +758,14 @@ func TestConcurrentHeartbeatReclaimClose(t *testing.T) {
 	}
 }
 
-// expiryMargin is how long a test waits for a shortLeaseTTL lease to become
-// reclaimable. Dolt's DATETIME columns hold whole seconds and round on write,
+// expiryMargin is how far a test advances its leaseClock for a shortLeaseTTL
+// lease to become reclaimable. Dolt's DATETIME columns hold whole seconds and round on write,
 // so conformance tests must stay clear of sub-second lease behavior (L1.3).
 const (
 	shortLeaseTTL = time.Second
 	expiryMargin  = 2500 * time.Millisecond
+	// dbTick is the clock step that guarantees a new DATETIME second.
+	dbTick = 1100 * time.Millisecond
 )
 
 // TestStartedAtStampedOnceAcrossClaims pins L2.2: claims set started_at only
@@ -743,15 +778,17 @@ func TestStartedAtStampedOnceAcrossClaims(t *testing.T) {
 	ctx, cancel := testContext(t)
 	defer cancel()
 
-	seedClaimedIssue(t, ctx, store, "started-keep", "alice", time.Hour)
+	clk := newLeaseClock()
+	cctx := clk.ctx(ctx)
+	seedClaimedIssue(t, cctx, store, "started-keep", "alice", time.Hour)
 	first := readLeaseState(t, ctx, store, "started-keep")
 	if first.startedAtNull {
 		t.Fatal("claim did not stamp started_at")
 	}
 	origin := first.startedAt.Time
 
-	time.Sleep(1100 * time.Millisecond) // DATETIME is second-granular
-	if err := store.ClaimIssue(ctx, "started-keep", "alice"); err != nil {
+	clk.Advance(dbTick) // DATETIME is second-granular
+	if err := store.ClaimIssue(cctx, "started-keep", "alice"); err != nil {
 		t.Fatalf("idempotent re-claim: %v", err)
 	}
 	if got := readLeaseState(t, ctx, store, "started-keep").startedAt.Time; !got.Equal(origin) {
@@ -771,8 +808,8 @@ func TestStartedAtStampedOnceAcrossClaims(t *testing.T) {
 		t.Fatalf("reopen moved started_at: %v -> %+v", origin, reopened.startedAt)
 	}
 
-	time.Sleep(1100 * time.Millisecond)
-	if err := store.ClaimIssue(ctx, "started-keep", "alice"); err != nil {
+	clk.Advance(dbTick)
+	if err := store.ClaimIssue(cctx, "started-keep", "alice"); err != nil {
 		t.Fatalf("re-claim after reopen: %v", err)
 	}
 	after := readLeaseState(t, ctx, store, "started-keep")
@@ -782,14 +819,14 @@ func TestStartedAtStampedOnceAcrossClaims(t *testing.T) {
 
 	// Reclaim is explicitly different: L5.2 clears started_at, and the next
 	// claim starts a new work interval.
-	seedClaimedIssue(t, ctx, store, "started-reclaim", "dead-worker", shortLeaseTTL)
+	seedClaimedIssue(t, cctx, store, "started-reclaim", "dead-worker", shortLeaseTTL)
 	dead := readLeaseState(t, ctx, store, "started-reclaim")
 	if dead.startedAtNull {
 		t.Fatal("claim did not stamp started_at on started-reclaim")
 	}
 	deadStart := dead.startedAt.Time
-	time.Sleep(expiryMargin)
-	reclaimed, err := store.ReclaimExpiredLeases(ctx, 0, types.ReclaimFilter{}, "reaper")
+	clk.Advance(expiryMargin)
+	reclaimed, err := store.ReclaimExpiredLeases(cctx, 0, types.ReclaimFilter{}, "reaper")
 	if err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
@@ -799,7 +836,7 @@ func TestStartedAtStampedOnceAcrossClaims(t *testing.T) {
 	if !readLeaseState(t, ctx, store, "started-reclaim").startedAtNull {
 		t.Fatal("reclaim did not clear started_at (L5.2)")
 	}
-	if err := store.ClaimIssue(ctx, "started-reclaim", "bob"); err != nil {
+	if err := store.ClaimIssue(cctx, "started-reclaim", "bob"); err != nil {
 		t.Fatalf("claim after reclaim: %v", err)
 	}
 	fresh := readLeaseState(t, ctx, store, "started-reclaim")
@@ -817,23 +854,25 @@ func TestHeartbeatRevivesExpiredLease(t *testing.T) {
 	ctx, cancel := testContext(t)
 	defer cancel()
 
-	seedClaimedIssue(t, ctx, store, "lease-revive", "alice", shortLeaseTTL)
-	seedClaimedIssue(t, ctx, store, "lease-lost", "bob", shortLeaseTTL)
-	time.Sleep(expiryMargin)
+	clk := newLeaseClock()
+	cctx := clk.ctx(ctx)
+	seedClaimedIssue(t, cctx, store, "lease-revive", "alice", shortLeaseTTL)
+	seedClaimedIssue(t, cctx, store, "lease-lost", "bob", shortLeaseTTL)
+	clk.Advance(expiryMargin)
 
 	expired := readLeaseState(t, ctx, store, "lease-revive")
-	if !expired.leaseExpires.Valid || expired.leaseExpires.Time.After(time.Now()) {
+	if !expired.leaseExpires.Valid || expired.leaseExpires.Time.After(clk.Now()) {
 		t.Fatalf("precondition: lease-revive should be expired, got %v", expired.leaseExpires)
 	}
-	if err := store.HeartbeatIssue(ctx, "lease-revive", "alice"); err != nil {
+	if err := store.HeartbeatIssue(cctx, "lease-revive", "alice"); err != nil {
 		t.Fatalf("owner heartbeat on expired unreclaimed lease: %v", err)
 	}
 	revived := readLeaseState(t, ctx, store, "lease-revive")
-	if !revived.leaseExpires.Valid || !revived.leaseExpires.Time.After(time.Now()) {
+	if !revived.leaseExpires.Valid || !revived.leaseExpires.Time.After(clk.Now()) {
 		t.Errorf("heartbeat did not revive lease: %v", revived.leaseExpires)
 	}
 
-	reclaimed, err := store.ReclaimExpiredLeases(ctx, 0, types.ReclaimFilter{}, "reaper")
+	reclaimed, err := store.ReclaimExpiredLeases(cctx, 0, types.ReclaimFilter{}, "reaper")
 	if err != nil {
 		t.Fatalf("reclaim grace=0: %v", err)
 	}
@@ -843,7 +882,7 @@ func TestHeartbeatRevivesExpiredLease(t *testing.T) {
 	if still := readLeaseState(t, ctx, store, "lease-revive"); still.status != "in_progress" || still.assignee.String != "alice" {
 		t.Errorf("reaper disturbed revived claim: %+v", still)
 	}
-	if err := store.HeartbeatIssue(ctx, "lease-lost", "bob"); !errors.Is(err, storage.ErrNotClaimable) {
+	if err := store.HeartbeatIssue(cctx, "lease-lost", "bob"); !errors.Is(err, storage.ErrNotClaimable) {
 		t.Errorf("heartbeat after reclaim err = %v, want ErrNotClaimable", err)
 	}
 }
@@ -856,15 +895,17 @@ func TestConcurrentReapersAreBenign(t *testing.T) {
 	ctx, cancel := testContext(t)
 	defer cancel()
 
+	clk := newLeaseClock()
+	cctx := clk.ctx(ctx)
 	const staleCount = 4
 	stale := make([]string, 0, staleCount)
 	for i := 0; i < staleCount; i++ {
 		id := fmt.Sprintf("reapers-stale-%d", i)
-		seedClaimedIssue(t, ctx, store, id, fmt.Sprintf("dead-%d", i), shortLeaseTTL)
+		seedClaimedIssue(t, cctx, store, id, fmt.Sprintf("dead-%d", i), shortLeaseTTL)
 		stale = append(stale, id)
 	}
-	seedClaimedIssue(t, ctx, store, "reapers-live", "live-worker", time.Hour)
-	time.Sleep(expiryMargin)
+	seedClaimedIssue(t, cctx, store, "reapers-live", "live-worker", time.Hour)
+	clk.Advance(expiryMargin)
 
 	var (
 		wg      sync.WaitGroup
@@ -875,7 +916,7 @@ func TestConcurrentReapersAreBenign(t *testing.T) {
 		wg.Add(1)
 		go func(actor string) {
 			defer wg.Done()
-			got, err := store.ReclaimExpiredLeases(ctx, 0, types.ReclaimFilter{}, actor)
+			got, err := store.ReclaimExpiredLeases(cctx, 0, types.ReclaimFilter{}, actor)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {

@@ -1,11 +1,20 @@
 package doltserver
 
 import (
+	"io"
 	"net"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// holdUntilPeerCloses keeps a fake server's end of conn open until the probe
+// closes its end (EOF or reset), then closes it. The probes under test always
+// close their connection, so the fake server needs no timer of its own.
+func holdUntilPeerCloses(c net.Conn) {
+	_, _ = io.Copy(io.Discard, c)
+	_ = c.Close()
+}
 
 // fakeMySQLGreeting is a minimal, well-formed-enough MySQL handshake packet
 // (4-byte header: 3-byte length little-endian + 1-byte sequence, followed by
@@ -24,31 +33,42 @@ func TestWaitForReadyEmitsRST(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	var connects atomic.Int32
+	// The listener is bound by net.Listen, so dials queue even before Accept
+	// runs. Each accepted peer's address is reported on accepted.
+	accepted := make(chan string, 16)
 	go func() {
 		for {
 			conn, acceptErr := ln.Accept()
 			if acceptErr != nil {
 				return
 			}
-			connects.Add(1)
+			accepted <- conn.RemoteAddr().String()
 			go func(c net.Conn) {
 				_, _ = c.Write(fakeMySQLGreeting)
-				time.Sleep(20 * time.Millisecond)
-				_ = c.Close()
+				holdUntilPeerCloses(c)
 			}(conn)
 		}
 	}()
-
-	time.Sleep(50 * time.Millisecond) // let goroutine bind
 
 	if err := waitForReady("127.0.0.1", port, 5*time.Second); err != nil {
 		t.Fatalf("waitForReady: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond) // let the accept goroutine finish counting
-
-	got := connects.Load()
+	// Accept is sequential and the backlog is FIFO, so once the accept loop
+	// reports a sentinel dial made after waitForReady returned, every earlier
+	// connection has been counted.
+	sentinel, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial sentinel: %v", err)
+	}
+	t.Cleanup(func() { _ = sentinel.Close() })
+	var got int32
+	for addr := range accepted {
+		if addr == sentinel.LocalAddr().String() {
+			break
+		}
+		got++
+	}
 	if got != 1 {
 		t.Errorf("waitForReady made %d TCP connections (expected 1)", got)
 	}
@@ -78,10 +98,7 @@ func TestWaitForReadyRepollsUntilGreeted(t *testing.T) {
 				}
 				accepts.Add(1)
 				// Accept but never write and never close promptly — mute peer.
-				go func(c net.Conn) {
-					time.Sleep(1 * time.Second)
-					_ = c.Close()
-				}(conn)
+				go holdUntilPeerCloses(conn)
 			}
 		}()
 
@@ -111,15 +128,12 @@ func TestWaitForReadyRepollsUntilGreeted(t *testing.T) {
 				}
 				n := callCount.Add(1)
 				go func(c net.Conn, attempt int32) {
-					defer c.Close()
-					if attempt < 2 {
-						// First accept(s): mute, so the probe times out its read
-						// and waitForReady must re-poll instead of declaring victory.
-						time.Sleep(600 * time.Millisecond)
-						return
+					if attempt >= 2 {
+						_, _ = c.Write(fakeMySQLGreeting)
 					}
-					_, _ = c.Write(fakeMySQLGreeting)
-					time.Sleep(20 * time.Millisecond)
+					// First accept(s) stay mute, so the probe times out its read
+					// and waitForReady must re-poll instead of declaring victory.
+					holdUntilPeerCloses(c)
 				}(conn, n)
 			}
 		}()
@@ -149,8 +163,7 @@ func TestDrainAndCloseProbe(t *testing.T) {
 				return
 			}
 			_, _ = conn.Write(fakeMySQLGreeting)
-			time.Sleep(20 * time.Millisecond)
-			_ = conn.Close()
+			holdUntilPeerCloses(conn)
 		}()
 
 		conn, err := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
@@ -182,10 +195,9 @@ func TestDrainAndCloseProbe(t *testing.T) {
 			if acceptErr != nil {
 				return
 			}
-			// Mute: never write, hold the connection open past the probe's
-			// own read-deadline window so the timeout path is exercised.
-			time.Sleep(500 * time.Millisecond)
-			_ = conn.Close()
+			// Mute: never write, and hold the connection open until the probe
+			// gives up on its own read deadline, so the timeout path is exercised.
+			holdUntilPeerCloses(conn)
 		}()
 
 		conn, err := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
@@ -244,8 +256,7 @@ func TestProbeSQLServer(t *testing.T) {
 				return
 			}
 			_, _ = conn.Write(fakeMySQLGreeting)
-			time.Sleep(20 * time.Millisecond)
-			_ = conn.Close()
+			holdUntilPeerCloses(conn)
 		}()
 
 		greeted, err := ProbeSQLServer("tcp", ln.Addr().String(), time.Second)
