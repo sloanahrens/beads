@@ -18,10 +18,15 @@ var searchCmd = &cobra.Command{
 	Use:     "search [query]",
 	GroupID: "issues",
 	Short:   "Search issues by text query",
-	Long: `Search issues across title and ID (all statuses, including closed).
+	Long: `Search issues by words across title, description, notes and ID (all
+statuses, including closed).
 
+The query is split on whitespace; every word must appear (case-insensitive
+substring) in the title, description or notes, in any order. Quoting a
+multi-word argument does not change that. Use --phrase to match the whole
+query as one adjacent phrase in the title instead.
 ID-like queries (e.g., "bd-123", "hq-319") use fast exact/prefix matching.
-Text queries search titles. Use --desc-contains for description search.
+Use --desc-contains for a description-only filter.
 Use --status open (etc.) to narrow; closed issues are included by default
 so "was this already filed/fixed?" cannot silently answer no. Matches
 beyond --limit are dropped status-blind, so when hunting live work in a
@@ -29,6 +34,8 @@ large DB, narrow with --status open or raise --limit.
 
 Examples:
   bd search "authentication bug"
+  bd search "restart nudge"  # both words, any order, title/description/notes
+  bd search "overrun guard" --phrase  # adjacent phrase in the title only
   bd search "login" --status open
   bd search "database" --label backend --limit 10
   bd search --query "performance" --assignee alice
@@ -139,6 +146,8 @@ Examples:
 		if len(labelsAny) > 0 {
 			filter.LabelsAny = labelsAny
 		}
+
+		filter.QueryPhrase, _ = cmd.Flags().GetBool("phrase")
 
 		// Pattern matching
 		if descContains != "" {
@@ -354,6 +363,7 @@ func outputSearchResults(issues []*types.Issue, query string, longFormat bool) {
 
 func init() {
 	searchCmd.Flags().String("query", "", "Search query (alternative to positional argument)")
+	searchCmd.Flags().Bool("phrase", false, "Match the whole query as one adjacent phrase in the title instead of AND-ing its words")
 	searchCmd.Flags().StringP("status", "s", "", "Filter by stored status (comma-separated for OR; open, in_progress, blocked, deferred, closed, all). Default searches all statuses including closed. Note: dependency-blocked issues use 'bd blocked'")
 	searchCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
 	searchCmd.Flags().StringP("type", "t", "", "Filter by type (bug, feature, task, epic, chore, decision, merge-request, molecule, gate)")
