@@ -26,7 +26,7 @@ func TestGetCreateDatabaseProxyServerEndpoint_RejectsUpstreamMismatch(t *testing
 		Port:    freeTCPPort(t),
 		Server:  ts,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 	t.Cleanup(func() {
 		h.Cancel()
 		_ = h.waitErr(t, shutdownWait)
@@ -60,7 +60,7 @@ func TestGetCreateDatabaseProxyServerEndpoint_ReusesMatchingUpstream(t *testing.
 		Port:    port,
 		Server:  ts,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 	t.Cleanup(func() {
 		h.Cancel()
 		_ = h.waitErr(t, shutdownWait)

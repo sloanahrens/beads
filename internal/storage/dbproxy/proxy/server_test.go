@@ -47,6 +47,92 @@ type proxyHandle struct {
 	cancel context.CancelFunc
 	done   chan error    // buffered=1, holds Start's return value
 	exited chan struct{} // closed when Start returns
+	stats  *proxy.Stats  // opts.Stats, or one runProxy created; signals publication
+}
+
+// idleTicker is a manual stand-in for the idle watcher's ticker. The test
+// decides when each tick arrives, so idle windows are crossed without waiting
+// on the wall clock. Tick times start at an arbitrary epoch and advance by the
+// interval the watcher asked for.
+type idleTicker struct {
+	requested chan struct{} // closed when the watcher asks for its ticker
+	once      sync.Once
+	interval  time.Duration // written before requested closes
+	ticks     chan time.Time
+	now       time.Time // only touched by the test goroutine
+}
+
+func newIdleTicker() *idleTicker {
+	return &idleTicker{
+		requested: make(chan struct{}),
+		ticks:     make(chan time.Time),
+		now:       time.Unix(1_000_000, 0),
+	}
+}
+
+// newTicker is the proxy.ProxyOpts.IdleTicker hook.
+func (f *idleTicker) newTicker(interval time.Duration) (<-chan time.Time, func()) {
+	f.once.Do(func() {
+		f.interval = interval
+		close(f.requested)
+	})
+	return f.ticks, func() {}
+}
+
+func (f *idleTicker) wasRequested() bool {
+	select {
+	case <-f.requested:
+		return true
+	default:
+		return false
+	}
+}
+
+// tick delivers one tick, one interval after the previous one. The channel is
+// unbuffered, so tick returns once the watcher has received it, which means
+// the previous tick has been fully handled; the tick just sent may still be in
+// flight. It reports false if the proxy exited first.
+func (f *idleTicker) tick(exited <-chan struct{}) bool {
+	select {
+	case <-f.requested:
+	case <-exited:
+		return false
+	}
+	f.now = f.now.Add(f.interval)
+	select {
+	case f.ticks <- f.now:
+		return true
+	case <-exited:
+		return false
+	}
+}
+
+// tickN delivers n ticks and requires the proxy to still be running for each.
+func (f *idleTicker) tickN(t *testing.T, h *proxyHandle, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		require.True(t, f.tick(h.exited), "proxy exited before idle tick %d of %d", i+1, n)
+	}
+}
+
+// tickUntilExit delivers ticks until the proxy exits. Each tick waits for the
+// watcher to take the previous one, so the loop runs at the watcher's pace
+// while the proxy finishes closing the last client conn, then crosses the idle
+// window. The timer only bounds a proxy that never idles out.
+func (f *idleTicker) tickUntilExit(t *testing.T, h *proxyHandle, timeout time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			t.Fatalf("proxy still running %s after the idle ticks began", timeout)
+		default:
+		}
+		if !f.tick(h.exited) {
+			return
+		}
+	}
 }
 
 func (h *proxyHandle) Cancel() { h.cancel() }
@@ -66,11 +152,15 @@ func (h *proxyHandle) waitErr(t *testing.T, timeout time.Duration) error {
 
 func runProxy(t *testing.T, opts proxy.ProxyOpts) *proxyHandle {
 	t.Helper()
+	if opts.Stats == nil {
+		opts.Stats = &proxy.Stats{}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &proxyHandle{
 		cancel: cancel,
 		done:   make(chan error, 1),
 		exited: make(chan struct{}),
+		stats:  opts.Stats,
 	}
 	p := proxy.NewProxyServer(opts)
 	go func() {
@@ -90,17 +180,24 @@ func runProxy(t *testing.T, opts proxy.ProxyOpts) *proxyHandle {
 	return h
 }
 
-func waitListening(t *testing.T, root string, timeout time.Duration) {
+// waitListening blocks until the proxy has published its pidfile. The timer
+// only bounds a proxy that never gets there; it is not a poll interval.
+func (h *proxyHandle) waitListening(t *testing.T, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		pf, err := pidfile.Read(root, proxy.PIDFileName)
-		if err == nil && pf != nil {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-h.stats.Published():
+	case <-h.exited:
+		select {
+		case <-h.stats.Published():
 			return
+		default:
 		}
-		time.Sleep(10 * time.Millisecond)
+		t.Fatalf("proxy exited before publishing its pidfile")
+	case <-timer.C:
+		t.Fatalf("proxy pidfile not present within %s", timeout)
 	}
-	t.Fatalf("proxy pidfile not present within %s", timeout)
 }
 
 func assertNoPidFile(t *testing.T, root string) {
@@ -132,7 +229,7 @@ func TestProxy_HappyPath_Echo(t *testing.T) {
 		Server:      ts,
 		Stats:       stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	conn := dialProxy(t, port)
 	_, err := conn.Write([]byte("hello"))
@@ -187,7 +284,7 @@ func TestProxy_PortZeroPublishesActualDialablePort(t *testing.T) {
 		Port:    0,
 		Server:  ts,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	pf, err := pidfile.Read(root, proxy.PIDFileName)
 	require.NoError(t, err)
@@ -218,7 +315,7 @@ func TestProxy_PidFile_WrittenAndRemoved(t *testing.T) {
 	h := runProxy(t, proxy.ProxyOpts{
 		RootDir: root, Port: port, Server: ts,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	pf, err := pidfile.Read(root, proxy.PIDFileName)
 	require.NoError(t, err)
@@ -242,7 +339,7 @@ func TestProxy_PublishesVerifiableIdentity(t *testing.T) {
 		Port:    freeTCPPort(t),
 		Server:  ts,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	pf, err := pidfile.Read(root, proxy.PIDFileName)
 	require.NoError(t, err)
@@ -376,7 +473,7 @@ func TestProxy_BackendDialError(t *testing.T) {
 	})
 	// Wait for readiness Dial to succeed, then flip DialErr so subsequent
 	// proxied connections fail.
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 	ts.SetDialErr(errors.New("refused"))
 
 	for i := 0; i < 2; i++ {
@@ -419,7 +516,7 @@ func TestProxy_IdleTimeout_Fires(t *testing.T) {
 		IdleTimeout: 2 * time.Second,
 		Server:      ts, Stats: stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	// No client traffic — proxy should self-terminate on idle.
 	require.NoError(t, h.waitErr(t, 6*time.Second))
@@ -436,23 +533,44 @@ func TestProxy_IdleTimeout_BlockedByActiveConn(t *testing.T) {
 	t.Parallel()
 
 	ts := server.New()
-	ts.Handler = server.DiscardHandler
+	// The proxy counts a conn active before it dials the backend, so a byte
+	// reaching the backend means the client conn is already gating the
+	// watcher. (The readiness probe also dials the backend, but sends nothing.)
+	backendUp := make(chan struct{}, 1)
+	ts.Handler = func(c net.Conn) {
+		var b [1]byte
+		if _, err := io.ReadFull(c, b[:]); err == nil {
+			backendUp <- struct{}{}
+		}
+		server.DiscardHandler(c)
+	}
 	stats := &proxy.Stats{}
+	ticker := newIdleTicker()
 	port := freeTCPPort(t)
 	root := t.TempDir()
 
 	h := runProxy(t, proxy.ProxyOpts{
 		RootDir: root, Port: port,
 		IdleTimeout: 2 * time.Second,
+		IdleTicker:  ticker.newTicker,
 		Server:      ts, Stats: stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	conn := dialProxy(t, port)
 	defer conn.Close()
+	_, err := conn.Write([]byte{0})
+	require.NoError(t, err)
+	select {
+	case <-backendUp:
+	case <-time.After(ioTimeout):
+		t.Fatalf("client byte did not reach the backend within %s", ioTimeout)
+	}
 
-	// Wait past two full idle windows to confirm activeConns gates the watcher.
-	time.Sleep(4 * time.Second)
+	// Cross two full idle windows (one-second ticks) to confirm activeConns
+	// gates the watcher. The fifth tick returns only after the fourth has been
+	// handled.
+	ticker.tickN(t, h, 5)
 	assert.Equal(t, int64(0), stats.Snapshot().IdleTimeouts)
 
 	// Tear down cleanly.
@@ -468,18 +586,19 @@ func TestProxy_IdleTimeout_Never(t *testing.T) {
 
 	ts := server.New()
 	stats := &proxy.Stats{}
+	ticker := newIdleTicker()
 	port := freeTCPPort(t)
 	root := t.TempDir()
 
 	h := runProxy(t, proxy.ProxyOpts{
 		RootDir: root, Port: port,
 		IdleTimeout: proxy.IdleTimeoutNever,
+		IdleTicker:  ticker.newTicker,
 		Server:      ts, Stats: stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	// No client traffic and no timeout — proxy must stay up.
-	time.Sleep(3 * time.Second)
 	assert.Equal(t, int64(0), stats.Snapshot().IdleTimeouts)
 	pf, err := pidfile.Read(root, proxy.PIDFileName)
 	require.NoError(t, err)
@@ -488,6 +607,11 @@ func TestProxy_IdleTimeout_Never(t *testing.T) {
 
 	h.Cancel()
 	require.NoError(t, h.waitErr(t, shutdownWait))
+
+	// With no timeout the watcher has no clock to wait on: it never asked for
+	// a ticker, so nothing could have expired however long the proxy ran.
+	assert.False(t, ticker.wasRequested(), "IdleTimeoutNever must not start an idle ticker")
+	assert.Equal(t, int64(0), stats.Snapshot().IdleTimeouts)
 
 	assertNoPidFile(t, root)
 }
@@ -503,7 +627,7 @@ func TestProxy_ConcurrentConnections(t *testing.T) {
 	h := runProxy(t, proxy.ProxyOpts{
 		RootDir: root, Port: port, Server: ts, Stats: stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	const N = 5
 	const payloadLen = 4
@@ -587,7 +711,7 @@ func TestProxy_BidirectionalCopy_AsymmetricBytes(t *testing.T) {
 	h := runProxy(t, proxy.ProxyOpts{
 		RootDir: root, Port: port, Server: ts, Stats: stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	conn := dialProxy(t, port)
 	_, err := conn.Write([]byte("abc"))
@@ -624,7 +748,7 @@ func TestProxy_Cancel_DrainsInFlightConn(t *testing.T) {
 	h := runProxy(t, proxy.ProxyOpts{
 		RootDir: root, Port: port, Server: ts, Stats: stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
 	conn := dialProxy(t, port)
 	defer conn.Close()
@@ -661,7 +785,6 @@ func TestProxy_ConcurrentInstantiation_OnlyOneWinsLock(t *testing.T) {
 	port := freeTCPPort(t)
 
 	const N = 5
-	const settle = 500 * time.Millisecond
 
 	type result struct {
 		err   error
@@ -670,6 +793,11 @@ func TestProxy_ConcurrentInstantiation_OnlyOneWinsLock(t *testing.T) {
 
 	barrier := make(chan struct{})
 	results := make(chan result, N)
+	// Each proxy resolves once it has either returned (a loser) or published
+	// its pidfile (the winner). All N resolved means every loser tried the
+	// lock while the winner still held it.
+	var resolved sync.WaitGroup
+	resolved.Add(N)
 
 	for i := 0; i < N; i++ {
 		go func() {
@@ -684,12 +812,24 @@ func TestProxy_ConcurrentInstantiation_OnlyOneWinsLock(t *testing.T) {
 			<-barrier
 			go func() { done <- p.ListenAndServe(ctx) }()
 
-			// After settle: losers have already returned (lock probe fails in
-			// microseconds); the winner is blocked in the accept loop. Cancel
-			// everyone uniformly and collect their final return value.
-			time.Sleep(settle)
+			// Losers return ErrLockHeld; the winner publishes its pidfile and
+			// blocks in the accept loop.
+			var early error
+			returned := false
+			select {
+			case early = <-done:
+				returned = true
+			case <-stats.Published():
+			}
+			resolved.Done()
+			resolved.Wait()
+
+			// Cancel everyone uniformly and collect their final return value.
 			cancel()
-			results <- result{err: <-done, stats: stats}
+			if !returned {
+				early = <-done
+			}
+			results <- result{err: early, stats: stats}
 		}()
 	}
 
@@ -756,19 +896,23 @@ func TestProxy_TraceLog_LifecycleEvents(t *testing.T) {
 
 	ts := server.New()
 	stats := &proxy.Stats{}
+	ticker := newIdleTicker()
 	port := freeTCPPort(t)
 	root := t.TempDir()
 
 	const idle = 2 * time.Second
-	const tickSlack = 1200 * time.Millisecond
 	h := runProxy(t, proxy.ProxyOpts{
 		RootDir: root, Port: port,
 		IdleTimeout: idle,
+		IdleTicker:  ticker.newTicker,
 		Server:      ts, Stats: stats,
 	})
-	waitListening(t, root, listenWait)
+	h.waitListening(t, listenWait)
 
-	time.Sleep(tickSlack)
+	// With no client the first tick arms the watcher. The second returns once
+	// the first has been handled, so "armed" is logged before the client
+	// connects.
+	ticker.tickN(t, h, 2)
 
 	conn := dialProxy(t, port)
 	_, err := conn.Write([]byte("ping"))
@@ -778,11 +922,17 @@ func TestProxy_TraceLog_LifecycleEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ping", string(buf))
 
-	time.Sleep(tickSlack)
+	// The echo above proves the conn is active. The first tick here sees it
+	// and clears the watcher (or the tick before already did); the second
+	// returns once that has been handled, so the conn stays open until then.
+	ticker.tickN(t, h, 2)
 
 	require.NoError(t, conn.Close())
 
-	require.NoError(t, h.waitErr(t, 3*idle))
+	// Idle again: keep ticking until the watcher arms, expires and the proxy
+	// exits.
+	ticker.tickUntilExit(t, h, shutdownWait)
+	require.NoError(t, h.waitErr(t, shutdownWait))
 
 	body, err := os.ReadFile(filepath.Join(root, proxy.LogFileName))
 	require.NoError(t, err)

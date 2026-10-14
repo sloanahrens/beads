@@ -46,12 +46,18 @@ type ProxyOpts struct {
 	// against it; tests use Snapshot() to assert. Production code should
 	// leave this nil.
 	Stats *Stats
+	// IdleTicker is optional. It supplies the idle watcher's tick channel and
+	// the func that releases it; nil means time.NewTicker. Tests inject a
+	// manual ticker so idle windows are crossed without waiting on the wall
+	// clock. Production code should leave this nil.
+	IdleTicker func(interval time.Duration) (ticks <-chan time.Time, stop func())
 }
 
 type proxyServer struct {
 	rootDir     string
 	port        int
 	idleTimeout time.Duration
+	idleTicker  func(interval time.Duration) (<-chan time.Time, func())
 	server      server.DatabaseServer
 	stats       *Stats
 	stopEpoch   string
@@ -96,6 +102,7 @@ func NewProxyServer(opts ProxyOpts) *proxyServer {
 		rootDir:     opts.RootDir,
 		port:        opts.Port,
 		idleTimeout: opts.IdleTimeout,
+		idleTicker:  opts.IdleTicker,
 		server:      opts.Server,
 		stats:       opts.Stats,
 		stopEpoch:   opts.StopEpoch,
@@ -327,6 +334,7 @@ func (p *proxyServer) ListenAndServe(parentCtx context.Context) error {
 		_ = stopBackendBounded(p.server)
 		return fmt.Errorf("write pid file: %w", err)
 	}
+	p.stats.markPublished()
 	defer func() { _ = pidfile.Remove(p.rootDir, PIDFileName) }()
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -368,15 +376,22 @@ func (p *proxyServer) idleWatcher(ctx context.Context) error {
 		interval = idleWatcherMinInterval
 	}
 	p.tracef("idleWatcher start (timeout=%s, tick=%s)", p.idleTimeout, interval)
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
+	newTicker := p.idleTicker
+	if newTicker == nil {
+		newTicker = func(d time.Duration) (<-chan time.Time, func()) {
+			t := time.NewTicker(d)
+			return t.C, t.Stop
+		}
+	}
+	tick, stopTick := newTicker(interval)
+	defer stopTick()
 	var idleSince time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			p.tracef("idleWatcher exit (ctx done)")
 			return nil
-		case <-tick.C:
+		case now := <-tick:
 			if n := p.activeConns.Load(); n > 0 {
 				if !idleSince.IsZero() {
 					p.tracef("idleWatcher cleared (active=%d)", n)
@@ -386,10 +401,10 @@ func (p *proxyServer) idleWatcher(ctx context.Context) error {
 			}
 			if idleSince.IsZero() {
 				p.tracef("idleWatcher armed")
-				idleSince = time.Now()
+				idleSince = now
 				continue
 			}
-			if time.Since(idleSince) >= p.idleTimeout {
+			if now.Sub(idleSince) >= p.idleTimeout {
 				p.tracef("idleWatcher expired after %s, shutting down", p.idleTimeout)
 				p.stats.IncIdleTimeout()
 				return errIdleTimeout

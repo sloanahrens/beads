@@ -21,6 +21,38 @@ type Counters struct {
 type Stats struct {
 	mu       sync.Mutex
 	counters Counters
+
+	// published is closed by markPublished; created on first use so the zero
+	// Stats stays valid.
+	published       chan struct{}
+	publishedClosed bool
+}
+
+// Published returns a channel closed once the proxy has written proxy.pid,
+// the point at which it is serving. Tests wait on it instead of polling for
+// the pidfile.
+func (s *Stats) Published() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.published == nil {
+		s.published = make(chan struct{})
+	}
+	return s.published
+}
+
+func (s *Stats) markPublished() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.published == nil {
+		s.published = make(chan struct{})
+	}
+	if !s.publishedClosed {
+		s.publishedClosed = true
+		close(s.published)
+	}
 }
 
 func (s *Stats) Snapshot() Counters {
