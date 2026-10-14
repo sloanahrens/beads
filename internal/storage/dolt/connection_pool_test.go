@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,6 +54,12 @@ type mockDriver struct {
 	// failActiveBranch makes a SELECT active_branch() query fail, modeling a
 	// stale borrowed connection.
 	failActiveBranch atomic.Bool
+
+	// hold, when non-nil, parks every plain query inside the driver until the
+	// channel is closed (or the query's context ends). It must be set before
+	// any query runs. Pool tests use it to keep connections checked out while
+	// they observe back-pressure.
+	hold chan struct{}
 }
 
 // reportedBranch returns the branch active_branch() queries report.
@@ -117,8 +124,8 @@ func (c *mockConn) Begin() (driver.Tx, error) {
 }
 
 // QueryContext lets database/sql hand us the query without allocating a Stmt.
-// We simulate a small amount of work so the concurrency test can observe
-// SetMaxOpenConns back-pressure.
+// When the driver's hold channel is set, queries park until it is closed so
+// the concurrency test can observe SetMaxOpenConns back-pressure.
 func (c *mockConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if strings.Contains(query, "active_branch") {
 		c.drv.recordQuery(query)
@@ -127,7 +134,13 @@ func (c *mockConn) QueryContext(ctx context.Context, query string, args []driver
 		}
 		return &mockRows{val: c.drv.reportedBranch()}, nil
 	}
-	time.Sleep(20 * time.Millisecond)
+	if hold := c.drv.hold; hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return &mockRows{}, nil
 }
 
@@ -291,9 +304,10 @@ func TestPool_SequentialQueriesReuseSingleConnection(t *testing.T) {
 }
 
 // TestPool_ConcurrentQueriesRespectMaxOpen verifies SetMaxOpenConns actually
-// caps concurrent driver connections. The mockConn.QueryContext sleeps 20ms
-// so 8 parallel queries against a pool of 2 should open at most 2 driver
-// connections, no matter how aggressive the goroutines are.
+// caps concurrent driver connections. The mock driver parks every query until
+// the test has seen the surplus queries queue behind the pool, so 8 parallel
+// queries against a pool of 2 should open at most 2 driver connections, no
+// matter how aggressive the goroutines are.
 func TestPool_ConcurrentQueriesRespectMaxOpen(t *testing.T) {
 	t.Parallel()
 
@@ -301,11 +315,15 @@ func TestPool_ConcurrentQueriesRespectMaxOpen(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	const maxOpen = 2
+	const queries = 8
 	applyPoolLimits(db, &Config{MaxOpenConns: maxOpen, MaxIdleConns: maxOpen})
+
+	hold := make(chan struct{})
+	drv.hold = hold
 
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := 0; i < queries; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -321,7 +339,32 @@ func TestPool_ConcurrentQueriesRespectMaxOpen(t *testing.T) {
 			_ = rows.Close()
 		}()
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	// The pool is saturated once every query beyond the cap is queued behind
+	// it. A pool that ignored the cap would instead open extra connections,
+	// and queries that all failed would finish early; either ends the wait so
+	// the assertions below report it.
+	saturated := func() bool {
+		return db.Stats().WaitCount >= int64(queries-maxOpen) || drv.opens.Load() > int64(maxOpen)
+	}
+	finished := func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
+	for !saturated() && !finished() {
+		runtime.Gosched()
+	}
+	close(hold)
+	<-done
 
 	if opens := drv.opens.Load(); opens > int64(maxOpen) {
 		t.Errorf("driver Open() called %d times, want <= %d — SetMaxOpenConns cap should bound underlying connections", opens, maxOpen)

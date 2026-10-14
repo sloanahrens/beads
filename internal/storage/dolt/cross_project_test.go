@@ -27,9 +27,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -411,6 +411,11 @@ func TestCrossProject_ConcurrentWrites(t *testing.T) {
 	const numIssuesPerProject = 10
 	const maxRetries = 5
 
+	// Each project is its own database, so its writers conflict only with
+	// each other. A loser retries once the commit that beat it has landed.
+	gateA := testutil.NewCommitGate()
+	gateB := testutil.NewCommitGate()
+
 	var wg sync.WaitGroup
 	aIDs := make(chan string, numIssuesPerProject)
 	bIDs := make(chan string, numIssuesPerProject)
@@ -421,6 +426,7 @@ func TestCrossProject_ConcurrentWrites(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			for attempt := 0; attempt <= maxRetries; attempt++ {
+				landed := gateA.Next()
 				issue := &types.Issue{
 					Title:       fmt.Sprintf("A-concurrent-%d", n),
 					Description: fmt.Sprintf("Project A goroutine %d", n),
@@ -430,11 +436,15 @@ func TestCrossProject_ConcurrentWrites(t *testing.T) {
 				}
 				err := storeA.CreateIssue(ctx, issue, fmt.Sprintf("a-worker-%d", n))
 				if err == nil {
+					gateA.Landed()
 					aIDs <- issue.ID
 					return
 				}
 				if isSerializationError(err) && attempt < maxRetries {
-					time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+					select {
+					case <-landed:
+					case <-ctx.Done():
+					}
 					continue
 				}
 				errs <- fmt.Errorf("project A goroutine %d: %w", n, err)
@@ -448,6 +458,7 @@ func TestCrossProject_ConcurrentWrites(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			for attempt := 0; attempt <= maxRetries; attempt++ {
+				landed := gateB.Next()
 				issue := &types.Issue{
 					Title:       fmt.Sprintf("B-concurrent-%d", n),
 					Description: fmt.Sprintf("Project B goroutine %d", n),
@@ -457,11 +468,15 @@ func TestCrossProject_ConcurrentWrites(t *testing.T) {
 				}
 				err := storeB.CreateIssue(ctx, issue, fmt.Sprintf("b-worker-%d", n))
 				if err == nil {
+					gateB.Landed()
 					bIDs <- issue.ID
 					return
 				}
 				if isSerializationError(err) && attempt < maxRetries {
-					time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+					select {
+					case <-landed:
+					case <-ctx.Done():
+					}
 					continue
 				}
 				errs <- fmt.Errorf("project B goroutine %d: %w", n, err)

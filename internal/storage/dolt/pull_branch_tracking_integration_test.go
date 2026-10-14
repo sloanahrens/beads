@@ -3,13 +3,16 @@
 package dolt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -122,9 +125,48 @@ func findFreePort() (int, error) {
 	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
+// startupLog is an io.Writer for a dolt sql-server's output. It closes ready
+// once the server has logged that its SQL listener is accepting connections
+// and that the remotesapi http server is starting, then discards the rest.
+type startupLog struct {
+	mu      sync.Mutex
+	pending []string // markers not yet seen
+	buf     []byte
+	ready   chan struct{}
+}
+
+func newStartupLog(markers ...string) *startupLog {
+	return &startupLog{pending: markers, ready: make(chan struct{})}
+}
+
+func (l *startupLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.pending) == 0 {
+		return len(p), nil
+	}
+	l.buf = append(l.buf, p...)
+	unseen := l.pending[:0]
+	for _, m := range l.pending {
+		if !bytes.Contains(l.buf, []byte(m)) {
+			unseen = append(unseen, m)
+		}
+	}
+	l.pending = unseen
+	if len(l.pending) == 0 {
+		l.buf = nil
+		close(l.ready)
+	}
+	return len(p), nil
+}
+
 // startDoltServer starts a dolt sql-server subprocess on sqlPort with remotesapi
 // on remotesAPIPort and waits until both ports are accepting connections.
 // Returns a stop function that kills the server and waits for it to exit.
+//
+// Readiness comes from the server's own startup log rather than a timed poll of
+// the ports: the SQL listener logs "Server ready" and the remotesapi http
+// server logs "Starting http server" just before it binds.
 func startDoltServer(t *testing.T, dir string, sqlPort, remotesAPIPort int) func() {
 	t.Helper()
 
@@ -132,36 +174,53 @@ func startDoltServer(t *testing.T, dir string, sqlPort, remotesAPIPort int) func
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(sqlPort),
 		"--remotesapi-port", strconv.Itoa(remotesAPIPort),
-		"--loglevel", "error",
+		"--loglevel", "info",
 	)
 	cmd.Dir = dir
+	startup := newStartupLog("Server ready. Accepting connections.", "Starting http server")
+	cmd.Stdout = startup
+	cmd.Stderr = startup
 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start dolt sql-server: %v", err)
 	}
+	exited := make(chan struct{})
+	go func() {
+		cmd.Wait() //nolint:errcheck
+		close(exited)
+	}()
+	stop := func() {
+		cmd.Process.Kill() //nolint:errcheck
+		<-exited
+	}
 
-	// Wait for both the SQL port and the remotesapi port to accept connections.
+	select {
+	case <-startup.ready:
+	case <-exited:
+		t.Fatalf("dolt sql-server exited before it was ready (sql port %d, remotesapi port %d)", sqlPort, remotesAPIPort)
+	case <-time.After(30 * time.Second):
+		stop()
+		t.Fatalf("dolt sql-server did not log readiness within 30s (sql port %d, remotesapi port %d)", sqlPort, remotesAPIPort)
+	}
+
+	// The remotesapi http server binds right after it logs that it is
+	// starting, so dial until it accepts rather than assuming it already does.
 	for _, port := range []int{sqlPort, remotesAPIPort} {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		deadline := time.Now().Add(30 * time.Second)
 		for {
-			if time.Now().After(deadline) {
-				cmd.Process.Kill() //nolint:errcheck
-				t.Fatalf("dolt sql-server did not start on %s within 30s", addr)
-			}
 			conn, err := net.DialTimeout("tcp", addr, time.Second)
 			if err == nil {
 				conn.Close()
 				break
 			}
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-exited:
+				t.Fatalf("dolt sql-server exited before %s accepted connections: %v", addr, err)
+			default:
+				runtime.Gosched()
+			}
 		}
 	}
 
-	return func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill() //nolint:errcheck
-			cmd.Wait()         //nolint:errcheck
-		}
-	}
+	return stop
 }

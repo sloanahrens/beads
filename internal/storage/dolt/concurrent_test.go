@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/testutil"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -115,13 +116,16 @@ func TestConcurrentIssueCreation(t *testing.T) {
 
 	// Launch 10 goroutines to create issues simultaneously.
 	// Dolt serialization errors (1213) are expected under contention and
-	// should be retried — this mirrors correct production behavior.
+	// should be retried — this mirrors correct production behavior. A loser
+	// retries once the commit that beat it has landed, not after a guessed delay.
 	const maxRetries = 5
+	gate := testutil.NewCommitGate()
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
 			for attempt := 0; attempt <= maxRetries; attempt++ {
+				landed := gate.Next()
 				issue := &types.Issue{
 					Title:       fmt.Sprintf("Concurrent Issue %d", n),
 					Description: fmt.Sprintf("Created by goroutine %d", n),
@@ -131,11 +135,15 @@ func TestConcurrentIssueCreation(t *testing.T) {
 				}
 				err := store.CreateIssue(ctx, issue, fmt.Sprintf("worker-%d", n))
 				if err == nil {
+					gate.Landed()
 					createdIDs <- issue.ID
 					return
 				}
 				if isSerializationError(err) && attempt < maxRetries {
-					time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+					select {
+					case <-landed:
+					case <-ctx.Done():
+					}
 					continue
 				}
 				errors <- fmt.Errorf("goroutine %d: %w", n, err)
@@ -399,6 +407,13 @@ func TestLongTransactionBlocking(t *testing.T) {
 	longTxStarted := make(chan struct{})
 	longTxDone := make(chan struct{})
 
+	const numShortTx = 5
+	// shortsEntering reaches zero once every short transaction is about to
+	// call RunInTransaction, so the long transaction is held open exactly
+	// until the contenders have arrived.
+	var shortsEntering sync.WaitGroup
+	shortsEntering.Add(numShortTx)
+
 	// Start long transaction
 	wg.Add(1)
 	go func() {
@@ -409,8 +424,8 @@ func TestLongTransactionBlocking(t *testing.T) {
 			// Signal that long tx has started
 			close(longTxStarted)
 
-			// Hold the transaction open long enough for short txs to contend
-			time.Sleep(500 * time.Millisecond)
+			// Hold the transaction open until the short txs have arrived to contend
+			shortsEntering.Wait()
 
 			// Do some work
 			return tx.UpdateIssue(ctx, issue.ID, map[string]interface{}{
@@ -426,7 +441,6 @@ func TestLongTransactionBlocking(t *testing.T) {
 	<-longTxStarted
 
 	// Start multiple short transactions
-	const numShortTx = 5
 	for i := 0; i < numShortTx; i++ {
 		wg.Add(1)
 		go func(n int) {
@@ -435,6 +449,8 @@ func TestLongTransactionBlocking(t *testing.T) {
 			// Use a shorter timeout for short transactions
 			shortCtx, shortCancel := context.WithTimeout(ctx, 5*time.Second)
 			defer shortCancel()
+
+			shortsEntering.Done()
 
 			err := store.RunInTransaction(shortCtx, fmt.Sprintf("test: short transaction %d", n), func(tx storage.Transaction) error {
 				return tx.UpdateIssue(shortCtx, issue.ID, map[string]interface{}{
