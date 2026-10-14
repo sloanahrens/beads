@@ -35,16 +35,22 @@ func mustReadN(t *testing.T, c net.Conn, n int) []byte {
 	return buf
 }
 
-func eventually(t *testing.T, cond func() bool, msg string) {
+// waitDrained blocks until every backend handler has returned and its conn is
+// untracked. The timer only bounds a hung handler; it is not a poll interval.
+func waitDrained(t *testing.T, srv *server.TestDatabaseServerImpl) {
 	t.Helper()
-	deadline := time.Now().Add(ioDeadline)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	drained := make(chan struct{})
+	go func() {
+		srv.WaitHandlers()
+		close(drained)
+	}()
+	timer := time.NewTimer(ioDeadline)
+	defer timer.Stop()
+	select {
+	case <-drained:
+	case <-timer.C:
+		t.Fatalf("backend handlers did not drain within %s", ioDeadline)
 	}
-	t.Fatalf("eventually: %s", msg)
 }
 
 func TestNew_Defaults(t *testing.T) {
@@ -139,7 +145,7 @@ func TestDial_Echo(t *testing.T) {
 
 	require.NoError(t, conn.Close())
 
-	eventually(t, func() bool { return srv.Snapshot().OpenConns == 0 }, "OpenConns did not drain")
+	waitDrained(t, srv)
 
 	c = srv.Snapshot()
 	assert.Equal(t, int64(5), c.BytesIn)
@@ -173,7 +179,7 @@ func TestDial_DiscardHandler(t *testing.T) {
 	mustWrite(t, conn, "0123456789")
 	require.NoError(t, conn.Close())
 
-	eventually(t, func() bool { return srv.Snapshot().OpenConns == 0 }, "OpenConns did not drain")
+	waitDrained(t, srv)
 
 	c := srv.Snapshot()
 	assert.Equal(t, int64(10), c.BytesIn)
@@ -197,7 +203,7 @@ func TestDial_CustomHandler(t *testing.T) {
 	assert.Equal(t, payload, string(got))
 
 	require.NoError(t, conn.Close())
-	eventually(t, func() bool { return srv.Snapshot().OpenConns == 0 }, "OpenConns did not drain")
+	waitDrained(t, srv)
 
 	c := srv.Snapshot()
 	assert.Equal(t, int64(0), c.BytesIn)
@@ -225,7 +231,7 @@ func TestStop_ClosesOpenConns(t *testing.T) {
 	_, err = conn2.Read(make([]byte, 1))
 	assert.Error(t, err)
 
-	eventually(t, func() bool { return srv.Snapshot().OpenConns == 0 }, "OpenConns did not drain after Stop")
+	waitDrained(t, srv)
 }
 
 func TestSnapshot_IsValueCopy(t *testing.T) {
@@ -263,15 +269,15 @@ func TestDial_ConcurrentTracking(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, int64(0), dialErrs.Load())
 
-	eventually(t, func() bool {
-		c := srv.Snapshot()
-		return c.OpenConns == n && c.AcceptedConns == n
-	}, "did not reach n=10 open conns")
+	// Dial tracks the conn before it returns, so no waiting is needed.
+	c := srv.Snapshot()
+	require.Equal(t, int64(n), c.OpenConns, "did not reach n=10 open conns")
+	require.Equal(t, int64(n), c.AcceptedConns, "did not reach n=10 open conns")
 
 	for _, c := range conns {
 		_ = c.Close()
 	}
 
-	eventually(t, func() bool { return srv.Snapshot().OpenConns == 0 }, "OpenConns did not drain")
+	waitDrained(t, srv)
 	assert.Equal(t, int64(n), srv.Snapshot().AcceptedConns)
 }

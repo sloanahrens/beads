@@ -43,6 +43,7 @@ type TestDatabaseServerImpl struct {
 	counters  Counters
 	started   bool
 	openConns []net.Conn
+	handlers  sync.WaitGroup // one per Dial'd conn, done once the handler returned and the conn is untracked
 }
 
 var _ TestDatabaseServer = (*TestDatabaseServerImpl)(nil)
@@ -81,6 +82,12 @@ func (s *TestDatabaseServerImpl) Snapshot() Counters {
 	defer s.mu.Unlock()
 	return s.counters
 }
+
+// WaitHandlers blocks until every handler started by Dial has returned and its
+// conn is untracked (OpenConns back to its steady value). Tests call it after
+// closing conns instead of polling Snapshot. It never returns while a handler
+// is still blocked, so pair it with a timeout on the caller's side.
+func (s *TestDatabaseServerImpl) WaitHandlers() { s.handlers.Wait() }
 
 func (s *TestDatabaseServerImpl) ID(_ context.Context) string {
 	s.mu.Lock()
@@ -146,9 +153,11 @@ func (s *TestDatabaseServerImpl) Dial(_ context.Context) (net.Conn, error) {
 	s.openConns = append(s.openConns, wrapped)
 	s.counters.AcceptedConns++
 	s.counters.OpenConns++
+	s.handlers.Add(1)
 	s.mu.Unlock()
 
 	go func() {
+		defer s.handlers.Done()
 		defer s.untrackConn(wrapped)
 		s.Handler(wrapped)
 	}()

@@ -161,12 +161,13 @@ const forceStopHelperEnv = "BEADS_FORCE_STOP_HELPER"
 
 // TestForceStopHelperProcess is the body of the helper processes
 // startNamedForceStopHelper spawns: a re-exec of this test binary that idles
-// until the test (or its Cleanup) kills it.
+// until the test (or its Cleanup) kills it. It blocks reading stdin, whose
+// write end the parent holds, so it also exits if the parent dies first.
 func TestForceStopHelperProcess(t *testing.T) {
 	if os.Getenv(forceStopHelperEnv) != "1" {
 		t.Skip("helper-process body; only meaningful under startNamedForceStopHelper")
 	}
-	time.Sleep(30 * time.Second)
+	_, _ = io.Copy(io.Discard, os.Stdin)
 }
 
 // startNamedForceStopHelper starts a long-sleeping process whose executable
@@ -198,6 +199,10 @@ func startNamedForceStopHelper(t *testing.T, dir, name string) helperProcess {
 
 	cmd := exec.Command(executable, "-test.run=^TestForceStopHelperProcess$")
 	cmd.Env = append(os.Environ(), forceStopHelperEnv+"=1")
+	// The helper blocks until this pipe closes; cmd.Wait closes it after the
+	// helper is gone.
+	_, err = cmd.StdinPipe()
+	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
 	token, err := procid.Capture(cmd.Process.Pid)
 	require.NoError(t, err)
