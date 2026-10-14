@@ -327,17 +327,19 @@ func TestRunSync_KillsDescendants(t *testing.T) {
 		t.Fatalf("Invalid pid in pid file: %v", err)
 	}
 
-	// Check /proc/<pid> does not exist - retry a few times in case of timing
-	for i := 0; i < 10; i++ {
-		if _, err := os.Stat(filepath.Join("/proc", strconv.Itoa(pid))); err != nil {
-			// Process is gone, test passed
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	// RunSync returns only after cmd.Wait saw the hook's stdout pipe close,
+	// and the backgrounded sleep holds that pipe, so it has already exited.
+	// What /proc can still show is a zombie awaiting its reaper, which is not
+	// running; check once.
+	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return // reaped, test passed
 	}
-
-	// If we get here, the process is still running
-	t.Fatalf("Child process %d still exists after timeout", pid)
+	// Format: "pid (comm) S ..."; comm may contain spaces, so find the last ')'.
+	fields := strings.Fields(string(stat[strings.LastIndexByte(string(stat), ')')+1:]))
+	if len(fields) > 0 && fields[0] != "Z" && fields[0] != "X" {
+		t.Fatalf("Child process %d still running (state %s) after timeout", pid, fields[0])
+	}
 }
 
 func TestRunSync_HookFailure(t *testing.T) {
@@ -398,22 +400,15 @@ func TestRun_Async(t *testing.T) {
 	// Run should return immediately
 	runner.Run(EventClose, issue)
 
-	// Wait for the async hook to complete with retries.
-	// Use a generous timeout — under heavy CI load, goroutine scheduling
-	// plus exec startup can exceed several seconds.
-	var output []byte
-	var err error
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		output, err = os.ReadFile(outputFile)
-		if err == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+	// Wait blocks until the async hook finished, so the output is readable
+	// once. The budget only bounds a hung hook: under heavy CI load,
+	// goroutine scheduling plus exec startup can exceed several seconds.
+	if !runner.Wait(10 * time.Second) {
+		t.Fatal("async hook did not finish within Wait budget")
 	}
-
+	output, err := os.ReadFile(outputFile)
 	if err != nil {
-		t.Fatalf("Failed to read output file after retries: %v", err)
+		t.Fatalf("Failed to read output file after hook finished: %v", err)
 	}
 
 	expected := "async\n"

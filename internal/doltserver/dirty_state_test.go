@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/testutil/integration"
@@ -293,9 +292,8 @@ func TestDirtyState_OrphanNomsLock(t *testing.T) {
 		reg.Register(p)
 	}
 
-	// Give server time to initialize.
-	time.Sleep(1 * time.Second)
-
+	// Start returns only after the server answered its readiness probe, so
+	// Stop below runs against an initialized server.
 	if err := doltserver.Stop(beadsDir); err != nil {
 		t.Logf("Stop: %v", err)
 	}

@@ -2361,20 +2361,16 @@ func TestWaitForReady(t *testing.T) {
 		t.Fatalf("could not release ephemeral port: %v", err)
 	}
 
-	// Spawn a goroutine that delays binding the port. This simulates a
-	// "slow server" -- the TCP listener is not yet bound when waitForReady
-	// is first called. Once bound, each accepted connection is sent a fake
-	// MySQL handshake greeting so waitForReady's post-F7 "must be greeted,
-	// not just accepted" check is satisfiable.
-	bindAfter := 200 * time.Millisecond
-	listenerReady := make(chan net.Listener, 1)
-	go func() {
-		time.Sleep(bindAfter)
+	// bindServer binds the released port and sends each accepted connection
+	// a fake MySQL handshake greeting so waitForReady's post-F7 "must be
+	// greeted, not just accepted" check is satisfiable.
+	bindServer := func(t *testing.T) {
+		t.Helper()
 		ln, listenErr := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 		if listenErr != nil {
-			close(listenerReady)
-			return
+			t.Fatalf("could not bind port %d: %v", port, listenErr)
 		}
+		t.Cleanup(func() { _ = ln.Close() })
 		go func() {
 			for {
 				conn, acceptErr := ln.Accept()
@@ -2387,27 +2383,22 @@ func TestWaitForReady(t *testing.T) {
 				}(conn)
 			}
 		}()
-		listenerReady <- ln
-	}()
-	t.Cleanup(func() {
-		ln, ok := <-listenerReady
-		if ok && ln != nil {
-			_ = ln.Close()
-		}
-	})
+	}
 
 	// NOTE: subtests must run in declaration order (the default for
-	// non-parallel subtests). "times out" runs before the goroutine binds
-	// the port; "succeeds" runs after.
+	// non-parallel subtests). "times out" runs while nothing listens on the
+	// port; "succeeds" binds it first.
 	t.Run("times out when server not ready in time", func(t *testing.T) {
-		// 50ms is well under the 200ms bind delay, so this MUST time out.
+		// Nothing is bound to the port yet, so this MUST time out.
 		if err := waitForReady(host, port, 50*time.Millisecond); err == nil {
 			t.Errorf("expected timeout error, got nil")
 		}
 	})
 
 	t.Run("succeeds when server becomes ready in time", func(t *testing.T) {
-		// 2 seconds is well over the remaining bind delay; gives comfortable margin.
+		bindServer(t)
+		// The server is already greeting, so the first probe succeeds; the
+		// timeout only bounds a failure.
 		if err := waitForReady(host, port, 2*time.Second); err != nil {
 			t.Errorf("expected nil error, got: %v", err)
 		}

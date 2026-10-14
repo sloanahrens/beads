@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -85,19 +86,18 @@ func connectMySQL(t *testing.T, port int) *sql.DB {
 	return db
 }
 
-func waitForPortClosed(t *testing.T, port int, timeout time.Duration) {
+// assertPortClosed fails if port still accepts connections. Call it after
+// Stop returns: Stop waits for the server process to exit, which closes its
+// listener, so a single dial is enough.
+func assertPortClosed(t *testing.T, port int) {
 	t.Helper()
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err != nil {
-			return
-		}
-		_ = conn.Close()
-		time.Sleep(100 * time.Millisecond)
+	conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+	if err != nil {
+		return
 	}
-	t.Fatalf("server port %d still accepting connections after %v", port, timeout)
+	_ = conn.Close()
+	t.Fatalf("server port %d still accepting connections after Stop", port)
 }
 
 // TestLifecycle_StartStopCycle verifies the basic server lifecycle:
@@ -165,7 +165,7 @@ func TestLifecycle_StartStopCycle(t *testing.T) {
 
 	// Verify the server is no longer accepting connections. Detached child
 	// PIDs can remain briefly observable as zombies after the listener exits.
-	waitForPortClosed(t, state.Port, 5*time.Second)
+	assertPortClosed(t, state.Port)
 
 	// Verify state files removed.
 	if integration.FileExists(pidFile) {
@@ -360,8 +360,14 @@ func TestLifecycle_MultiRepoIsolation(t *testing.T) {
 	}
 	t.Logf("KillStaleServers(A) killed %d processes: %v", len(killed), killed)
 
-	// Verify B's server is still alive.
-	time.Sleep(500 * time.Millisecond)
+	// Verify B's server is still alive. KillStaleServers lists every PID it
+	// signalled, so B's absence from that list is the deterministic check;
+	// the liveness probe below could still see a just-killed process.
+	for _, pid := range killed {
+		if pid == stateB.PID {
+			t.Errorf("KillStaleServers(A) killed repo B's server (PID %d)", stateB.PID)
+		}
+	}
 	if !integration.IsProcessAlive(stateB.PID) {
 		t.Errorf("repo B's server (PID %d) was killed by KillStaleServers(A)", stateB.PID)
 	}
@@ -393,11 +399,13 @@ func TestLifecycle_ConcurrentIsRunningStart(t *testing.T) {
 	var startState atomic.Pointer[doltserver.State]
 	var startErr atomic.Pointer[error]
 	ready := make(chan struct{})
+	startDone := make(chan struct{})
 
 	// Goroutine 1: Start the server.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer close(startDone)
 		<-ready
 		state, err := doltserver.Start(beadsDir)
 		if err != nil {
@@ -415,7 +423,14 @@ func TestLifecycle_ConcurrentIsRunningStart(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-ready
-			for j := 0; j < 20; j++ {
+			// Keep checking until Start returns, so every reader overlaps the
+			// startup rather than a fixed-length window of it.
+			for done := false; !done; {
+				select {
+				case <-startDone:
+					done = true
+				default:
+				}
 				state, err := doltserver.IsRunning(beadsDir)
 				if err != nil {
 					isRunningErrors <- err
@@ -423,7 +438,7 @@ func TestLifecycle_ConcurrentIsRunningStart(t *testing.T) {
 				}
 				// state.Running can be true or false — either is valid during startup.
 				_ = state
-				time.Sleep(10 * time.Millisecond)
+				runtime.Gosched()
 			}
 		}()
 	}

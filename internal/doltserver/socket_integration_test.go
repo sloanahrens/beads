@@ -3,12 +3,15 @@
 package doltserver_test
 
 import (
+	"bytes"
 	"database/sql"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -17,6 +20,44 @@ import (
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/testutil/integration"
 )
+
+// doltReadyLogLine is what dolt sql-server logs, at info level, once it is
+// accepting connections.
+const doltReadyLogLine = "Server ready. Accepting connections."
+
+// logSignal is an io.Writer that closes seen the first time the written
+// stream contains marker, even when the marker is split across writes.
+type logSignal struct {
+	marker []byte
+	seen   chan struct{}
+
+	mu   sync.Mutex
+	tail []byte
+	done bool
+}
+
+func newLogSignal(marker string) *logSignal {
+	return &logSignal{marker: []byte(marker), seen: make(chan struct{})}
+}
+
+func (l *logSignal) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.done {
+		return len(p), nil
+	}
+	l.tail = append(l.tail, p...)
+	if bytes.Contains(l.tail, l.marker) {
+		l.done = true
+		close(l.seen)
+		l.tail = nil
+		return len(p), nil
+	}
+	if keep := len(l.marker) - 1; len(l.tail) > keep {
+		l.tail = l.tail[len(l.tail)-keep:]
+	}
+	return len(p), nil
+}
 
 // TestUnixSocket_ConnectAndQuery starts a Dolt server with --socket,
 // connects via the unix socket DSN, and executes SQL to verify end-to-end
@@ -52,7 +93,7 @@ func TestUnixSocket_ConnectAndQuery(t *testing.T) {
 	// listener port even when the test connects exclusively over the socket.
 	serverCmd := exec.Command(doltBin, "sql-server",
 		"--socket", socketPath,
-		"--loglevel=warning",
+		"--loglevel=info", // the readiness line is logged at info level
 		"-H", "127.0.0.1",
 		"-P", strconv.Itoa(tcpPort),
 	)
@@ -65,28 +106,36 @@ func TestUnixSocket_ConnectAndQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create log file: %v", err)
 	}
-	serverCmd.Stdout = lf
-	serverCmd.Stderr = lf
+	// The server announces readiness in its log once its listeners (TCP and
+	// socket) are up, so the test blocks on that line instead of polling.
+	ready := newLogSignal(doltReadyLogLine)
+	logOut := io.MultiWriter(lf, ready)
+	serverCmd.Stdout = logOut
+	serverCmd.Stderr = logOut
 
 	if err := serverCmd.Start(); err != nil {
 		lf.Close()
 		t.Fatalf("dolt sql-server start: %v", err)
 	}
+	exited := make(chan struct{})
+	go func() {
+		_ = serverCmd.Wait()
+		close(exited)
+	}()
 	t.Cleanup(func() {
 		_ = serverCmd.Process.Signal(syscall.SIGTERM)
-		_ = serverCmd.Wait()
+		<-exited
 		lf.Close()
 	})
 
-	// Wait for the socket file to become connectable.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	select {
+	case <-ready.seen:
+	case <-exited:
+		logs, _ := os.ReadFile(logFile)
+		t.Fatalf("dolt sql-server exited before it was ready\nServer logs:\n%s", logs)
+	case <-time.After(30 * time.Second):
+		logs, _ := os.ReadFile(logFile)
+		t.Fatalf("dolt sql-server never logged readiness\nServer logs:\n%s", logs)
 	}
 
 	// Connect via unix socket DSN.
@@ -102,13 +151,6 @@ func TestUnixSocket_ConnectAndQuery(t *testing.T) {
 	defer db.Close()
 
 	// Verify connectivity.
-	deadline = time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := db.Ping(); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 	if err := db.Ping(); err != nil {
 		logs, _ := os.ReadFile(logFile)
 		t.Fatalf("db.Ping via socket failed: %v\nServer logs:\n%s", err, logs)
