@@ -632,8 +632,8 @@ func TestFilteredPushUsesDedicatedLongTimeoutConnection(t *testing.T) {
 		errCh <- store.filteredPushToPeer(ctx, "nonexistent-peer", []string{"wisp"})
 	}()
 
-	waitForFilteredStagingCommit(t, ctx, observer, errCh, waiterID, blockerID)
 	waitForPoolWait(t, ctx, store.db, initialWaitCount)
+	assertFilteredStagingCommit(t, ctx, observer, errCh, waiterID, blockerID)
 	if err := held.Close(); err != nil {
 		t.Fatalf("release shared pool: %v", err)
 	}
@@ -735,15 +735,9 @@ func TestFilteredPushCleanupSurvivesLostBranchCreateResponse(t *testing.T) {
 		t.Fatal("filtered push did not issue staging branch creation")
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
-	var stagingBranches []string
-	for time.Now().Before(deadline) {
-		stagingBranches = listFederationStagingBranches(t, ctx, observer)
-		if len(stagingBranches) == 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// responseBlocked closes only after the server's reply to DOLT_BRANCH
+	// arrived, so the branch already exists server-side.
+	stagingBranches := listFederationStagingBranches(t, ctx, observer)
 	if len(stagingBranches) != 1 {
 		t.Fatalf("server-side staging branches = %v, want one before response loss", stagingBranches)
 	}
@@ -912,8 +906,8 @@ func TestFilteredPushCleanupDeletesStagingAfterRestoreFailure(t *testing.T) {
 		errCh <- store.filteredPushToPeer(pushCtx, "nonexistent-peer", []string{"wisp"})
 	}()
 
-	waitForFilteredStagingCommit(t, ctx, observer, errCh, waiterID, blockerID)
 	waitForPoolWait(t, ctx, store.db, initialWaitCount)
+	assertFilteredStagingCommit(t, ctx, observer, errCh, waiterID, blockerID)
 	if err := schema.DrainCall(ctx, observer,
 		"CALL DOLT_BRANCH('-Df', ?)", sourceBranch); err != nil {
 		t.Fatalf("delete disposable source branch: %v", err)
@@ -1077,45 +1071,41 @@ func versionWispTablesForFilteredPush(t *testing.T, ctx context.Context, store *
 	}
 }
 
-func waitForFilteredStagingCommit(t *testing.T, ctx context.Context, observer *sql.DB, errCh <-chan error, waiterID, blockerID string) {
+// assertFilteredStagingCommit checks the staging branch's durable state. Call
+// it after waitForPoolWait: the push blocks on the exhausted shared pool only
+// once staging is committed, so the state is already observable and needs no
+// polling.
+func assertFilteredStagingCommit(t *testing.T, ctx context.Context, observer *sql.DB, errCh <-chan error, waiterID, blockerID string) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-errCh:
-			t.Fatalf("filtered push returned before publishing staging commit: %v", err)
-		default:
-		}
-		branches := listFederationStagingBranches(t, ctx, observer)
-		if len(branches) != 1 {
-			lastErr = fmt.Errorf("found staging branches %v, want exactly one", branches)
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		stagingBranch := branches[0]
-		if err := issueops.ValidateRef(stagingBranch); err != nil {
-			t.Fatalf("generated staging branch %q is invalid: %v", stagingBranch, err)
-		}
-		//nolint:gosec // stagingBranch is generated internally and validated as a Dolt ref above.
-		blockerQuery := fmt.Sprintf("SELECT COUNT(*) FROM issues AS OF '%s' WHERE id = ?", stagingBranch)
-		//nolint:gosec // stagingBranch is generated internally and validated as a Dolt ref above.
-		blockedQuery := fmt.Sprintf("SELECT is_blocked FROM issues AS OF '%s' WHERE id = ?", stagingBranch)
-		//nolint:gosec // stagingBranch is generated internally and validated as a Dolt ref above.
-		commitQuery := fmt.Sprintf("SELECT COUNT(*) FROM dolt_log('%s') WHERE message = ?", stagingBranch)
-		var blockerCount, commitCount int
-		var blocked bool
-		blockerErr := observer.QueryRowContext(ctx, blockerQuery, blockerID).Scan(&blockerCount)
-		blockedErr := observer.QueryRowContext(ctx, blockedQuery, waiterID).Scan(&blocked)
-		commitErr := observer.QueryRowContext(ctx, commitQuery,
-			"federation: exclude private issue types").Scan(&commitCount)
-		lastErr = errors.Join(blockerErr, blockedErr, commitErr)
-		if lastErr == nil && blockerCount == 0 && !blocked && commitCount == 1 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case err := <-errCh:
+		t.Fatalf("filtered push returned before publishing staging commit: %v", err)
+	default:
 	}
-	t.Fatalf("filtered staging commit was not durably observable: %v", lastErr)
+	branches := listFederationStagingBranches(t, ctx, observer)
+	if len(branches) != 1 {
+		t.Fatalf("filtered staging commit was not durably observable: found staging branches %v, want exactly one", branches)
+	}
+	stagingBranch := branches[0]
+	if err := issueops.ValidateRef(stagingBranch); err != nil {
+		t.Fatalf("generated staging branch %q is invalid: %v", stagingBranch, err)
+	}
+	//nolint:gosec // stagingBranch is generated internally and validated as a Dolt ref above.
+	blockerQuery := fmt.Sprintf("SELECT COUNT(*) FROM issues AS OF '%s' WHERE id = ?", stagingBranch)
+	//nolint:gosec // stagingBranch is generated internally and validated as a Dolt ref above.
+	blockedQuery := fmt.Sprintf("SELECT is_blocked FROM issues AS OF '%s' WHERE id = ?", stagingBranch)
+	//nolint:gosec // stagingBranch is generated internally and validated as a Dolt ref above.
+	commitQuery := fmt.Sprintf("SELECT COUNT(*) FROM dolt_log('%s') WHERE message = ?", stagingBranch)
+	var blockerCount, commitCount int
+	var blocked bool
+	blockerErr := observer.QueryRowContext(ctx, blockerQuery, blockerID).Scan(&blockerCount)
+	blockedErr := observer.QueryRowContext(ctx, blockedQuery, waiterID).Scan(&blocked)
+	commitErr := observer.QueryRowContext(ctx, commitQuery,
+		"federation: exclude private issue types").Scan(&commitCount)
+	if err := errors.Join(blockerErr, blockedErr, commitErr); err != nil || blockerCount != 0 || blocked || commitCount != 1 {
+		t.Fatalf("filtered staging commit was not durably observable: err=%v blockers=%d blocked=%v commits=%d",
+			err, blockerCount, blocked, commitCount)
+	}
 }
 
 func waitForPoolWait(t *testing.T, ctx context.Context, db *sql.DB, initialWaitCount int64) {
@@ -1223,7 +1213,13 @@ func (c *federationBranchResponseLossConn) Read(p []byte) (int, error) {
 	if !c.blockResponse.Load() {
 		return c.Conn.Read(p)
 	}
-	c.dialer.blockedOnce.Do(func() { close(c.dialer.responseBlocked) })
+	// Wait for the server's reply before signalling: Dolt answers only after
+	// the branch exists, so the signal means "created, response withheld".
+	// The bytes are discarded; the caller sees the connection drop instead.
+	c.dialer.blockedOnce.Do(func() {
+		_, _ = c.Conn.Read(p)
+		close(c.dialer.responseBlocked)
+	})
 	<-c.dialer.dropResponse
 	_ = c.Conn.Close()
 	return 0, net.ErrClosed

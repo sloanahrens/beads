@@ -88,7 +88,8 @@ func TestHelperMultiStore(t *testing.T) {
 				break
 			}
 			if isSerializationError(err) {
-				time.Sleep(time.Duration(50*(retry+1)) * time.Millisecond)
+				// The server reports the conflict after the competing
+				// statement finished, so the next attempt sees its result.
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "ERROR: INSERT %s: %v\n", issueID, err)
@@ -220,37 +221,38 @@ func TestMultiStoreConcurrent_InProcess(t *testing.T) {
 
 	// Concurrent read while one pool writes.
 	var readErrors atomic.Int32
-	eg2, egCtx2 := errgroup.WithContext(ctx)
 
-	// Writer: updates existing issues.
-	eg2.Go(func() error {
-		for i := 0; i < 10; i++ {
+	// Ten rounds, each with one update racing two reads per reader pool. The
+	// round barrier keeps writes and reads overlapping without pacing sleeps.
+	for round := 0; round < 10; round++ {
+		eg2, egCtx2 := errgroup.WithContext(ctx)
+
+		// Writer: updates existing issues.
+		eg2.Go(func() error {
 			_, _ = dbs[0].ExecContext(egCtx2,
 				"UPDATE issues SET priority = ? WHERE id LIKE 'ms-0-%' LIMIT 1",
-				i%5,
+				round%5,
 			)
-			time.Sleep(10 * time.Millisecond)
-		}
-		return nil
-	})
-
-	// Readers: concurrent reads.
-	for r := 1; r < numStores; r++ {
-		db := dbs[r]
-		eg2.Go(func() error {
-			for i := 0; i < 20; i++ {
-				var c int
-				if err := db.QueryRowContext(egCtx2, "SELECT COUNT(*) FROM issues").Scan(&c); err != nil {
-					readErrors.Add(1)
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
 			return nil
 		})
-	}
 
-	if err := eg2.Wait(); err != nil {
-		t.Fatalf("read/write mix: %v", err)
+		// Readers: concurrent reads.
+		for r := 1; r < numStores; r++ {
+			db := dbs[r]
+			eg2.Go(func() error {
+				for i := 0; i < 2; i++ {
+					var c int
+					if err := db.QueryRowContext(egCtx2, "SELECT COUNT(*) FROM issues").Scan(&c); err != nil {
+						readErrors.Add(1)
+					}
+				}
+				return nil
+			})
+		}
+
+		if err := eg2.Wait(); err != nil {
+			t.Fatalf("read/write mix: %v", err)
+		}
 	}
 	if readErrors.Load() > 0 {
 		t.Logf("Warning: %d read errors during concurrent writes (may be expected under contention)", readErrors.Load())
@@ -409,21 +411,26 @@ func TestMultiStoreConcurrent_CloseIsolation(t *testing.T) {
 	// Start a query on db2.
 	var wg sync.WaitGroup
 	wg.Add(1)
-	db2Ready := make(chan struct{})
+	db2Active := make(chan struct{})
+	db1Closed := make(chan struct{})
 	go func() {
 		defer wg.Done()
-		close(db2Ready)
 		for i := 0; i < 10; i++ {
+			if i == 5 {
+				// Half the queries ran before db1 closes; the rest run after.
+				<-db1Closed
+			}
 			_, _ = db2.ExecContext(ctx, "SELECT 1")
-			time.Sleep(20 * time.Millisecond)
+			if i == 0 {
+				close(db2Active)
+			}
 		}
 	}()
 
-	<-db2Ready
-	time.Sleep(50 * time.Millisecond)
-
-	// Close db1 while db2 is active.
+	// Close db1 once db2 has served a query, with more still to come.
+	<-db2Active
 	db1.Close()
+	close(db1Closed)
 
 	// db2 should continue working without errors.
 	wg.Wait()
