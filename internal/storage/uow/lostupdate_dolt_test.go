@@ -123,6 +123,10 @@ func TestUOW_ConcurrentMergeOps_NoLostUpdate(t *testing.T) {
 	// can prove the commit-time conflict path really fired.
 	var conflicts atomic.Int64
 
+	// gate lets a writer that lost a conflict redo its attempt once the commit
+	// that beat it has landed, instead of sleeping a guessed backoff.
+	gate := testutil.NewCommitGate()
+
 	// writeOp mirrors applyUpdateProxiedOne: fresh UOW per attempt, merge ops
 	// in spec.Fields, one commit, whole-attempt redo on serialization failure.
 	//
@@ -141,6 +145,7 @@ func TestUOW_ConcurrentMergeOps_NoLostUpdate(t *testing.T) {
 		defer syncOnce() // never leave barrier peers hanging on an early error
 		const maxAttempts = 40
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			landed := gate.Next()
 			err := func() error {
 				uw, err := provider.NewUOW(ctx)
 				if err != nil {
@@ -155,11 +160,15 @@ func TestUOW_ConcurrentMergeOps_NoLostUpdate(t *testing.T) {
 				return uw.Commit(ctx, "write "+label)
 			}()
 			if err == nil {
+				gate.Landed()
 				return nil
 			}
 			if IsSerializationError(err) {
 				conflicts.Add(1)
-				time.Sleep(time.Duration(attempt) * 10 * time.Millisecond)
+				select {
+				case <-landed:
+				case <-ctx.Done():
+				}
 				continue
 			}
 			if issueops.IsNothingToCommitError(err) {
