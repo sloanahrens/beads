@@ -1862,6 +1862,7 @@ type IssueFilter struct {
 	LabelPattern  string   // Glob pattern for label matching (e.g., "tech-*")
 	LabelRegex    string   // Regex pattern for label matching (e.g., "tech-(debt|legacy)")
 	TitleSearch   string
+	QueryPhrase   bool     // SearchIssues query is one adjacent title phrase, not AND-ed words
 	IDs           []string // Filter by specific issue IDs
 	IDPrefix      string   // Filter by ID prefix (e.g., "bd-" to match "bd-abc123")
 	SpecIDPrefix  string   // Filter by spec_id prefix

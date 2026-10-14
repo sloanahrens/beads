@@ -40,6 +40,7 @@ func RunAudit_search_counts_stats(t *testing.T, f Factory) {
 	t.Run("SearchSortNullsDirectional", func(t *testing.T) { testAuditSearchSortNullsDirectional(t, f) })
 	t.Run("SearchSortByIDCompleteSet", func(t *testing.T) { testAuditSearchSortByIDCompleteSet(t, f) })
 	t.Run("SearchTextIDBranchExternalRef", func(t *testing.T) { testAuditSearchTextIDBranchExternalRef(t, f) })
+	t.Run("SearchTextWordsAnyOrder", func(t *testing.T) { testAuditSearchTextWordsAnyOrder(t, f) })
 	t.Run("SearchIDPrefixCaseSensitive", func(t *testing.T) { testAuditSearchIDPrefixCaseSensitive(t, f) })
 	t.Run("SearchParentDescendantCaseSensitive", func(t *testing.T) { testAuditSearchParentDescendantCaseSensitive(t, f) })
 	t.Run("StaleStatusOverride", func(t *testing.T) { testAuditStaleStatusOverride(t, f) })
@@ -573,6 +574,53 @@ func testAuditSearchTextIDBranchExternalRef(t *testing.T, f Factory) {
 	if ids := issueIDs(got); !reflect.DeepEqual(ids, []string{"test-9"}) {
 		t.Errorf("search 'test-9' = %v, want [test-9]", ids)
 	}
+}
+
+// The text query is a set of words, not one phrase: every word must appear in
+// the title, description or notes, in any order. QueryPhrase restores the single
+// adjacent-title-phrase match, and literal %, _ and \ never act as wildcards.
+func testAuditSearchTextWordsAnyOrder(t *testing.T, f Factory) {
+	s := f(t)
+	c := ctx()
+	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-1", Title: "Overrun guard for restart", Description: "nudge the session", Notes: "seen twice"}), "a"))
+	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-2", Title: "Unrelated", Description: "restart only"}), "a"))
+	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-3", Title: "Rate 100% done_now", Description: `path a\b`}), "a"))
+	must(t, s.CreateIssue(c, withDefaults(&types.Issue{ID: "test-4", Title: "Rate 1000 doneXnow"}), "a"))
+
+	search := func(query string, phrase bool) []string {
+		t.Helper()
+		got, err := s.SearchIssues(c, query, types.IssueFilter{QueryPhrase: phrase})
+		must(t, err)
+		return issueIDs(got)
+	}
+	check := func(name, query string, phrase bool, want ...string) {
+		t.Helper()
+		got := search(query, phrase)
+		if len(got) == 0 && len(want) == 0 {
+			return
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: search %q (phrase=%v) = %v, want %v", name, query, phrase, got, want)
+		}
+	}
+
+	check("non-adjacent title words", "guard overrun", false, "test-1")
+	check("title+description+notes words", "restart nudge seen", false, "test-1")
+	check("word only in description", "nudge", false, "test-1")
+	check("word only in notes", "twice", false, "test-1")
+	check("all words required", "restart missing", false)
+	check("single word unchanged", "restart", false, "test-1", "test-2")
+	check("case-insensitive", "GUARD Overrun", false, "test-1")
+
+	check("phrase adjacent", "overrun guard", true, "test-1")
+	check("phrase non-adjacent", "guard overrun", true)
+	check("phrase is title-only", "nudge", true)
+
+	check("literal percent", "100%", false, "test-3")
+	check("literal underscore", "done_now", false, "test-3")
+	check("literal backslash", `a\b`, false, "test-3")
+	check("percent is not a wildcard", "1%0", false)
+	check("phrase literal percent", "100%", true, "test-3")
 }
 
 // LIKE over raw-cased operands is case-sensitive on both implementations: Dolt uses

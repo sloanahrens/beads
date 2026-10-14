@@ -71,9 +71,10 @@ func TestBuildIssueFilterClauses_QueryAsIssueID(t *testing.T) {
 	if len(clauses) != 1 {
 		t.Fatalf("expected 1 clause, got %d", len(clauses))
 	}
-	// ID-like query produces 4 args: exact match, prefix, title LIKE, external_ref LIKE
-	if len(args) != 4 {
-		t.Errorf("expected 4 args for ID-like query, got %d: %v", len(args), args)
+	// ID-like query produces 6 args: exact match, prefix, then title,
+	// description, notes and external_ref LIKE.
+	if len(args) != 6 {
+		t.Errorf("expected 6 args for ID-like query, got %d: %v", len(args), args)
 	}
 }
 
@@ -87,9 +88,29 @@ func TestBuildIssueFilterClauses_QueryAsText(t *testing.T) {
 	if len(clauses) != 1 {
 		t.Fatalf("expected 1 clause, got %d", len(clauses))
 	}
-	// Text query produces 2 args: title LIKE, id LIKE
+	// Each of the 3 words ANDs one term of 4 args: title, description, notes
+	// and id LIKE.
+	if len(args) != 12 {
+		t.Errorf("expected 12 args for 3-word text query, got %d: %v", len(args), args)
+	}
+}
+
+func TestBuildIssueFilterClauses_QueryPhrase(t *testing.T) {
+	t.Parallel()
+
+	clauses, args, err := BuildIssueFilterClauses("fix the bug", types.IssueFilter{QueryPhrase: true}, IssuesFilterTables)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(clauses) != 1 {
+		t.Fatalf("expected 1 clause, got %d", len(clauses))
+	}
+	// The phrase stays one adjacent title match plus the id match.
 	if len(args) != 2 {
-		t.Errorf("expected 2 args for text query, got %d: %v", len(args), args)
+		t.Errorf("expected 2 args for phrase query, got %d: %v", len(args), args)
+	}
+	if args[0] != "%fix the bug%" {
+		t.Errorf("phrase arg = %v, want %%fix the bug%%", args[0])
 	}
 }
 
@@ -561,9 +582,9 @@ func TestBuildIssueFilterClauses_CombinedFilters(t *testing.T) {
 	if len(clauses) != 6 {
 		t.Errorf("expected 6 clauses for combined filter, got %d: %v", len(clauses), clauses)
 	}
-	// query text(2) + status(1) + priority(1) + label(1) + created_after(1) = 6
-	if len(args) != 6 {
-		t.Errorf("expected 6 args, got %d", len(args))
+	// query text (2 words x 4) + status(1) + priority(1) + label(1) + created_after(1) = 12
+	if len(args) != 12 {
+		t.Errorf("expected 12 args, got %d", len(args))
 	}
 }
 

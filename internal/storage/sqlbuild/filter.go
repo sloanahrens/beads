@@ -66,15 +66,9 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 	var args []any
 
 	if query != "" {
-		lowerQuery := strings.ToLower(query)
-		if LooksLikeIssueID(query) {
-			whereClauses = append(whereClauses, "(id = ? OR id LIKE ? OR LOWER(title) LIKE ? OR LOWER(external_ref) LIKE ?)")
-			args = append(args, lowerQuery, lowerQuery+"%", "%"+lowerQuery+"%", "%"+lowerQuery+"%")
-		} else {
-			whereClauses = append(whereClauses, "(LOWER(title) LIKE ? OR id LIKE ?)")
-			pattern := "%" + lowerQuery + "%"
-			args = append(args, pattern, pattern)
-		}
+		clause, queryArgs := buildQueryClause(query, filter.QueryPhrase)
+		whereClauses = append(whereClauses, clause)
+		args = append(args, queryArgs...)
 	}
 
 	if filter.TitleSearch != "" {
@@ -368,6 +362,84 @@ func AppendMetadataClauses(where []string, args []any, hasKey string, fields map
 		}
 	}
 	return where, args, nil
+}
+
+// buildQueryClause renders the free-text query as one WHERE clause.
+//
+// By default the query is split on whitespace and every word must match
+// (AND); a word matches when it is a case-insensitive substring of the title,
+// description or notes, or of the id (see wordClause). With phrase set the
+// whole query is a single adjacent phrase in the title.
+//
+// Every LIKE operand is a bound parameter, escaped with escapeLikeWord and
+// paired with ESCAPE '|' (the escape character globToLikePattern uses), so a
+// literal %, _ or \ in the query never acts as a wildcard.
+func buildQueryClause(query string, phrase bool) (string, []any) {
+	words := strings.Fields(query)
+	if phrase || len(words) == 0 {
+		return wordClause(query, false)
+	}
+	clauses := make([]string, 0, len(words))
+	var args []any
+	for _, w := range words {
+		c, a := wordClause(w, true)
+		clauses = append(clauses, c)
+		args = append(args, a...)
+	}
+	if len(clauses) == 1 {
+		return clauses[0], args
+	}
+	return "(" + strings.Join(clauses, " AND ") + ")", args
+}
+
+// wordClause renders the match for one word, or for the whole phrase when
+// wide is false. An issue-ID-shaped text keeps the exact-id, id-prefix and
+// external_ref matches; any other text matches the id by substring. wide adds
+// description and notes to the title match; the phrase form stays title-only,
+// which is the behavior --phrase promises.
+func wordClause(text string, wide bool) (string, []any) {
+	lower := strings.ToLower(text)
+	escaped := escapeLikeWord(lower)
+	pattern := "%" + escaped + "%"
+	idLike := LooksLikeIssueID(text)
+
+	var cols []string
+	var args []any
+	if idLike {
+		cols = append(cols, "id = ?", "id LIKE ? ESCAPE '|'")
+		args = append(args, lower, escaped+"%")
+	}
+	cols = append(cols, "LOWER(title) LIKE ? ESCAPE '|'")
+	args = append(args, pattern)
+	if wide {
+		cols = append(cols, "LOWER(description) LIKE ? ESCAPE '|'", "LOWER(notes) LIKE ? ESCAPE '|'")
+		args = append(args, pattern, pattern)
+	}
+	if idLike {
+		cols = append(cols, "LOWER(external_ref) LIKE ? ESCAPE '|'")
+	} else {
+		cols = append(cols, "id LIKE ? ESCAPE '|'")
+	}
+	args = append(args, pattern)
+	return "(" + strings.Join(cols, " OR ") + ")", args
+}
+
+// escapeLikeWord escapes the LIKE metacharacters % and _ and the '|' escape
+// character so s matches literally under ESCAPE '|'. A backslash needs no
+// escaping: with an explicit ESCAPE character it is an ordinary byte.
+func escapeLikeWord(s string) string {
+	if !strings.ContainsAny(s, "%_|") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	for _, c := range s {
+		if c == '%' || c == '_' || c == '|' {
+			b.WriteByte('|')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }
 
 // globToLikePattern converts a shell-style glob (* and ?) to a SQL LIKE
