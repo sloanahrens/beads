@@ -42,6 +42,25 @@ func leaseTTL(ctx context.Context) time.Duration {
 	return DefaultLeaseTTL
 }
 
+// clockContextKey overrides the wall clock used to stamp and judge leases.
+type clockContextKey struct{}
+
+// WithClock returns a context whose claims, heartbeats and reclaim cutoffs read
+// the time from now instead of time.Now. Tests use it to step past a lease
+// expiry or a DATETIME tick without waiting; unset in normal use.
+func WithClock(ctx context.Context, now func() time.Time) context.Context {
+	return context.WithValue(ctx, clockContextKey{}, now)
+}
+
+// Now returns the current UTC time for lease bookkeeping: the clock installed
+// by WithClock, else time.Now.
+func Now(ctx context.Context) time.Time {
+	if now, ok := ctx.Value(clockContextKey{}).(func() time.Time); ok && now != nil {
+		return now().UTC()
+	}
+	return time.Now().UTC()
+}
+
 // freshRowLock returns a random non-zero int64 for the row_lock cell.
 //
 // row_lock is the keystone of dead-worker recovery on Dolt. Dolt has no real
@@ -300,7 +319,7 @@ func RestoreLeaseOnImportInTx(ctx context.Context, tx DBTX, issue *types.Issue, 
 //
 //nolint:gosec // G201: table names come from WispTableRouting (hardcoded constants)
 func HeartbeatIssueInTx(ctx context.Context, tx DBTX, id, actor string) error {
-	now := time.Now().UTC()
+	now := Now(ctx)
 	// granted_node is backfilled, never overwritten: a lease row whose
 	// provenance is unknown (granted before ignored migration 0016, or before
 	// this replica was named) is being kept alive through THIS node's store,

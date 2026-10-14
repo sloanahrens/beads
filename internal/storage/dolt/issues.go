@@ -466,7 +466,7 @@ func (s *DoltStore) HeartbeatIssue(ctx context.Context, id, actor string) error 
 // reclaim rewrites row_lock so it conflicts with any racing heartbeat/close on
 // the same row; withRetryTx replays the loser. Returns the reclaimed issues.
 func (s *DoltStore) ReclaimExpiredLeases(ctx context.Context, olderThan time.Duration, filter types.ReclaimFilter, actor string) ([]types.ReclaimedLease, error) {
-	cutoff := time.Now().UTC().Add(-olderThan)
+	cutoff := issueops.Now(ctx).Add(-olderThan)
 	var reclaimed []types.ReclaimedLease
 	err := s.withRetryTx(ctx, func(tx *sql.Tx) error {
 		var err error
