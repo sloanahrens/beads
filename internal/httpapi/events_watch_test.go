@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1122,7 +1123,9 @@ func TestStreamingRoutesCarryNoRequestDeadline(t *testing.T) {
 
 // waitFor polls cond until it holds, and fails the case rather than hanging
 // when it does not. Everything it waits on here happens in milliseconds; the
-// budget is for a loaded machine, not for the behavior.
+// budget is for a loaded machine, not for the behavior. Between polls it yields
+// the processor so the goroutines being waited on run, rather than idling on
+// the wall clock.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -1130,7 +1133,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		if cond() {
 			return
 		}
-		time.Sleep(time.Millisecond)
+		runtime.Gosched()
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }

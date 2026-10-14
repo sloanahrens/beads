@@ -32,7 +32,8 @@ func TestMain(m *testing.M) {
 //
 //	hold <gate-parent-dir> <shared|exclusive> — acquire, print ACQUIRED,
 //	    hold until stdin closes, release, print RELEASED.
-//	sleep — sleep long without touching any gate (handle-inheritance probe).
+//	sleep — print READY, then block until stdin closes without touching any
+//	    gate (handle-inheritance probe).
 //	exit — exit immediately, so the caller has a real, now-dead PID (used
 //	    to fabricate a stale holder-info sidecar in tests).
 func helperMain() {
@@ -63,7 +64,8 @@ func helperMain() {
 		}
 		fmt.Println("RELEASED")
 	case "sleep":
-		time.Sleep(30 * time.Second)
+		fmt.Println("READY")
+		_, _ = io.Copy(io.Discard, os.Stdin)
 	}
 	os.Exit(0)
 }
@@ -152,9 +154,12 @@ func TestWaitAcquiresAfterRelease(t *testing.T) {
 	g, _ := testGate(t)
 	h := mustAcquire(t, g, Exclusive, Options{})
 
+	// OnWait fires once the first attempt has come back busy, so releasing
+	// on that signal guarantees the Acquire is already contending.
+	contended := make(chan struct{})
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		<-contended
 		_ = h.Release()
 		close(released)
 	}()
@@ -163,7 +168,10 @@ func TestWaitAcquiresAfterRelease(t *testing.T) {
 	h2, err := g.Acquire(context.Background(), Shared, Options{
 		Wait:         5 * time.Second,
 		PollInterval: 25 * time.Millisecond,
-		OnWait:       func(string) { notified = true },
+		OnWait: func(string) {
+			notified = true
+			close(contended)
+		},
 	})
 	if err != nil {
 		t.Fatalf("waiting Acquire: %v", err)
@@ -702,7 +710,7 @@ func TestSpawnedChildDoesNotInheritGate(t *testing.T) {
 	}
 	h := mustAcquire(t, g, Exclusive, Options{})
 
-	// Spawn a child that sleeps while we hold the gate, mirroring how a
+	// Spawn a child that stays alive while we hold the gate, mirroring how a
 	// bd command spawns a long-lived dolt/proxy child. If the lock handle
 	// leaked into the child, releasing here would not free the gate.
 	exe, err := os.Executable()
@@ -711,10 +719,22 @@ func TestSpawnedChildDoesNotInheritGate(t *testing.T) {
 	}
 	child := exec.Command(exe)
 	child.Env = append(os.Environ(), "WORKSPACEGATE_HELPER=sleep")
+	childIn, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childOut, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = child.Process.Kill(); _, _ = child.Process.Wait() })
+	t.Cleanup(func() { _ = childIn.Close(); _ = child.Process.Kill(); _ = child.Wait() })
+	// Release only once the child has printed READY, so it is provably live.
+	if line, err := bufio.NewReader(childOut).ReadString('\n'); err != nil || strings.TrimSpace(line) != "READY" {
+		t.Fatalf("sleep helper handshake = %q, %v; want READY", line, err)
+	}
 
 	if err := h.Release(); err != nil {
 		t.Fatal(err)

@@ -389,6 +389,10 @@ type Server struct {
 	writeStall time.Duration
 	watchPoll  time.Duration
 	watchBeat  time.Duration
+	// semQueued, when set, runs once acquire's fast path has found every slot
+	// taken and just before it starts the bounded wait. A test that must free a
+	// slot while a request is queued uses it as the signal instead of a sleep.
+	semQueued func()
 
 	// closing is closed when a graceful shutdown begins, and it is the ONLY
 	// notice a streaming handler gets: http.Server.Shutdown waits for active
@@ -1257,6 +1261,9 @@ func (s *Server) acquire(ctx context.Context, rec *reqInfo) (release func(), err
 	default:
 	}
 
+	if s.semQueued != nil {
+		s.semQueued()
+	}
 	timer := time.NewTimer(orDefault(s.semTimeout, semAcquireTimeout))
 	defer timer.Stop()
 	select {
