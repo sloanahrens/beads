@@ -766,10 +766,9 @@ func TestSemaphoreShedsLoadInsteadOfQueueingForever(t *testing.T) {
 	// timeout left, which produced ErrBusy instead of a recorded saturation
 	// event.
 	s.semTimeout = 2 * time.Second
-	go func() {
-		time.Sleep(25 * time.Millisecond)
-		held()
-	}()
+	// The slot is freed from the semQueued signal, which acquire raises only
+	// after the fast path has failed, so the release lands on a queued request.
+	s.semQueued = func() { go held() }
 	slow := &reqInfo{id: "slow"}
 	release, err := s.acquire(context.Background(), slow)
 	if err != nil {
@@ -1713,20 +1712,14 @@ func TestAllowedHostsAdmitInClusterNames(t *testing.T) {
 }
 
 // TestARunningServerAcceptsARotatedToken is the rotation property proved end
-// to end, over a real listener, against a real token file, under the REAL
-// one-second reload gate — no injected clock. This is the deployment
-// requirement stated as a test: rotating a credential must not be a restart,
-// and revoking a leaked one must not wait for the pod's next deploy.
-//
-// It costs a couple of real seconds, which is the point: the gate it is
-// waiting out is the one that ships.
+// to end, over a real listener, against a real token file, under the shipped
+// one-second reload interval. The gate's clock is injected, so the test crosses
+// the interval by advancing it instead of waiting it out. This is the
+// deployment requirement stated as a test: rotating a credential must not be a
+// restart, and revoking a leaked one must not wait for the pod's next deploy.
 func TestARunningServerAcceptsARotatedToken(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tokens")
-	writeTokenFile(t, path, "original-token\n")
-	auth, err := NewTokenFileAuth(path)
-	if err != nil {
-		t.Fatalf("NewTokenFileAuth: %v", err)
-	}
+	auth, path, clock := newAuthForTest(t, "original-token\n")
+	auth.reloadGate = authReloadInterval
 	ts := newTestServer(t, Config{Auth: auth})
 
 	status := func(token string) int {
@@ -1741,7 +1734,7 @@ func TestARunningServerAcceptsARotatedToken(t *testing.T) {
 	// The overlap the operator writes: new alongside old, clients roll over
 	// one at a time, nothing restarts.
 	writeTokenFile(t, path, "rotated-token\noriginal-token\n")
-	time.Sleep(authReloadInterval + 200*time.Millisecond)
+	clock.advance(authReloadInterval)
 	if got := status("rotated-token"); got != http.StatusOK {
 		t.Errorf("the rotated-in token = %d, want 200 — rotation would need a restart", got)
 	}
@@ -1752,7 +1745,7 @@ func TestARunningServerAcceptsARotatedToken(t *testing.T) {
 	// And the removal, which is revocation: the old token stops working while
 	// the same process keeps serving the new one.
 	writeTokenFile(t, path, "rotated-token\n")
-	time.Sleep(authReloadInterval + 200*time.Millisecond)
+	clock.advance(authReloadInterval)
 	if got := status("original-token"); got != http.StatusUnauthorized {
 		t.Errorf("the revoked token = %d, want 401 — a leaked token would outlive the process", got)
 	}

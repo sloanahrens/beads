@@ -210,11 +210,23 @@ func MaybeSpawnFlusher() {
 // child to init, which reaps it. Either way the child is never left as Z
 // under this process.
 func startDetached(cmd *exec.Cmd) (int, error) {
+	return startDetachedNotify(cmd, nil)
+}
+
+// startDetachedNotify is startDetached with a seam for tests: onReaped, when
+// non-nil, runs after the background Wait has returned, so a test can block on
+// the reap instead of polling the process table for it.
+func startDetachedNotify(cmd *exec.Cmd, onReaped func()) (int, error) {
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
 	pid := cmd.Process.Pid
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+		if onReaped != nil {
+			onReaped()
+		}
+	}()
 	return pid, nil
 }
 
