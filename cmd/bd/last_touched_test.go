@@ -91,13 +91,16 @@ func TestSetLastTouchedIDAdvancesMtime(t *testing.T) {
 	path := filepath.Join(beadsDir, lastTouchedFile)
 
 	SetLastTouchedID("bd-same")
+	// Backdate the marker so an advanced mtime is observable regardless of
+	// filesystem mtime resolution.
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatalf("backdate marker: %v", err)
+	}
 	info1, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat after first write: %v", err)
 	}
-
-	// Sleep past filesystem mtime resolution so an advanced mtime is observable.
-	time.Sleep(20 * time.Millisecond)
 
 	// Rewrite the SAME ID — mtime must still advance.
 	SetLastTouchedID("bd-same")
