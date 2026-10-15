@@ -1,5 +1,5 @@
 {
-  "threshold": 0.6,
+  "threshold": 0.75,
   "depth": "standard",
   "timeout": 300,
   "context": "beads (bd) is the Dolt-backed issue tracker used by every agent, rig, and human across Gas Town: mayor, refinery, witness, and polecats in every other rig depend on its CLI staying correct and its data staying intact. It also accepts external GitHub contributions (see PR_MAINTAINER_GUIDELINES.md and engdocs/PROJECT_CHARTER.md), so scope discipline protects both the codebase and community trust. A defect here has town-wide blast radius, not just local impact.",
