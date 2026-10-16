@@ -345,6 +345,13 @@ is accepted for compatibility). Set connection details with --server-host,
 --server-port, and --server-user.
 Password should be set via BEADS_DOLT_PASSWORD environment variable.
 
+Creating a new database on a Dolt server that already serves other databases is
+refused unless you pass --allow-new-database or set BD_ALLOW_NEW_DATABASE=1, so
+a scratch "bd init" cannot leave a database nobody owns. The first init on a
+server with no other databases, --shared-server mode, gateway servers and test-
+prefixed database names are not affected. Scripts and orchestrators that run
+bd init against a shared server must set the opt-in.
+
 Auto-export is optional. When enabled, bd exports issues to
 .beads/issues.jsonl after write commands (throttled to once per 60s). This is
 for viewers (bv), interchange, and issue-level migration; not backup.
@@ -935,6 +942,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// so we create the marker directory explicitly.
 		// In embedded mode the engine creates its own directories under .beads/embeddeddolt/,
 		// so skip this to avoid leaving an empty .beads/dolt/ artifact (GH#2903).
+		_, statErr := os.Stat(initDBPath)
+		initDBPathPreexisted := statErr == nil
 		if err := os.MkdirAll(initDBPath, config.BeadsDirPerm); err != nil {
 			return fmt.Errorf("failed to create storage directory %s: %v", initDBPath, err)
 		}
@@ -1199,6 +1208,14 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			return &exitError{Code: 1}
 		}
 
+		// A scratch `bd init` against a server that already serves other
+		// databases leaves a database nobody owns (be-d4v). Creating one there
+		// needs --allow-new-database or BD_ALLOW_NEW_DATABASE=1. Shared-server
+		// mode hosts one database per project by design, and gateway mode
+		// leaves creation to the hosted server.
+		doltCfg.RefuseNewDatabaseOnPopulatedServer = !allowNewDatabase(cmd) &&
+			!doltCfg.Gateway && !sharedServer && !doltserver.IsSharedServerMode()
+
 		// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/
 		// directory — including noms/LOCK files. These are Dolt-internal files.
 		// Removing them WILL cause unrecoverable data corruption and data loss.
@@ -1285,6 +1302,12 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 					fmt.Fprint(os.Stderr, gateErr.UserMessage())
 				}
 				return &exitError{Code: 1}
+			}
+			if errors.Is(err, dolt.ErrNewDatabaseRefused) && !initDBPathPreexisted {
+				// The empty marker directory would make the retry with the
+				// opt-in look like a legacy workspace. os.Remove only removes
+				// an empty directory, so real data is never touched.
+				_ = os.Remove(initDBPath)
 			}
 			fmt.Fprintf(os.Stderr, "Error: failed to open Dolt store: %v\n", err)
 			return &exitError{Code: 1}
@@ -2104,6 +2127,7 @@ func init() {
 	initCmd.Flags().String("server-socket", "", "Unix domain socket path (overrides host/port; pass '' to ignore an ambient BEADS_DOLT_SERVER_SOCKET and use TCP)")
 	initCmd.Flags().String("server-user", "", "Dolt server MySQL user (default: root)")
 	initCmd.Flags().Bool("shared-server", false, "Enable shared Dolt server mode (all projects share one server at ~/.beads/shared-server/)")
+	initCmd.Flags().Bool("allow-new-database", false, "Allow creating a new database on a Dolt server that already serves other databases (or set BD_ALLOW_NEW_DATABASE=1)")
 	initCmd.Flags().Bool("external", false, "Server is externally managed (skip server startup); use with --shared-server or --server")
 	initCmd.Flags().Bool("debug", false, "Run the managed Dolt sql-server with --loglevel=debug and CPU profiling (--prof cpu). Persisted to config.yaml as dolt.debug. No effect on externally-managed servers.")
 	// Tombstones for the removed proxied-server mode: parsed, hidden, and
@@ -3210,4 +3234,15 @@ func resolveInitDoltMode(sharedFlag, serverFlag bool) string {
 		return "server"
 	}
 	return "embedded"
+}
+
+// allowNewDatabase reports whether this bd init invocation opted in to
+// creating a database on a populated Dolt server: --allow-new-database or
+// BD_ALLOW_NEW_DATABASE=1 (or "true").
+func allowNewDatabase(cmd *cobra.Command) bool {
+	if v, _ := cmd.Flags().GetBool("allow-new-database"); v {
+		return true
+	}
+	env := strings.TrimSpace(os.Getenv(dolt.AllowNewDatabaseEnv))
+	return env == "1" || strings.EqualFold(env, "true")
 }

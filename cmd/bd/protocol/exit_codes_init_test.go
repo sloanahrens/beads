@@ -63,6 +63,9 @@ func initEnv(home string, extra ...string) []string {
 		"BD_DISABLE_METRICS=1",
 		"BEADS_DB=",
 		"BEADS_DIR=",
+		// The pinned test server already serves other databases, so a
+		// successful init needs the shared-server opt-in (be-d4v).
+		"BD_ALLOW_NEW_DATABASE=1",
 	}
 	if testDoltPort > 0 {
 		env = append(env, "BEADS_DOLT_PORT="+strconv.Itoa(testDoltPort))

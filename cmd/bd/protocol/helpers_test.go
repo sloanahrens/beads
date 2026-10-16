@@ -229,6 +229,10 @@ func (w *workspace) env() []string {
 		// "unlinkat …: directory not empty". (The other reason: a test suite
 		// should not ship telemetry.)
 		"BD_DISABLE_METRICS=1",
+		// This env is a whitelist, so the process-level opt-in does not reach
+		// the child. Workspaces init their own databases on the one shared
+		// test server (be-d4v).
+		"BD_ALLOW_NEW_DATABASE=1",
 	}
 	if testDoltPort > 0 {
 		env = append(env, "BEADS_DOLT_PORT="+strconv.Itoa(testDoltPort))

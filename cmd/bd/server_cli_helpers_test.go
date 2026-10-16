@@ -163,6 +163,9 @@ func sharedServerEnvExtras() []string {
 		"BEADS_NO_DAEMON=1",
 		"BD_DISABLE_METRICS=1",
 		"BD_DISABLE_EVENT_FLUSH=1",
+		// These workspaces init their own databases on the one shared test
+		// server; stripping BD_* above also drops the TestMain opt-in (be-d4v).
+		"BD_ALLOW_NEW_DATABASE=1",
 	}
 }
 
