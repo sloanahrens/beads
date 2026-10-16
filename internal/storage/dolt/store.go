@@ -2605,12 +2605,20 @@ func databaseExistsOnServer(ctx context.Context, db *sql.DB, name string) (bool,
 // database on a Dolt server that already serves other databases.
 const AllowNewDatabaseEnv = "BD_ALLOW_NEW_DATABASE"
 
+// ErrNewDatabaseRefused is wrapped by the error a refused CREATE DATABASE
+// returns, so bd init can undo the directories it made before the refusal.
+var ErrNewDatabaseRefused = errors.New("REFUSED")
+
 // serverSystemDatabases are the databases a Dolt server hosts for itself.
+// "dolt" is the bootstrap repository bd's auto-start creates with `dolt init`
+// in a workspace's own data directory; counting it would refuse the first
+// init on every fresh local server.
 var serverSystemDatabases = map[string]bool{
 	"information_schema": true,
 	"mysql":              true,
 	"performance_schema": true,
 	"sys":                true,
+	"dolt":               true,
 }
 
 // otherUserDatabases returns the user databases in names other than target,
@@ -2635,16 +2643,20 @@ func newDatabaseRefusal(cfg *Config, others []string) error {
 		more = fmt.Sprintf(", and %d more", len(listed)-maxListed)
 		listed = listed[:maxListed]
 	}
-	return fmt.Errorf("REFUSED: bd init would create a new database %q on the Dolt server at %s:%d, "+
+	return fmt.Errorf("%w: bd init would create a new database %q on the Dolt server at %s:%d, "+
 		"which already serves %d other database(s) (%s%s).\n\n"+
 		"A scratch bd init against a shared server leaves a database nobody owns.\n"+
-		"To create it on purpose, pass --allow-new-database or set %s=1.\n"+
-		"To use an existing project's database instead, run bd bootstrap or bd init in that project.",
-		cfg.Database, cfg.ServerHost, cfg.ServerPort, len(others), strings.Join(listed, ", "), more, AllowNewDatabaseEnv)
+		"To create it on purpose, pass --allow-new-database or set %s=1 (scripts and orchestrators that run bd init against a shared server must set it).\n"+
+		"To use an existing project's database instead, run bd bootstrap or bd init in that project.\n"+
+		"Not affected: the first init on a server with no other databases, --shared-server mode, gateway servers and test-prefixed database names.",
+		ErrNewDatabaseRefused, cfg.Database, cfg.ServerHost, cfg.ServerPort, len(others), strings.Join(listed, ", "), more, AllowNewDatabaseEnv)
 }
 
 // refuseNewDatabaseOnPopulatedServer returns an error naming the opt-in when
-// the server already serves user databases other than cfg.Database.
+// the server already serves user databases other than cfg.Database. It guards
+// against accidents, not concurrent callers: two inits racing between this
+// check and CREATE DATABASE can both pass, and the bare CREATE DATABASE that
+// follows still arbitrates which one creates it.
 func refuseNewDatabaseOnPopulatedServer(ctx context.Context, db *sql.DB, cfg *Config) error {
 	rows, err := db.QueryContext(ctx, "SHOW DATABASES")
 	if err != nil {

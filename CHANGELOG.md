@@ -71,6 +71,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`bd init` refuses to create a database on a Dolt server that already
+  serves other databases, unless you opt in.** A scratch `bd init --prefix x`
+  against a shared server used to leave a database nobody owns (six appeared on
+  one town's server in two weeks, be-d4v). It now exits 1 with a `REFUSED`
+  message that names the opt-in: pass `--allow-new-database` or set
+  `BD_ALLOW_NEW_DATABASE=1`. The first init on a server with no other
+  databases, `--shared-server` mode, gateway servers and test-prefixed
+  database names are exempt, so a fresh local workspace is unchanged. A
+  refused init removes the empty `.beads/dolt` it made, so retrying with the
+  opt-in works. **Callers that run `bd init` against a shared server must set
+  the opt-in:** in this repo that is the test harnesses that init many
+  databases on one test server (they now set `BD_ALLOW_NEW_DATABASE=1`); the
+  scripts under `scripts/` and the release smoke test init against their own
+  fresh server and need no change. The town's `gt rig add` is the one caller
+  outside this repo; it sets the opt-in under gt-89d3p, which must land before
+  or with the bd that carries this change.
+
 - **Breaking for scripts: `bd close`, `bd defer` and `bd undefer` exit non-zero
   when any id in the batch fails.** `bd close A B` used to exit 0 when A closed
   and B was refused; `bd defer` and `bd undefer` exited 0 even when every id

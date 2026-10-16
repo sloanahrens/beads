@@ -2,6 +2,7 @@ package dolt
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ func TestRefuseNewDatabaseOnPopulatedServer(t *testing.T) {
 	}{
 		{"fresh server has only system databases", []string{"information_schema", "mysql"}, false},
 		{"server with another user database", []string{"information_schema", "mysql", "beads_gt"}, true},
+		{"fresh auto-started server has the dolt bootstrap database", []string{"information_schema", "mysql", "dolt"}, false},
 		{"only the target already listed", []string{"information_schema", "scratch"}, false},
 	}
 	for _, tc := range tests {
@@ -40,6 +42,9 @@ func TestRefuseNewDatabaseOnPopulatedServer(t *testing.T) {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
 			if err != nil {
+				if !errors.Is(err, ErrNewDatabaseRefused) {
+					t.Errorf("refusal does not wrap ErrNewDatabaseRefused: %v", err)
+				}
 				for _, want := range []string{"--allow-new-database", AllowNewDatabaseEnv + "=1", "beads_gt", "127.0.0.1:3307"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("error missing %q: %v", want, err)
