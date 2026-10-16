@@ -1,3 +1,8 @@
+//go:build integration
+
+// Integration tier (be-b23): this drives the real bd binary against a real
+// dolt sql-server it starts itself, which the unit tier's BD_TEST_TIER tripwire
+// refuses (the gate failed with "operation not allowed in the unit test tier").
 package main
 
 import (
