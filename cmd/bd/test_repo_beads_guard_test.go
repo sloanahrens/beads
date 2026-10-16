@@ -159,6 +159,11 @@ func testMainInner(m *testing.M) int {
 	_ = os.Setenv(metrics.EnvDisableMetrics, "1")
 	_ = os.Setenv(metrics.EnvDisableEventFlush, "1")
 
+	// Tests init many databases on the one shared test server. The refusal
+	// bd init gives a populated server (be-d4v) is covered by dolt store unit
+	// tests, so the suite opts in.
+	_ = os.Setenv("BD_ALLOW_NEW_DATABASE", "1")
+
 	// Also reset viper state that was loaded by main.go's init().
 	config.ResetForTesting()
 
