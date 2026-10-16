@@ -423,6 +423,15 @@ type Config struct {
 	// creation of shadow databases on the wrong server.
 	CreateIfMissing bool
 
+	// RefuseNewDatabaseOnPopulatedServer makes a CreateIfMissing open refuse
+	// to CREATE DATABASE when the server already serves other user databases.
+	// Only `bd init` sets it, unless the caller opted in (--allow-new-database
+	// or BD_ALLOW_NEW_DATABASE=1), runs shared-server mode or targets a
+	// gateway. A server with no user databases (a fresh auto-started one)
+	// is never refused. Test database names are never refused either:
+	// the test-database firewall in newServerMode governs those.
+	RefuseNewDatabaseOnPopulatedServer bool
+
 	// ServerMode indicates this config targets an external dolt sql-server
 	// rather than the embedded Dolt engine. Set by the store factory based
 	// on metadata.json dolt_mode or BEADS_DOLT_SERVER_MODE env var.
@@ -2479,6 +2488,11 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 		if !cfg.CreateIfMissing {
 			return nil, "", serverConnFacts{}, databaseNotFoundError(cfg)
 		}
+		if cfg.RefuseNewDatabaseOnPopulatedServer && !isTestDatabaseName(cfg.Database) {
+			if err := refuseNewDatabaseOnPopulatedServer(ctx, initDB, cfg); err != nil {
+				return nil, "", serverConnFacts{}, err
+			}
+		}
 
 		// Bare CREATE DATABASE (no IF NOT EXISTS): the server arbitrates
 		// creation atomically, so a nil error here proves THIS call created
@@ -2585,6 +2599,74 @@ func databaseExistsOnServer(ctx context.Context, db *sql.DB, name string) (bool,
 		}
 	}
 	return false, rows.Err()
+}
+
+// AllowNewDatabaseEnv is the environment opt-in that lets `bd init` create a
+// database on a Dolt server that already serves other databases.
+const AllowNewDatabaseEnv = "BD_ALLOW_NEW_DATABASE"
+
+// serverSystemDatabases are the databases a Dolt server hosts for itself.
+var serverSystemDatabases = map[string]bool{
+	"information_schema": true,
+	"mysql":              true,
+	"performance_schema": true,
+	"sys":                true,
+}
+
+// otherUserDatabases returns the user databases in names other than target,
+// in the order given.
+func otherUserDatabases(names []string, target string) []string {
+	var others []string
+	for _, n := range names {
+		if n == target || serverSystemDatabases[strings.ToLower(n)] {
+			continue
+		}
+		others = append(others, n)
+	}
+	return others
+}
+
+// newDatabaseRefusal builds the error for a refused CREATE DATABASE.
+func newDatabaseRefusal(cfg *Config, others []string) error {
+	const maxListed = 5
+	listed := others
+	more := ""
+	if len(listed) > maxListed {
+		more = fmt.Sprintf(", and %d more", len(listed)-maxListed)
+		listed = listed[:maxListed]
+	}
+	return fmt.Errorf("REFUSED: bd init would create a new database %q on the Dolt server at %s:%d, "+
+		"which already serves %d other database(s) (%s%s).\n\n"+
+		"A scratch bd init against a shared server leaves a database nobody owns.\n"+
+		"To create it on purpose, pass --allow-new-database or set %s=1.\n"+
+		"To use an existing project's database instead, run bd bootstrap or bd init in that project.",
+		cfg.Database, cfg.ServerHost, cfg.ServerPort, len(others), strings.Join(listed, ", "), more, AllowNewDatabaseEnv)
+}
+
+// refuseNewDatabaseOnPopulatedServer returns an error naming the opt-in when
+// the server already serves user databases other than cfg.Database.
+func refuseNewDatabaseOnPopulatedServer(ctx context.Context, db *sql.DB, cfg *Config) error {
+	rows, err := db.QueryContext(ctx, "SHOW DATABASES")
+	if err != nil {
+		return fmt.Errorf("failed to list databases on server %s:%d: %w", cfg.ServerHost, cfg.ServerPort, err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return fmt.Errorf("failed to list databases on server %s:%d: %w", cfg.ServerHost, cfg.ServerPort, err)
+		}
+		names = append(names, n)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to list databases on server %s:%d: %w", cfg.ServerHost, cfg.ServerPort, err)
+	}
+	if others := otherUserDatabases(names, cfg.Database); len(others) > 0 {
+		return newDatabaseRefusal(cfg, others)
+	}
+	return nil
 }
 
 // initSchemaOnDB applies pending schema migrations. schema.MigrateUp tracks
