@@ -118,27 +118,75 @@ func ResolvePartialID(ctx context.Context, store PartialIDResolverStore, input s
 		return issues[0].ID, nil
 	}
 
-	// If exact match failed, try substring search.
-	// Use the hash part as a search query to leverage SQL-level filtering
-	// (id LIKE %hash%) instead of loading ALL issues into memory.
-	// On large databases (23k+ issues over MySQL wire protocol), loading all
-	// issues took 60+ seconds; with SQL filtering it's near-instant.
+	// If exact match failed, search for the hash part. The search is narrow on
+	// purpose: it matches ids (and, for bare hashes, titles) only. A text scan
+	// over description and notes costs seconds on every miss.
 	hashPart := strings.TrimPrefix(normalizedID, prefixWithHyphen)
 	searchPart, ok := partialIDSearchPart(hashPart)
 	if !ok {
 		return "", fmt.Errorf("no issue found matching %q", input)
 	}
 
+	// An input that names a configured or allowed prefix is answered by the id
+	// prefix index: every candidate starts with normalizedID. A bare hash, or a
+	// prefix this repo does not declare, has no prefix to anchor on, so it
+	// searches every prefix by id substring (cross-prefix lookup). The loop
+	// below decides either way, so the candidate set only has to be a superset.
+	var filter types.IssueFilter
+	var query string
+	if hasKnownPrefix(input, knownPrefixes) {
+		filter.IDPrefix = normalizedID
+	} else {
+		filter.QueryPhrase = true
+		query = searchPart
+	}
+
 	// Narrow projection: this loop only reads the .ID field, so use the
 	// SearchIssueIDs path instead of SearchIssues. Avoids hydrating all
 	// 45+ issue columns (including big TEXT fields like description, design,
 	// notes, metadata, payload) only to discard them.
-	filter := types.IssueFilter{}
-	ids, err := store.SearchIssueIDs(ctx, searchPart, filter)
+	ids, err := store.SearchIssueIDs(ctx, query, filter)
 	if err != nil {
 		return "", fmt.Errorf("failed to search issues: %w", err)
 	}
 
+	exactMatch, matches := matchPartialIDCandidates(input, hashPart, knownPrefixes, ids)
+
+	// A transaction-scoped store does not merge wisps into a nil-Ephemeral
+	// search (DoltStore does), so a miss also searches the wisps table with
+	// the same narrow filter. Both searches are id-only.
+	if exactMatch == "" && len(matches) == 0 {
+		ephTrue := true
+		filter.Ephemeral = &ephTrue
+		if wispIDs, wispErr := store.SearchIssueIDs(ctx, query, filter); wispErr == nil {
+			exactMatch, matches = matchPartialIDCandidates(input, hashPart, knownPrefixes, wispIDs)
+		}
+	}
+
+	// Prefer exact match over substring matches
+	if exactMatch != "" {
+		return exactMatch, nil
+	}
+
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no issue found matching %q", input)
+	}
+
+	// Sort so the ambiguity error lists IDs deterministically. SearchIssues return
+	// order is not a contract for ambiguous matches, so sorting by ID pins the same
+	// message for every storage implementation.
+	sort.Strings(matches)
+
+	if len(matches) > 1 {
+		return "", fmt.Errorf("%w: %q matches %d issues: %v\nUse more characters to disambiguate", ErrAmbiguousID, input, len(matches), matches)
+	}
+
+	return matches[0], nil
+}
+
+// matchPartialIDCandidates picks the exact match (if any) and the leading-prefix
+// matches for input among the candidate ids a partial-ID search returned.
+func matchPartialIDCandidates(input, hashPart string, knownPrefixes []string, ids []string) (string, []string) {
 	var matches []string
 	var exactMatch string
 
@@ -159,11 +207,17 @@ func ResolvePartialID(ctx context.Context, store PartialIDResolverStore, input s
 			issueHash = id
 		}
 
+		// Wisp IDs are shaped "<prefix>-wisp-<hash>", so issueHash is the
+		// composite "wisp-<hash>" for a wisp. Strip the literal "wisp-" infix
+		// too, so bare-hash lookups (e.g. "t3st") resolve against the isolated
+		// hash, not the full "wisp-t3st" string.
+		wispHash := strings.TrimPrefix(issueHash, "wisp-")
+
 		// Check for exact hash match (excluding hierarchical children)
-		if issueHash == hashPart {
+		if issueHash == hashPart || wispHash == hashPart {
 			exactMatch = id
 			// Don't break - keep searching in case there's a full ID match
-		} else if strings.HasPrefix(issueHash, hashPart) {
+		} else if strings.HasPrefix(issueHash, hashPart) || strings.HasPrefix(wispHash, hashPart) {
 			// Leading-prefix abbreviation (documented UX, e.g. "a3f8" -> "a3f8e9...").
 			// HasPrefix rather than Contains: reject interior-substring matches
 			// like "kt8" inside "j0kt8" (GH#4234).
@@ -171,60 +225,7 @@ func ResolvePartialID(ctx context.Context, store PartialIDResolverStore, input s
 		}
 	}
 
-	// Prefer exact match over substring matches
-	if exactMatch != "" {
-		return exactMatch, nil
-	}
-
-	// Fallback: explicitly search wisps table for partial ID resolution.
-	// DoltStore.SearchIssues merges wisps when Ephemeral is nil, but
-	// transaction-level SearchIssues does not. This ensures wisps are
-	// always resolvable by partial ID.
-	if len(matches) == 0 {
-		ephTrue := true
-		wispFilter := types.IssueFilter{Ephemeral: &ephTrue}
-		if wispIDs, wispErr := store.SearchIssueIDs(ctx, searchPart, wispFilter); wispErr == nil {
-			for _, wID := range wispIDs {
-				if wID == input {
-					return wID, nil
-				}
-				var wHash string
-				if p := ExtractIssuePrefixKnown(wID, knownPrefixes); p != "" && strings.HasPrefix(wID, p+"-") {
-					wHash = wID[len(p)+1:]
-				} else {
-					wHash = wID
-				}
-				// Wisp IDs are shaped "<prefix>-wisp-<hash>", so wHash here is
-				// the composite "wisp-<hash>". Strip the literal "wisp-" infix
-				// before comparing so bare-hash lookups (e.g. "t3st") resolve
-				// against the isolated hash, not the full "wisp-t3st" string.
-				wispHash := strings.TrimPrefix(wHash, "wisp-")
-				if wHash == hashPart || wispHash == hashPart {
-					exactMatch = wID
-				} else if strings.HasPrefix(wispHash, hashPart) {
-					matches = append(matches, wID)
-				}
-			}
-			if exactMatch != "" {
-				return exactMatch, nil
-			}
-		}
-	}
-
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no issue found matching %q", input)
-	}
-
-	// Sort so the ambiguity error lists IDs deterministically. SearchIssues return
-	// order is not a contract for ambiguous matches, so sorting by ID pins the same
-	// message for every storage implementation.
-	sort.Strings(matches)
-
-	if len(matches) > 1 {
-		return "", fmt.Errorf("%w: %q matches %d issues: %v\nUse more characters to disambiguate", ErrAmbiguousID, input, len(matches), matches)
-	}
-
-	return matches[0], nil
+	return exactMatch, matches
 }
 
 func partialIDSearchPart(hashPart string) (string, bool) {

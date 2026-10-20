@@ -910,6 +910,11 @@ func TestResolvePartialID_Wisp(t *testing.T) {
 			input:    "t3s",
 			expected: "bd-wisp-t3st", // "t3s" is a leading prefix of the wisp's bare hash "t3st"
 		},
+		{
+			name:     "configured prefix with partial wisp hash resolves",
+			input:    "bd-wisp-t3s",
+			expected: "bd-wisp-t3st",
+		},
 	}
 
 	for _, tt := range tests {
@@ -967,6 +972,164 @@ func TestResolvePartialID_TitleFalsePositive(t *testing.T) {
 	}
 	if result != "bd-abc12" {
 		t.Errorf("utils.ResolvePartialID(%q) = %q; want %q (title match should be rejected)", "abc12", result, "bd-abc12")
+	}
+}
+
+// TestResolvePartialID_IgnoresDescriptionAndNotes verifies that a hash which
+// appears only in an issue's description or notes does not resolve. The
+// partial-ID search matches ids (and titles for bare hashes), never text bodies,
+// so a miss costs an indexed id lookup rather than a scan over every description.
+func TestResolvePartialID_IgnoresDescriptionAndNotes(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	decoy := &types.Issue{
+		ID:          "bd-xyz99",
+		Title:       "Unrelated issue",
+		Description: "Refers to zq9w in the body",
+		Notes:       "zq9w also appears in the notes",
+		Status:      types.StatusOpen,
+		Priority:    1,
+		IssueType:   types.TypeTask,
+	}
+	if err := store.CreateIssue(ctx, decoy, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetConfig(ctx, "issue_prefix", "bd"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, input := range []string{"zq9w", "bd-zq9w"} {
+		if result, err := utils.ResolvePartialID(ctx, store, input); err == nil {
+			t.Errorf("utils.ResolvePartialID(%q) = %q; want no match (hash only in description and notes)", input, result)
+		}
+	}
+}
+
+// recordingIDStore wraps a store and records every SearchIssueIDs call, so a
+// test can assert the query shape a partial-ID miss sends to the database.
+type recordingIDStore struct {
+	*dolt.DoltStore
+	queries []string
+	filters []types.IssueFilter
+}
+
+func (s *recordingIDStore) SearchIssueIDs(ctx context.Context, query string, filter types.IssueFilter) ([]string, error) {
+	s.queries = append(s.queries, query)
+	s.filters = append(s.filters, filter)
+	return s.DoltStore.SearchIssueIDs(ctx, query, filter)
+}
+
+// TestResolvePartialID_MissSearchesIDPrefixOnly verifies that a miss for an
+// input naming the configured prefix is answered by id-prefix searches only:
+// one over issues and wisps, then the same search over wisps alone. Neither
+// sends a text phrase.
+func TestResolvePartialID_MissSearchesIDPrefixOnly(t *testing.T) {
+	ctx := context.Background()
+	inner := newTestStore(t)
+	if err := inner.SetConfig(ctx, "issue_prefix", "bd"); err != nil {
+		t.Fatal(err)
+	}
+	store := &recordingIDStore{DoltStore: inner}
+
+	if result, err := utils.ResolvePartialID(ctx, store, "bd-zq9w"); err == nil {
+		t.Fatalf("utils.ResolvePartialID(%q) = %q; want no match", "bd-zq9w", result)
+	}
+
+	if len(store.filters) != 2 {
+		t.Fatalf("miss issued %d id searches; want 2 (issues, then wisps)", len(store.filters))
+	}
+	for i, q := range store.queries {
+		if q != "" {
+			t.Errorf("id search %d query = %q; want empty (prefix search, no text phrase)", i, q)
+		}
+	}
+	for i, f := range store.filters {
+		if f.IDPrefix != "bd-zq9w" || f.QueryPhrase {
+			t.Errorf("id search %d filter = %+v; want IDPrefix %q with no QueryPhrase", i, f, "bd-zq9w")
+		}
+	}
+	if store.filters[0].Ephemeral != nil {
+		t.Errorf("first id search has Ephemeral set; want nil (issues and wisps)")
+	}
+	if e := store.filters[1].Ephemeral; e == nil || !*e {
+		t.Errorf("second id search does not target wisps; want Ephemeral true")
+	}
+}
+
+// TestResolvePartialID_MissQueryShape verifies the query a miss sends when the
+// input has no configured prefix: a bare hash, or a prefix this repo does not
+// declare. Both search by id or title phrase, never by description or notes.
+func TestResolvePartialID_MissQueryShape(t *testing.T) {
+	ctx := context.Background()
+	inner := newTestStore(t)
+	if err := inner.SetConfig(ctx, "issue_prefix", "bd"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, input := range []string{"zq9w", "aap-zq9w"} {
+		store := &recordingIDStore{DoltStore: inner}
+		if result, err := utils.ResolvePartialID(ctx, store, input); err == nil {
+			t.Fatalf("utils.ResolvePartialID(%q) = %q; want no match", input, result)
+		}
+		if len(store.filters) == 0 {
+			t.Fatalf("utils.ResolvePartialID(%q) issued no id search", input)
+		}
+		if q := store.queries[0]; q != "zq9w" {
+			t.Errorf("%q: id search query = %q; want %q", input, q, "zq9w")
+		}
+		if f := store.filters[0]; !f.QueryPhrase || f.IDPrefix != "" {
+			t.Errorf("%q: id search filter = %+v; want QueryPhrase with no IDPrefix", input, f)
+		}
+	}
+}
+
+// noWispMergeStore is a store that, like a transaction-scoped store, does not
+// merge wisps into a search that leaves Ephemeral nil. Its nil-Ephemeral
+// searches see issues only.
+type noWispMergeStore struct {
+	*dolt.DoltStore
+}
+
+func (s *noWispMergeStore) SearchIssueIDs(ctx context.Context, query string, filter types.IssueFilter) ([]string, error) {
+	if filter.Ephemeral == nil {
+		no := false
+		filter.Ephemeral = &no
+	}
+	return s.DoltStore.SearchIssueIDs(ctx, query, filter)
+}
+
+// TestResolvePartialID_WispWithoutWispMerge verifies that a wisp still resolves
+// from a partial id when the store does not merge wisps into a nil-Ephemeral
+// search. The wisps-only fallback pass covers this case.
+func TestResolvePartialID_WispWithoutWispMerge(t *testing.T) {
+	ctx := context.Background()
+	inner := newTestStore(t)
+	wisp := &types.Issue{
+		ID:        "bd-wisp-t3st",
+		Title:     "Test wisp",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+		Ephemeral: true,
+	}
+	if err := inner.CreateIssue(ctx, wisp, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.SetConfig(ctx, "issue_prefix", "bd"); err != nil {
+		t.Fatal(err)
+	}
+	store := &noWispMergeStore{DoltStore: inner}
+
+	for _, input := range []string{"bd-wisp-t3s", "t3s"} {
+		result, err := utils.ResolvePartialID(ctx, store, input)
+		if err != nil {
+			t.Errorf("utils.ResolvePartialID(%q) unexpected error: %v", input, err)
+			continue
+		}
+		if result != "bd-wisp-t3st" {
+			t.Errorf("utils.ResolvePartialID(%q) = %q; want %q", input, result, "bd-wisp-t3st")
+		}
 	}
 }
 
