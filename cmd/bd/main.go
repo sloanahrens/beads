@@ -1495,11 +1495,15 @@ var rootCmd = &cobra.Command{
 		// on a different filesystem (e.g., ext4 for performance on WSL).
 		doltPath := doltserver.ResolveDoltDir(beadsDir)
 		doltCfg := &dolt.Config{
-			ReadOnly:         useReadOnly,
-			Preview:          previewMode,
-			DisableAutoStart: policy.disableAutoStart,
-			BeadsDir:         beadsDir,
-			LenientOpen:      isWorkingSetReconcileCommand(cmd),
+			ReadOnly: useReadOnly,
+			Preview:  previewMode,
+			// A classified read (bd ready, bd list) opens ReadOnly without being
+			// barred from writing, so it may wake expired defers. Strict
+			// --readonly and preview stay mutation-free.
+			SweepDefersOnRead: !readonlyMode && !previewMode,
+			DisableAutoStart:  policy.disableAutoStart,
+			BeadsDir:          beadsDir,
+			LenientOpen:       isWorkingSetReconcileCommand(cmd),
 			// Bulk loads outlive the pool's 10s fast-fail on every server
 			// pause (wy-sbgucn); explicit env/config settings still win.
 			PoolReadTimeoutFallback: bulkLoadPoolReadTimeout(cmd),
