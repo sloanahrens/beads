@@ -174,6 +174,25 @@ func isReadOnlyCommand(cmdName string) bool {
 	return readOnlyCommands[cmdName]
 }
 
+// sweepsDefersOnRead reports whether cmd's read-only store open may run the
+// lazy defer-wake sweep. Only the ready front (bd ready, bd list --ready) wakes
+// expired dated defers; every other classified read (list, show, stats, ...)
+// keeps its no-commit behavior. Strict --readonly and preview opens never
+// sweep.
+func sweepsDefersOnRead(cmd *cobra.Command, strictReadonly, preview bool) bool {
+	if strictReadonly || preview {
+		return false
+	}
+	switch cmd.Name() {
+	case "ready":
+		return true
+	case "list":
+		ready, _ := cmd.Flags().GetBool("ready")
+		return ready
+	}
+	return false
+}
+
 // isPreviewCommand reports whether cmd was explicitly invoked in a
 // non-mutating preview mode. Preview flags are command-local rather than
 // persistent, so checking them here after Cobra has parsed the selected
@@ -1495,12 +1514,9 @@ var rootCmd = &cobra.Command{
 		// on a different filesystem (e.g., ext4 for performance on WSL).
 		doltPath := doltserver.ResolveDoltDir(beadsDir)
 		doltCfg := &dolt.Config{
-			ReadOnly: useReadOnly,
-			Preview:  previewMode,
-			// A classified read (bd ready, bd list) opens ReadOnly without being
-			// barred from writing, so it may wake expired defers. Strict
-			// --readonly and preview stay mutation-free.
-			SweepDefersOnRead: !readonlyMode && !previewMode,
+			ReadOnly:          useReadOnly,
+			Preview:           previewMode,
+			SweepDefersOnRead: sweepsDefersOnRead(cmd, readonlyMode, previewMode),
 			DisableAutoStart:  policy.disableAutoStart,
 			BeadsDir:          beadsDir,
 			LenientOpen:       isWorkingSetReconcileCommand(cmd),

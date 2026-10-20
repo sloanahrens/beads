@@ -373,11 +373,13 @@ type Config struct {
 	Preview        bool   // Non-mutating preview: embedded opens skip schema init and refuse writes
 
 	// SweepDefersOnRead lets a ReadOnly open run the lazy defer-wake sweep on
-	// ready-front reads. The CLI's read-only allowlist (bd ready, bd list, ...)
-	// opens ReadOnly for file-watcher hygiene (GH#804), not because the command
-	// may not write, so those opens set this and an expired dated defer returns
-	// to open. Strict --readonly, preview and the doctor checks leave it false
-	// and stay mutation-free. Ignored unless ReadOnly is set.
+	// ready-front reads. The CLI's read-only allowlist opens ReadOnly for
+	// file-watcher hygiene (GH#804), not because the command may not write, so
+	// the ready front (bd ready, bd list --ready) sets this and an expired dated
+	// defer returns to open. Every other classified read, strict --readonly,
+	// preview and the doctor checks leave it false and stay commit-free.
+	// Ignored unless ReadOnly is set. The unit-of-work sweep (internal/storage/uow)
+	// has no read-only guard and needs no opt-in.
 	SweepDefersOnRead bool
 
 	// LenientOpen opens the store leniently: embedded mode only. A migration
