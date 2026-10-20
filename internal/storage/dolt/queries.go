@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 
@@ -50,12 +51,15 @@ func (s *DoltStore) SearchIssuesWithCounts(ctx context.Context, query string, fi
 // wakeExpiredDefers runs the lazy defer-wake sweep (issueops.WakeExpiredDefersInTx)
 // in its own write transaction before a ready-work read. Advisory by contract:
 // a ready listing must never fail because the sweep could not run, so every
-// error is swallowed here — silently for the expected shapes (read-only store,
-// open write circuit, closed store), with a stderr warning otherwise. It runs
-// OUTSIDE the read tx below because withReadTx unconditionally rolls back (and
-// may retry its body on the read-only justification).
+// error is swallowed here. A store opened read-only skips the sweep unless the
+// open asked for it (Config.SweepDefersOnRead): strict --readonly, preview and
+// the doctor checks keep their no-write contract. Otherwise each skip is
+// reported on stderr, the expected shapes (open write circuit, closed store)
+// once per process. It runs OUTSIDE the read tx below because withReadTx
+// unconditionally rolls back (and may retry its body on the read-only
+// justification).
 func (s *DoltStore) wakeExpiredDefers(ctx context.Context) {
-	if s.readOnly {
+	if s.readOnly && !s.sweepDefersOnRead {
 		return
 	}
 	err := s.withCircuitWrite(ctx, func(ctx context.Context) error {
@@ -74,25 +78,46 @@ func (s *DoltStore) wakeExpiredDefers(ctx context.Context) {
 			return tables, issueops.WakeDefersCommitMessage(len(woke.Issues)), nil
 		})
 	})
-	if err != nil && !errors.Is(err, ErrCircuitOpen) && !errors.Is(err, ErrStoreClosed) {
+	if err != nil {
 		warnDeferWakeSweepSkipped(err)
 	}
 }
 
-// deferWakeAccessDeniedOnce rate-limits the access-denied advisory to one
-// warning per process: a read-only-privileged SQL user hits it on every
-// ready-front read, and repeating a configuration fact on each `bd ready`
-// is noise, not signal.
-var deferWakeAccessDeniedOnce sync.Once
+// deferWakeWarnings holds the once-per-process state for sweep skip warnings.
+// The access-denied advisory is rate-limited because a read-only-privileged
+// SQL user hits it on every ready-front read, and repeating a configuration
+// fact on each `bd ready` is noise, not signal. Circuit-open and store-closed
+// are rate-limited the same way: a ready read can hit either on every call for
+// the life of the process, and the first report is the signal.
+type deferWakeWarnings struct {
+	accessDenied sync.Once
+	circuitOpen  sync.Once
+	storeClosed  sync.Once
+}
+
+var deferWakeWarn deferWakeWarnings
 
 func warnDeferWakeSweepSkipped(err error) {
-	if dberrors.IsAccessDenied(err) {
-		deferWakeAccessDeniedOnce.Do(func() {
-			fmt.Fprintf(os.Stderr, "warning: defer-wake sweep skipped (SQL user lacks write privileges; expired defers will not auto-wake from this client): %v\n", err)
+	deferWakeWarn.report(os.Stderr, err)
+}
+
+func (w *deferWakeWarnings) report(out io.Writer, err error) {
+	switch {
+	case dberrors.IsAccessDenied(err):
+		w.accessDenied.Do(func() {
+			fmt.Fprintf(out, "warning: defer-wake sweep skipped (SQL user lacks write privileges; expired defers will not auto-wake from this client): %v\n", err)
 		})
-		return
+	case errors.Is(err, ErrCircuitOpen):
+		w.circuitOpen.Do(func() {
+			fmt.Fprintf(out, "warning: defer-wake sweep skipped (write circuit open; expired defers wake on a ready read after it closes): %v\n", err)
+		})
+	case errors.Is(err, ErrStoreClosed):
+		w.storeClosed.Do(func() {
+			fmt.Fprintf(out, "warning: defer-wake sweep skipped (store closed): %v\n", err)
+		})
+	default:
+		fmt.Fprintf(out, "warning: defer-wake sweep skipped: %v\n", err)
 	}
-	fmt.Fprintf(os.Stderr, "warning: defer-wake sweep skipped: %v\n", err)
 }
 
 func (s *DoltStore) GetReadyWork(ctx context.Context, filter types.WorkFilter) ([]*types.Issue, error) {

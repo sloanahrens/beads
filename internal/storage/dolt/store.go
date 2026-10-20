@@ -322,6 +322,7 @@ type DoltStore struct {
 	serverEndpoint       string       // Exact endpoint bound to bootstrap reset authority
 	mu                   sync.RWMutex // Protects concurrent access
 	readOnly             bool         // True if opened in read-only mode
+	sweepDefersOnRead    bool         // Read-only open may still run the defer-wake sweep (Config.SweepDefersOnRead)
 	credentialKey        []byte       // Random encryption key for federation credentials
 
 	// localActiveDatabaseDir is the exact active database directory when this
@@ -370,6 +371,16 @@ type Config struct {
 	Database       string // Database name within Dolt (default: "beads")
 	ReadOnly       bool   // Open in read-only mode (skip schema init)
 	Preview        bool   // Non-mutating preview: embedded opens skip schema init and refuse writes
+
+	// SweepDefersOnRead lets a ReadOnly open run the lazy defer-wake sweep on
+	// ready-front reads. The CLI's read-only allowlist opens ReadOnly for
+	// file-watcher hygiene (GH#804), not because the command may not write, so
+	// the ready front (bd ready, bd list --ready) sets this and an expired dated
+	// defer returns to open. Every other classified read, strict --readonly,
+	// preview and the doctor checks leave it false and stay commit-free.
+	// Ignored unless ReadOnly is set. The unit-of-work sweep (internal/storage/uow)
+	// has no read-only guard and needs no opt-in.
+	SweepDefersOnRead bool
 
 	// LenientOpen opens the store leniently: embedded mode only. A migration
 	// gate refusal (#4259) or a dirty-working-set refusal (#4566) skips the
@@ -1979,6 +1990,7 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 		remotePassword:         cfg.RemotePassword,
 		serverMode:             true,
 		readOnly:               cfg.ReadOnly,
+		sweepDefersOnRead:      cfg.SweepDefersOnRead,
 		autoStartedServerDir:   autoStartedDir,
 	}
 

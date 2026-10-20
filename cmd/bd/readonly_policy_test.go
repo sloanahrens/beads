@@ -244,3 +244,35 @@ func TestPersistentPostRunStrictReadonlySuppressesMaintenance(t *testing.T) {
 		t.Fatalf("store close calls = %d, want 1", fake.closeCalls)
 	}
 }
+
+func TestSweepsDefersOnRead(t *testing.T) {
+	newCmd := func(name string, ready bool) *cobra.Command {
+		cmd := &cobra.Command{Use: name}
+		cmd.Flags().Bool("ready", false, "")
+		if ready {
+			_ = cmd.Flags().Set("ready", "true")
+		}
+		return cmd
+	}
+	tests := []struct {
+		name    string
+		cmd     *cobra.Command
+		strict  bool
+		preview bool
+		want    bool
+	}{
+		{name: "bd ready", cmd: newCmd("ready", false), want: true},
+		{name: "bd list --ready", cmd: newCmd("list", true), want: true},
+		{name: "plain bd list stays commit-free", cmd: newCmd("list", false)},
+		{name: "bd show stays commit-free", cmd: newCmd("show", false)},
+		{name: "strict readonly never sweeps", cmd: newCmd("ready", false), strict: true},
+		{name: "preview never sweeps", cmd: newCmd("ready", false), preview: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sweepsDefersOnRead(tc.cmd, tc.strict, tc.preview); got != tc.want {
+				t.Fatalf("sweepsDefersOnRead = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
