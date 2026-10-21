@@ -45,6 +45,10 @@ type molWriter interface {
 	// cache filled from a wisp probe. A caller that wants an issue labeled
 	// says so on the issue it creates.
 	CreateIssue(ctx context.Context, issue *types.Issue, actor string) error
+	// CreateIssues writes a whole batch in one call. A dependency end of the
+	// form batch:<index> names issues[index] of the same slice: the store
+	// assigns the IDs before the first insert and resolves the ends to them.
+	CreateIssues(ctx context.Context, issues []*types.Issue, actor string) error
 	AddDependency(ctx context.Context, dep *types.Dependency, actor string) error
 	UpdateIssue(ctx context.Context, id string, updates map[string]interface{}, actor string) error
 	CloseIssue(ctx context.Context, id, reason, actor string) error
@@ -60,6 +64,10 @@ type storeMolWriter struct {
 
 func (w storeMolWriter) CreateIssue(ctx context.Context, issue *types.Issue, actor string) error {
 	return w.tx.CreateIssue(ctx, issue, actor)
+}
+
+func (w storeMolWriter) CreateIssues(ctx context.Context, issues []*types.Issue, actor string) error {
+	return w.tx.CreateIssues(ctx, issues, actor)
 }
 
 func (w storeMolWriter) AddDependency(ctx context.Context, dep *types.Dependency, actor string) error {

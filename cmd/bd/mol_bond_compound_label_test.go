@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/steveyegge/beads/internal/types"
@@ -16,6 +19,7 @@ type recordingMolWriter struct {
 	molReader
 	created []*types.Issue
 	deps    []*types.Dependency
+	seq     int
 }
 
 func (w *recordingMolWriter) CreateIssue(_ context.Context, issue *types.Issue, _ string) error {
@@ -25,6 +29,40 @@ func (w *recordingMolWriter) CreateIssue(_ context.Context, issue *types.Issue, 
 	clone := *issue
 	clone.Labels = append([]string(nil), issue.Labels...)
 	w.created = append(w.created, &clone)
+	return nil
+}
+
+// CreateIssues follows the store's batch contract: IDs are assigned in place
+// before any issue is written, then each batch:<index> dependency end is
+// resolved to the ID of issues[index], and each issue is recorded as
+// CreateIssue records it.
+func (w *recordingMolWriter) CreateIssues(ctx context.Context, issues []*types.Issue, actor string) error {
+	for _, issue := range issues {
+		if issue.ID == "" {
+			w.seq++
+			issue.ID = fmt.Sprintf("cmp-%d", w.seq)
+		}
+	}
+	for _, issue := range issues {
+		for _, dep := range issue.Dependencies {
+			for _, end := range []*string{&dep.IssueID, &dep.DependsOnID} {
+				digits, isRef := strings.CutPrefix(*end, "batch:")
+				if !isRef {
+					continue
+				}
+				index, err := strconv.Atoi(digits)
+				if err != nil || index < 0 || index >= len(issues) {
+					return fmt.Errorf("dependency ref %q is not a position in this %d-issue batch", *end, len(issues))
+				}
+				*end = issues[index].ID
+			}
+		}
+	}
+	for _, issue := range issues {
+		if err := w.CreateIssue(ctx, issue, actor); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
