@@ -172,9 +172,17 @@ func RecordEventInTable(ctx context.Context, tx DBTX, table, issueID string, eve
 
 // GenerateIssueIDInTable generates a unique ID, checking for collisions
 // in the specified table. Supports counter mode for non-ephemeral issues.
+func GenerateIssueIDInTable(ctx context.Context, tx DBTX, table, prefix string, issue *types.Issue, actor string) (string, error) {
+	return generateIssueIDAvoiding(ctx, tx, table, prefix, issue, actor, nil)
+}
+
+// generateIssueIDAvoiding is GenerateIssueIDInTable that also skips the IDs in
+// taken. A batch that assigns IDs before inserting any row needs this: the
+// table check only sees rows already written, so two identical issues in one
+// batch would otherwise be given the same hash.
 //
 //nolint:gosec // G201: table is a hardcoded constant
-func GenerateIssueIDInTable(ctx context.Context, tx DBTX, table, prefix string, issue *types.Issue, actor string) (string, error) {
+func generateIssueIDAvoiding(ctx context.Context, tx DBTX, table, prefix string, issue *types.Issue, actor string, taken map[string]bool) (string, error) {
 	// Counter mode only applies to the issues table (not wisps).
 	if table == "issues" {
 		counterMode, err := IsCounterModeTx(ctx, tx)
@@ -207,7 +215,7 @@ func GenerateIssueIDInTable(ctx context.Context, tx DBTX, table, prefix string, 
 				return "", fmt.Errorf("failed to check for ID collision: %w", err)
 			}
 
-			if count == 0 {
+			if count == 0 && !taken[candidate] {
 				return candidate, nil
 			}
 		}
