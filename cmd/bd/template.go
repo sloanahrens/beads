@@ -670,9 +670,13 @@ func cloneSubgraphInto(ctx context.Context, w molWriter, subgraph *TemplateSubgr
 		return nil, fmt.Errorf("checking custom types for subgraph: %w", err)
 	}
 
-	idMapping := make(map[string]string)
+	// The clone is built in memory and written as one batch. Its edges name
+	// their ends by position in that batch (batch:<index>), since the IDs do
+	// not exist until the store assigns them during the write.
+	var issues []*types.Issue
+	position := make(map[string]int)
 
-	// First pass: create all issues with new IDs
+	// First pass: build all issues with new IDs
 	for _, oldIssue := range subgraph.Issues {
 		// RootOnly: skip child issues, only create the root
 		if opts.RootOnly && oldIssue.ID != subgraph.Root.ID {
@@ -717,43 +721,49 @@ func cloneSubgraphInto(ctx context.Context, w molWriter, subgraph *TemplateSubgr
 			newIssue.ID = bondedID
 		}
 
-		if err := w.CreateIssue(ctx, newIssue, opts.Actor); err != nil {
-			return nil, fmt.Errorf("failed to create issue from %s: %w", oldIssue.ID, err)
-		}
-
-		idMapping[oldIssue.ID] = newIssue.ID
+		position[oldIssue.ID] = len(issues)
+		issues = append(issues, newIssue)
 	}
 
-	// Second pass: recreate dependencies with new IDs
+	// Second pass: each dependency rides on the issue it leaves from, with
+	// both ends named by their position in the batch
 	for _, dep := range subgraph.Dependencies {
-		newFromID, ok1 := idMapping[dep.IssueID]
-		newToID, ok2 := idMapping[dep.DependsOnID]
+		from, ok1 := position[dep.IssueID]
+		to, ok2 := position[dep.DependsOnID]
 		if !ok1 || !ok2 {
 			continue // Skip if either end is outside the subgraph
 		}
 
-		newDep := &types.Dependency{
-			IssueID:     newFromID,
-			DependsOnID: newToID,
+		issues[from].Dependencies = append(issues[from].Dependencies, &types.Dependency{
+			IssueID:     fmt.Sprintf("batch:%d", from),
+			DependsOnID: fmt.Sprintf("batch:%d", to),
 			Type:        dep.Type,
 			Metadata:    dep.Metadata,
-		}
-		if err := w.AddDependency(ctx, newDep, opts.Actor); err != nil {
-			return nil, fmt.Errorf("failed to create dependency: %w", err)
-		}
+		})
 	}
 
 	// Atomic attachment: link spawned root to target molecule within
 	// the same transaction (bd-wvplu: prevents orphaned spawns)
 	if opts.AttachToID != "" {
-		attachDep := &types.Dependency{
-			IssueID:     idMapping[subgraph.Root.ID],
+		root, ok := position[subgraph.Root.ID]
+		if !ok {
+			return nil, fmt.Errorf("template root %s is not in the subgraph", subgraph.Root.ID)
+		}
+		issues[root].Dependencies = append(issues[root].Dependencies, &types.Dependency{
+			IssueID:     fmt.Sprintf("batch:%d", root),
 			DependsOnID: opts.AttachToID,
 			Type:        opts.AttachDepType,
-		}
-		if err := w.AddDependency(ctx, attachDep, opts.Actor); err != nil {
-			return nil, fmt.Errorf("attaching to molecule: %w", err)
-		}
+		})
+	}
+
+	if err := w.CreateIssues(ctx, issues, opts.Actor); err != nil {
+		return nil, fmt.Errorf("failed to create issues from %s: %w", subgraph.Root.ID, err)
+	}
+
+	// The store has assigned the IDs in place, so the mapping is read after the write
+	idMapping := make(map[string]string, len(position))
+	for oldID, at := range position {
+		idMapping[oldID] = issues[at].ID
 	}
 
 	return &InstantiateResult{
