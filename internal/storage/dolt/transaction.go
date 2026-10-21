@@ -462,9 +462,10 @@ func (t *doltTransaction) CreateIssues(ctx context.Context, issues []*types.Issu
 		return nil
 	}
 
-	// This must run before splitting regular issues from wisps: the shared
-	// create helper below only sees the regular subset.
-	if err := issueops.ValidateCreateIssuesMixedBucketDependencies(issues); err != nil {
+	// batch: refs index the caller's slice, so they are resolved here, before
+	// the split below gives each plane only its own subset. The plane rule is
+	// checked on the resolved IDs for the same reason.
+	if err := issueops.CheckBatchDependencyRefs(issues); err != nil {
 		return err
 	}
 
@@ -485,6 +486,28 @@ func (t *doltTransaction) CreateIssues(ctx context.Context, issues []*types.Issu
 		SkipPrefixValidation: true,
 	})
 	if err != nil {
+		return err
+	}
+
+	// Each plane's IDs come from the session that writes its rows, and both
+	// share one taken set. The pre-set IDs of both planes go in first, so no
+	// generated ID can land on one of them.
+	taken := make(map[string]bool, len(issues))
+	for _, issue := range issues {
+		if issue.ID != "" {
+			taken[issue.ID] = true
+		}
+	}
+	if err := issueops.AssignBatchIssueIDsInTx(ctx, t.regularTx, bc, regularIssues, actor, taken); err != nil {
+		return err
+	}
+	if err := issueops.AssignBatchIssueIDsInTx(ctx, t.ignoredTx, bc, wispIssues, actor, taken); err != nil {
+		return err
+	}
+	if err := issueops.ResolveBatchDependencyRefs(issues); err != nil {
+		return err
+	}
+	if err := issueops.ValidateCreateIssuesMixedBucketDependencies(issues); err != nil {
 		return err
 	}
 

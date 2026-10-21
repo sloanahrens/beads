@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +107,13 @@ func mergeChangedTables(dst map[string]bool, src map[string]bool) map[string]boo
 }
 
 func CreateIssueInTxWithResult(ctx context.Context, tx DBTX, bc *BatchContext, issue *types.Issue, actor string) (CreateIssueResult, error) {
+	return createIssueInTxWithResult(ctx, tx, bc, issue, actor, false)
+}
+
+// createIssueInTxWithResult is CreateIssueInTxWithResult. idAssigned says that
+// AssignBatchIssueIDsInTx already gave issue its ID and ran the prefix check on
+// it, so a generated ID is not checked a second time.
+func createIssueInTxWithResult(ctx context.Context, tx DBTX, bc *BatchContext, issue *types.Issue, actor string, idAssigned bool) (CreateIssueResult, error) {
 	var result CreateIssueResult
 	if err := PrepareIssueForInsert(issue, bc.CustomStatuses, bc.CustomTypes); err != nil {
 		return result, err
@@ -113,8 +121,10 @@ func CreateIssueInTxWithResult(ctx context.Context, tx DBTX, bc *BatchContext, i
 
 	issueTable, eventTable := TableRouting(issue)
 
-	if err := assignCreateIssueIDInTx(ctx, tx, bc, issue, actor); err != nil {
-		return result, err
+	if !idAssigned {
+		if err := assignCreateIssueIDInTx(ctx, tx, bc, issue, actor); err != nil {
+			return result, err
+		}
 	}
 	if bc.Opts.CreateOnly {
 		if err := EnsureIssueIDAvailableInTx(ctx, tx, issue.ID); err != nil {
@@ -210,16 +220,8 @@ func CreateIssueInTxWithResult(ctx context.Context, tx DBTX, bc *BatchContext, i
 func assignCreateIssueIDInTx(ctx context.Context, tx DBTX, bc *BatchContext, issue *types.Issue, actor string) error {
 	if issue.ID == "" {
 		issueTable, _ := TableRouting(issue)
-		prefix := bc.ConfigPrefix
-		if issue.PrefixOverride != "" {
-			prefix = issue.PrefixOverride
-		} else if issue.IDPrefix != "" {
-			prefix = bc.ConfigPrefix + "-" + issue.IDPrefix
-		} else if IsWisp(issue) {
-			prefix = bc.ConfigPrefix + "-wisp"
-		}
 		var err error
-		issue.ID, err = GenerateIssueIDInTable(ctx, tx, issueTable, prefix, issue, actor)
+		issue.ID, err = GenerateIssueIDInTable(ctx, tx, issueTable, createIssueIDPrefix(bc, issue), issue, actor)
 		if err != nil {
 			return fmt.Errorf("failed to generate issue ID: %w", err)
 		}
@@ -229,6 +231,135 @@ func assignCreateIssueIDInTx(ctx context.Context, tx DBTX, bc *BatchContext, iss
 		if err := ValidateIssueIDPrefix(issue.ID, bc.ConfigPrefix, bc.AllowedPrefixes); err != nil {
 			return fmt.Errorf("prefix validation failed for %s: %w", issue.ID, err)
 		}
+	}
+	return nil
+}
+
+// createIssueIDPrefix is the prefix of the ID a new issue is generated with.
+func createIssueIDPrefix(bc *BatchContext, issue *types.Issue) string {
+	switch {
+	case issue.PrefixOverride != "":
+		return issue.PrefixOverride
+	case issue.IDPrefix != "":
+		return bc.ConfigPrefix + "-" + issue.IDPrefix
+	case IsWisp(issue):
+		return bc.ConfigPrefix + "-wisp"
+	default:
+		return bc.ConfigPrefix
+	}
+}
+
+// AssignBatchIssueIDsInTx gives every issue of a batch its ID before any row of
+// the batch is written, so that a batch: dependency ref can name an issue that
+// is not inserted yet. An issue that arrives with an ID keeps it and gets the
+// prefix check the single-row create runs. An issue without one gets the ID
+// the single-row create would generate, and taken records every ID the batch
+// holds, so that generated IDs skip them: the generator only sees rows already
+// in the table. taken must be non-nil. A caller that splits one batch across
+// two SQL sessions shares one taken map between the calls, and seeds it with
+// every pre-set ID first.
+func AssignBatchIssueIDsInTx(ctx context.Context, tx DBTX, bc *BatchContext, issues []*types.Issue, actor string, taken map[string]bool) error {
+	for _, issue := range issues {
+		if issue.ID == "" {
+			continue
+		}
+		if !bc.Opts.SkipPrefixValidation {
+			if err := ValidateIssueIDPrefix(issue.ID, bc.ConfigPrefix, bc.AllowedPrefixes); err != nil {
+				return fmt.Errorf("prefix validation failed for %s: %w", issue.ID, err)
+			}
+		}
+		taken[issue.ID] = true
+	}
+	for _, issue := range issues {
+		if issue.ID != "" {
+			continue
+		}
+		// The generated ID hashes CreatedAt, which PrepareIssueForInsert
+		// defaults, so it has to run before the generator does.
+		if err := PrepareIssueForInsert(issue, bc.CustomStatuses, bc.CustomTypes); err != nil {
+			return err
+		}
+		issueTable, _ := TableRouting(issue)
+		id, err := generateIssueIDAvoiding(ctx, tx, issueTable, createIssueIDPrefix(bc, issue), issue, actor, taken)
+		if err != nil {
+			return fmt.Errorf("failed to generate issue ID: %w", err)
+		}
+		issue.ID = id
+		taken[id] = true
+	}
+	return nil
+}
+
+// batchDependencyRefPrefix marks a dependency end that names an issue of the
+// same CreateIssues call by its position in the slice: batch:<index>.
+const batchDependencyRefPrefix = "batch:"
+
+// batchDependencyRefIndex parses one dependency end against a batch of n
+// issues. An end without the prefix is not a batch ref: found is false and the
+// end is left alone.
+func batchDependencyRefIndex(end string, n int) (index int, found bool, err error) {
+	digits, found := strings.CutPrefix(end, batchDependencyRefPrefix)
+	if !found {
+		return 0, false, nil
+	}
+	position, err := strconv.ParseUint(digits, 10, 0)
+	if err != nil || position >= uint64(n) {
+		return 0, true, fmt.Errorf("dependency ref %q is not a position in this %d-issue batch", end, n)
+	}
+	return int(position), true, nil
+}
+
+// CheckBatchDependencyRefs refuses a batch:<index> dependency end that is not a
+// position in issues. It reads no IDs and writes nothing, so a batch refused
+// here has written nothing.
+func CheckBatchDependencyRefs(issues []*types.Issue) error {
+	for _, issue := range issues {
+		for _, dep := range issue.Dependencies {
+			if dep == nil {
+				continue
+			}
+			for _, end := range []string{dep.IssueID, dep.DependsOnID} {
+				if _, _, err := batchDependencyRefIndex(end, len(issues)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ResolveBatchDependencyRefs rewrites each batch:<index> end of a dependency to
+// the ID of issues[index]. Every issue must already carry its ID, which
+// AssignBatchIssueIDsInTx gives it. The rewrite is all or nothing: a ref that
+// does not resolve leaves every dependency as it was.
+func ResolveBatchDependencyRefs(issues []*types.Issue) error {
+	type rewrite struct {
+		end *string
+		id  string
+	}
+	var rewrites []rewrite
+	for _, issue := range issues {
+		for _, dep := range issue.Dependencies {
+			if dep == nil {
+				continue
+			}
+			for _, end := range []*string{&dep.IssueID, &dep.DependsOnID} {
+				index, found, err := batchDependencyRefIndex(*end, len(issues))
+				if err != nil {
+					return err
+				}
+				if !found {
+					continue
+				}
+				if issues[index].ID == "" {
+					return fmt.Errorf("dependency ref %q names an issue that has no ID yet", *end)
+				}
+				rewrites = append(rewrites, rewrite{end: end, id: issues[index].ID})
+			}
+		}
+	}
+	for _, r := range rewrites {
+		*r.end = r.id
 	}
 	return nil
 }
@@ -274,8 +405,19 @@ func CreateIssuesInTxWithResult(ctx context.Context, tx DBTX, issues []*types.Is
 // writes across SQL sessions (doltTransaction's wisp tier) build the context
 // on the session that sees in-transaction config writes and pass it here.
 // The caller's bc is not modified, so one context can serve several calls.
+// A dependency end of the form batch:<index> names issues[index] by its ID,
+// which is assigned here before any row is written.
 func CreateIssuesInTxWithContext(ctx context.Context, tx DBTX, bc *BatchContext, issues []*types.Issue, actor string) (CreateIssuesResult, error) {
 	opts := bc.Opts
+	if err := CheckBatchDependencyRefs(issues); err != nil {
+		return CreateIssuesResult{}, err
+	}
+	if err := AssignBatchIssueIDsInTx(ctx, tx, bc, issues, actor, map[string]bool{}); err != nil {
+		return CreateIssuesResult{}, err
+	}
+	if err := ResolveBatchDependencyRefs(issues); err != nil {
+		return CreateIssuesResult{}, err
+	}
 	// The plane rule is a REFUSAL, never a filter. A strict batch (BatchCreator's
 	// contract) is refused whole before any row is written. A tolerant batch
 	// (SkipDependencyValidationErrors — the import mode) keeps every in-batch
@@ -303,7 +445,7 @@ func CreateIssuesInTxWithContext(ctx context.Context, tx DBTX, bc *BatchContext,
 	result := CreateIssuesResult{}
 	accepted := issues[:0:0]
 	for _, issue := range issues {
-		issueResult, err := CreateIssueInTxWithResult(ctx, tx, &batch, issue, actor)
+		issueResult, err := createIssueInTxWithResult(ctx, tx, &batch, issue, actor, true)
 		if err != nil {
 			return CreateIssuesResult{}, err
 		}
