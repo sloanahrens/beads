@@ -11,7 +11,10 @@
 // intentionally NOT unified and stays in each stack.
 package sqlbuild
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // FilterTables configures table names for the filter builders, allowing the
 // same filter logic to target both the issues and wisps table families.
@@ -36,8 +39,81 @@ func OptionalWispTable(name string) bool {
 }
 
 // DepTargetExpr resolves a dependency row's target across the three
-// mutually-exclusive target columns.
+// mutually-exclusive target columns. Use it in SELECT projections (aliased as
+// depends_on_id); for a WHERE clause prefer DepTargetSelectSQL /
+// DepTargetCountSQL, which the index on the target column can serve.
 const DepTargetExpr = "COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)"
+
+// DepTargetColumns are the three mutually-exclusive dependency target columns,
+// in COALESCE precedence order: issue, then wisp, then external.
+var DepTargetColumns = []string{
+	"depends_on_issue_id",
+	"depends_on_wisp_id",
+	"depends_on_external",
+}
+
+// DepTargetSelectSQL renders one SELECT per typed target column, UNION ALL'd in
+// DepTargetColumns order: `SELECT <project> FROM <from> WHERE <pred>`, with
+// every %s in project and pred replaced by that branch's column name.
+//
+// This is the indexable form of DepTargetExpr for WHERE clauses. COALESCE(...)
+// wraps all three columns in an expression no index can match, so Dolt plans
+// every predicate over it as a full Table scan plus a Filter. One bare equality
+// per column lets each branch seek that column's own index instead. Measured
+// on the reference Dolt (2.2.x, `bd sql 'EXPLAIN FORMAT=TREE ...'` against a
+// live rig database):
+//
+//	SELECT count(*) FROM wisp_dependencies WHERE COALESCE(...) = 'X'
+//	  -> Filter -> Table(name: wisp_dependencies)          (full scan)
+//
+//	SELECT count(*) FROM (SELECT 1 FROM wisp_dependencies
+//	  WHERE depends_on_issue_id = 'X' UNION ALL ... )
+//	  -> three IndexedTableAccess, one per target column   (index seeks)
+//
+// The obvious alternative — `(a = ? OR b = ? OR c = ?)` — is NOT usable: Dolt's
+// optimizer does not index-merge an OR of distinct columns and plans it as the
+// same full Table scan (measured; see issueops.depTargetEqualsOr, which keeps
+// the OR only for the type-filtered paths where the (type, target) composite
+// gives it a bounded range anyway). The decomposition therefore has to be a
+// UNION ALL, not a single disjunction.
+//
+// The result set is exactly the one the COALESCE predicate selects: both
+// dependency tables carry a ck_*_one_target CHECK requiring exactly one typed
+// target column to be non-NULL, so a row matches at most one branch (no
+// duplicates) and COALESCE never has a second non-NULL column to prefer over
+// the first. Callers bind the same id(s) once per branch, in DepTargetColumns
+// order — DepTargetBranchArgs builds that argument list.
+func DepTargetSelectSQL(from, project, pred string) string {
+	selects := make([]string, 0, len(DepTargetColumns))
+	for _, col := range DepTargetColumns {
+		selects = append(selects, fmt.Sprintf("SELECT %s FROM %s WHERE %s",
+			strings.ReplaceAll(project, "%s", col),
+			from,
+			strings.ReplaceAll(pred, "%s", col)))
+	}
+	return strings.Join(selects, "\n\t\t\t\tUNION ALL\n\t\t\t\t")
+}
+
+// DepTargetCountSQL is the counting form of DepTargetSelectSQL: a reverse-
+// dependency count that is ONE statement of three index seeks, rather than
+// `count(*) WHERE DepTargetExpr = ?`, which no plan can seek. from may carry
+// its own joins and aliases; pred is a single-branch predicate with one %s for
+// the target column (prefix aliases, e.g. `d.%s = ?`, when from is aliased).
+func DepTargetCountSQL(from, pred string) string {
+	return fmt.Sprintf("SELECT count(*) FROM (%s) dep_targets",
+		DepTargetSelectSQL(from, "1", pred))
+}
+
+// DepTargetBranchArgs repeats perBranch once per entry in DepTargetColumns:
+// the argument list, in bind order, for a DepTargetSelectSQL predicate whose
+// per-branch parameters are perBranch.
+func DepTargetBranchArgs(perBranch ...any) []any {
+	out := make([]any, 0, len(DepTargetColumns)*len(perBranch))
+	for range DepTargetColumns {
+		out = append(out, perBranch...)
+	}
+	return out
+}
 
 // IssueBaseColumns is the column list for the issues/wisps row itself,
 // without the lease overlay. Use IssueSelectColumns for full hydration;

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/steveyegge/beads/internal/storage/issueops"
+	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -18,6 +19,11 @@ import (
 // "column depends_on_id could not be found in any table in scope". The slice
 // path projects real columns, so it can use depends_on_id directly. This
 // matches issueops.DepTargetExpr on main.
+//
+// It is NOT used as a WHERE predicate here: a predicate over the COALESCE
+// expression cannot be indexed, so Dolt plans it as a full table scan. The
+// reverse counts below go through sqlbuild.DepTargetCountSQL, which decomposes
+// the same predicate into one indexed equality per typed target column.
 const depTargetExpr = "COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)"
 
 // CountIssues returns the number of issues matching query and filter.
@@ -54,25 +60,34 @@ func (s *DoltStore) CountIssuesByGroup(ctx context.Context, filter types.IssueFi
 // a dependent may be a permanent issue (edge in `dependencies`) or a wisp
 // (edge in `wisp_dependencies`, routed there by WispTableRouting on the source).
 //
-// Both tables' targets are resolved via depTargetExpr (the split physical
-// columns) rather than the STORED generated depends_on_id, which a count(*)
-// can fail to resolve under the pure-Go GMS analyzer.
+// Both tables' targets are resolved via the split physical columns rather than
+// the STORED generated depends_on_id, which a count(*) can fail to resolve
+// under the pure-Go GMS analyzer, and each count brackets the three typed
+// target columns as independent indexed equalities
+// (sqlbuild.DepTargetCountSQL) instead of predication on the COALESCE
+// expression, which no plan can seek.
 func (s *DoltStore) CountDependents(ctx context.Context, issueID string) (int64, error) {
 	var n int64
 	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
 		var perm, wisp int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT count(*) FROM dependencies WHERE `+depTargetExpr+` = ?`, issueID).Scan(&perm); err != nil {
+		if err := tx.QueryRowContext(ctx, reverseDependentsSQL("dependencies"),
+			sqlbuild.DepTargetBranchArgs(issueID)...).Scan(&perm); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx,
-			`SELECT count(*) FROM wisp_dependencies WHERE `+depTargetExpr+` = ?`, issueID).Scan(&wisp); err != nil {
+		if err := tx.QueryRowContext(ctx, reverseDependentsSQL("wisp_dependencies"),
+			sqlbuild.DepTargetBranchArgs(issueID)...).Scan(&wisp); err != nil {
 			return err
 		}
 		n = perm + wisp
 		return nil
 	})
 	return n, err
+}
+
+// reverseDependentsSQL counts the rows of table whose target is the bound id,
+// as three index seeks — one per typed target column — in a single statement.
+func reverseDependentsSQL(table string) string {
+	return sqlbuild.DepTargetCountSQL(table, "%s = ?")
 }
 
 // CountDependencies returns the number of issues that issueID depends on.
@@ -132,21 +147,25 @@ func (s *DoltStore) CountEvents(ctx context.Context, issueID string, limit int) 
 // Counted as two separate queries summed in Go (see CountDependents for why a
 // single combined query is avoided).
 func (s *DoltStore) CountDependentsByStatus(ctx context.Context, issueID string, status types.Status) (int64, error) {
+	// Same decomposition as CountDependents: three indexed target equalities
+	// per table, each joined to its source row's status. Measured on Dolt, the
+	// branches drive from the target index into the issues/wisps primary key,
+	// where the COALESCE form scans the whole dependency table.
+	dependentsByStatusSQL := func(from, statusPred string) string {
+		return sqlbuild.DepTargetCountSQL(from, "d.%s = ? AND "+statusPred)
+	}
+	args := sqlbuild.DepTargetBranchArgs(issueID, string(status))
 	var n int64
 	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
 		var perm, wisp int64
 		if err := tx.QueryRowContext(ctx,
-			`SELECT count(*) FROM dependencies d
-			 JOIN issues i ON i.id = d.issue_id
-			 WHERE COALESCE(d.depends_on_issue_id, d.depends_on_wisp_id, d.depends_on_external) = ? AND i.status = ?`,
-			issueID, string(status)).Scan(&perm); err != nil {
+			dependentsByStatusSQL("dependencies d JOIN issues i ON i.id = d.issue_id", "i.status = ?"),
+			args...).Scan(&perm); err != nil {
 			return err
 		}
 		if err := tx.QueryRowContext(ctx,
-			`SELECT count(*) FROM wisp_dependencies d
-			 JOIN wisps w ON w.id = d.issue_id
-			 WHERE COALESCE(d.depends_on_issue_id, d.depends_on_wisp_id, d.depends_on_external) = ? AND w.status = ?`,
-			issueID, string(status)).Scan(&wisp); err != nil {
+			dependentsByStatusSQL("wisp_dependencies d JOIN wisps w ON w.id = d.issue_id", "w.status = ?"),
+			args...).Scan(&wisp); err != nil {
 			return err
 		}
 		n = perm + wisp

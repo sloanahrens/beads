@@ -82,10 +82,12 @@ func (h CountsHydration) IssueColumns() string {
 //   - By-IDs form (ids non-empty): whereSQL/orderBySQL/limitSQL are ignored and
 //     the driver AND every count subquery are constrained to ids. This keeps
 //     each subquery from scanning its whole side table and, crucially, keeps
-//     the reverse-blocker rc self-join — whose COALESCE(...) key the pure-Go
-//     GMS analyzer cannot auto-index — from re-scanning its full materialization
-//     once per driver row. The returned args are the ids repeated once per
-//     injection point, in left-to-right placeholder order.
+//     the reverse-blocker rc self-join from re-scanning its full
+//     materialization once per driver row: the rc branch is decomposed into one
+//     indexed target equality per typed column (DepTargetSelectSQL), so binding
+//     the page to each branch turns it into three index seeks instead of a
+//     Filter over every blocks edge. The returned args are the ids repeated once
+//     per placeholder branch, in left-to-right order.
 //
 // The by-IDs form is result-identical to the predicate form over the same set
 // of surviving rows: each per-issue count is a function of the whole dependency
@@ -136,27 +138,33 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 	// Per-subquery id constraints. Empty strings in the predicate form leave the
 	// projection unchanged; in the by-IDs form they push the page down so no
 	// subquery aggregates more than the page's worth of rows.
-	var labelWhere, depBlocksExtra, rcDepExtra, rcWispExtra, ccWhere, pcExtra, depWhere string
+	var labelWhere, depBlocksExtra, ccWhere, pcExtra, depWhere string
 	if byIDs {
 		labelWhere = fmt.Sprintf("WHERE issue_id IN (%s)", inSQL)
 		depBlocksExtra = fmt.Sprintf(" AND issue_id IN (%s)", inSQL)
-		rcDepExtra = fmt.Sprintf(" AND %s IN (%s)", DepTargetExpr, inSQL)
-		rcWispExtra = fmt.Sprintf(" AND %s IN (%s)", DepTargetExpr, inSQL)
 		ccWhere = fmt.Sprintf("WHERE issue_id IN (%s)", inSQL)
 		pcExtra = fmt.Sprintf(" AND issue_id IN (%s)", inSQL)
 		depWhere = fmt.Sprintf("WHERE issue_id IN (%s)", inSQL)
 	}
 
-	reverseBlockerSelect := fmt.Sprintf(`
-				SELECT %s AS dep_id
-				FROM dependencies WHERE type = 'blocks'%s
-	`, DepTargetExpr, rcDepExtra)
+	// Reverse-blocker branches: one indexed target equality per typed column
+	// instead of one COALESCE predicate (see DepTargetSelectSQL for the
+	// measurements and the equivalence argument). With ids, each branch also
+	// bounds the target column to the page — the reason the by-IDs form stops
+	// re-scanning the materialization — which is what makes the index seek
+	// possible per branch rather than a Filter over the type range alone. The
+	// predicate form keeps every blocks edge (it is one global aggregate) but
+	// reads them from the covering (type, target) index, and the IS NOT NULL
+	// bound keeps the all-NULL legacy corner out of the aggregate, matching
+	// COALESCE's non-NULL targets.
+	rcPredicate := "type = 'blocks' AND %s IS NOT NULL"
+	if byIDs {
+		rcPredicate = fmt.Sprintf("type = 'blocks' AND %%s IN (%s)", inSQL)
+	}
+	reverseBlockerSelect := DepTargetSelectSQL("dependencies", "%s AS dep_id", rcPredicate)
 	if includeWispReverseDeps {
-		reverseBlockerSelect += fmt.Sprintf(`
-				UNION ALL
-				SELECT %s AS dep_id
-				FROM wisp_dependencies WHERE type = 'blocks'%s
-		`, DepTargetExpr, rcWispExtra)
+		reverseBlockerSelect += "\n\t\t\t\tUNION ALL\n\t\t\t\t" +
+			DepTargetSelectSQL("wisp_dependencies", "%s AS dep_id", rcPredicate)
 	}
 
 	labelsSelect := "l.labels_json AS labels_json"
@@ -198,8 +206,8 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 		tables.Comments, ccWhere)
 	if hyd.SkipCounts {
 		// Constants in the same three positions: the scan reads these columns
-		// by index, and the rc join above is the one the embedded engine
-		// cannot index (see the by-IDs rationale above).
+		// by index, and dropping the rc join is what a caller asks for when the
+		// per-row reverse-blocker count is not worth its weight.
 		countsSelect = `0 AS dep_count,
 			0 AS rdep_count,
 			0 AS comment_count`
@@ -266,17 +274,19 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 	}
 
 	// args follow the placeholder order in sqlText: labels join (unless
-	// skipped), dc, rc dependencies branch, rc wisp branch (if any), cc (all
-	// four unless the counts are skipped), pc, d, then the driver.
-	args := make([]any, 0, len(idArgs)*8)
+	// skipped), dc, the rc dependencies branches, the rc wisp branches (if
+	// any), cc (all four unless the counts are skipped), pc, d, then the
+	// driver. Each rc table is three branches — one typed target column each —
+	// so it binds the id list once per branch.
+	args := make([]any, 0, len(idArgs)*12)
 	if !hyd.SkipLabels {
 		args = append(args, idArgs...)
 	}
 	if !hyd.SkipCounts {
-		args = append(args, idArgs...) // dc
-		args = append(args, idArgs...) // rc dependencies
+		args = append(args, idArgs...)                         // dc
+		args = append(args, DepTargetBranchArgs(idArgs...)...) // rc dependencies
 		if includeWispReverseDeps {
-			args = append(args, idArgs...) // rc wisp_dependencies
+			args = append(args, DepTargetBranchArgs(idArgs...)...) // rc wisp_dependencies
 		}
 		args = append(args, idArgs...) // cc
 	}
