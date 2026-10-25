@@ -247,3 +247,19 @@ func TestGetActorWithGit_PriorityOrder(t *testing.T) {
 		t.Errorf("Expected BD_ACTOR to be used as fallback, got %q", result)
 	}
 }
+
+// TestGetActorUsesAgentName: a session with CLAUDE_AGENT_NAME and no BEADS_ACTOR or
+// BD_ACTOR writes as town/crew/<name>; BEADS_ACTOR still outranks it.
+func TestGetActorUsesAgentName(t *testing.T) {
+	t.Setenv("BD_ACTOR", "")
+	t.Setenv("BEADS_ACTOR", "")
+	t.Setenv("CLAUDE_AGENT_NAME", "dunlin")
+	actor = ""
+	if got := getActorWithGit(); got != "town/crew/dunlin" {
+		t.Errorf("getActorWithGit() = %q, want town/crew/dunlin", got)
+	}
+	t.Setenv("BEADS_ACTOR", "town/crew/other")
+	if got := getActorWithGit(); got != "town/crew/other" {
+		t.Errorf("with BEADS_ACTOR set, getActorWithGit() = %q, want town/crew/other", got)
+	}
+}

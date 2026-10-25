@@ -693,7 +693,7 @@ func resolveConfiguredActor() string {
 }
 
 // getActorWithGit returns the actor for audit trails with git config fallback.
-// Priority: --actor flag > BEADS_ACTOR env > BD_ACTOR env (deprecated) > git config user.name > $USER > "unknown"
+// Priority: --actor flag > BEADS_ACTOR env > BD_ACTOR env (deprecated) > CLAUDE_AGENT_NAME env (town/crew/<name>) > git config user.name > $USER > "unknown"
 // This provides a sensible default for developers: their git identity is used unless
 // explicitly overridden
 func getActorWithGit() string {
@@ -710,6 +710,13 @@ func getActorWithGit() string {
 	// Check BD_ACTOR env var (deprecated alias, kept for backwards compatibility)
 	if bdActor := os.Getenv("BD_ACTOR"); bdActor != "" {
 		return bdActor
+	}
+
+	// A session started through claude-agent names itself. Its bead identity is
+	// town/crew/<name>, the value claude-agent exports as BEADS_ACTOR, so a session
+	// that never got BEADS_ACTOR still writes as itself, not as the human.
+	if agent := os.Getenv("CLAUDE_AGENT_NAME"); agent != "" {
+		return "town/crew/" + agent
 	}
 
 	// Try git config user.name - the natural default for a git-native tool
