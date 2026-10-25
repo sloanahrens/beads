@@ -291,10 +291,19 @@ func TestSearchCountsSQLShape(t *testing.T) {
 		"WHERE x = ?",
 		"ORDER BY y",
 		"LIMIT 5",
+		// Reverse blockers are one indexed target equality per typed column, on
+		// both tables, not a predicate over the COALESCE expression.
+		"SELECT depends_on_issue_id AS dep_id FROM wisp_dependencies WHERE type = 'blocks' AND depends_on_issue_id IS NOT NULL",
+		"SELECT depends_on_wisp_id AS dep_id FROM wisp_dependencies WHERE type = 'blocks' AND depends_on_wisp_id IS NOT NULL",
+		"SELECT depends_on_external AS dep_id FROM wisp_dependencies WHERE type = 'blocks' AND depends_on_external IS NOT NULL",
+		"SELECT depends_on_issue_id AS dep_id FROM dependencies WHERE type = 'blocks' AND depends_on_issue_id IS NOT NULL",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("counts SQL missing %q", want)
 		}
+	}
+	if strings.Contains(sql, "COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external) AS dep_id") {
+		t.Error("reverse blockers must not predicate on the COALESCE target expression")
 	}
 
 	// Filter-before-join structure (predicate form): whereSQL is applied to the
@@ -326,8 +335,10 @@ func TestSearchCountsSQLShape(t *testing.T) {
 		}
 	}
 
+	// The rc branches themselves are a UNION ALL across the three typed target
+	// columns, so the wisp-absence check names the table rather than the union.
 	noWispDeps, _ := SearchCountsSQL(IssuesFilterTables, nil, "", "", "", false, CountsHydration{SkipLabels: true})
-	if strings.Contains(noWispDeps, "UNION ALL") {
+	if strings.Contains(noWispDeps, "wisp_dependencies") {
 		t.Error("counts SQL must not union wisp reverse deps when probe says absent")
 	}
 	// An empty whereSQL keeps the plain driver: there is no predicate to push
@@ -344,8 +355,9 @@ func TestSearchCountsSQLShape(t *testing.T) {
 	}
 
 	// By-IDs form: driver and every subquery are constrained to the ids, and the
-	// arg count matches the placeholder injection points (labels, dc, rc-deps,
-	// rc-wisp, cc, pc, d, driver = 8 for the wisp family with labels).
+	// arg count matches the placeholder injection points (labels, dc,
+	// rc-deps ×3, rc-wisp ×3, cc, pc, d, driver = 12 for the wisp family with
+	// labels — each rc table is one branch per typed target column).
 	byIDs, idArgs := SearchCountsSQL(WispsFilterTables, []string{"a", "b"}, "", "", "", true, CountsHydration{})
 	if !strings.Contains(byIDs, "WHERE i.id IN (?,?)") {
 		t.Errorf("by-IDs counts SQL missing driver id filter:\n%s", byIDs)
@@ -359,15 +371,26 @@ func TestSearchCountsSQLShape(t *testing.T) {
 	if strings.Contains(byIDs, "ORDER BY") || strings.Contains(byIDs, "LIMIT") {
 		t.Error("by-IDs counts SQL must not carry ORDER BY / LIMIT (order restored in Go)")
 	}
-	if len(idArgs) != 8*2 {
-		t.Errorf("by-IDs args = %d, want %d", len(idArgs), 8*2)
+	if len(idArgs) != 12*2 {
+		t.Errorf("by-IDs args = %d, want %d", len(idArgs), 12*2)
+	}
+	// Each rc branch carries its own id list, one per typed target column.
+	for _, want := range []string{
+		"depends_on_issue_id IN (?,?)",
+		"depends_on_wisp_id IN (?,?)",
+		"depends_on_external IN (?,?)",
+	} {
+		if !strings.Contains(byIDs, want) {
+			t.Errorf("by-IDs counts SQL missing per-column rc predicate %q:\n%s", want, byIDs)
+		}
 	}
 
 	// skipLabels drops the labels point and !includeWispReverseDeps drops the
-	// rc-wisp point, leaving 6 injection points (dc, rc-deps, cc, pc, d, driver).
+	// rc-wisp points, leaving 8 injection points (dc, rc-deps ×3, cc, pc, d,
+	// driver).
 	_, idArgsNoLabels := SearchCountsSQL(IssuesFilterTables, []string{"a", "b"}, "", "", "", false, CountsHydration{SkipLabels: true})
-	if len(idArgsNoLabels) != 6*2 {
-		t.Errorf("by-IDs args (skipLabels, no wisp deps) = %d, want %d", len(idArgsNoLabels), 6*2)
+	if len(idArgsNoLabels) != 8*2 {
+		t.Errorf("by-IDs args (skipLabels, no wisp deps) = %d, want %d", len(idArgsNoLabels), 8*2)
 	}
 
 	// SkipCounts drops the three cardinality joins and projects constants in
