@@ -478,7 +478,7 @@ func expectScalar(mock sqlmock.Sqlmock, query, column string, value any) {
 		WillReturnRows(sqlmock.NewRows([]string{column}).AddRow(value))
 }
 
-// expectCursorProbe mocks the information_schema existence probe that
+// expectCursorProbe mocks the table-existence probe that
 // migrationSource.currentVersion issues before it ever reads the cursor
 // table. The probe was added by be-bv7x so a not-yet-created cursor table
 // never poisons the pooled Dolt session with a failing statement.
@@ -486,7 +486,7 @@ func expectCursorProbe(mock sqlmock.Sqlmock, table string, exists bool) {
 	expectTableProbe(mock, table, exists)
 }
 
-// expectTableProbe mocks the SHOW TABLES LIKE existence probe tableExists
+// expectTableProbe mocks the SHOW TABLES LIKE existence probe showTableExists
 // issues. SHOW TABLES answers with one row per matching table, so existence is
 // "a row came back", not a COUNT value.
 func expectTableProbe(mock sqlmock.Sqlmock, table string, exists bool) {
