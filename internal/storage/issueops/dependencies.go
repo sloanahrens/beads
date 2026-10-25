@@ -1003,6 +1003,19 @@ func mergeRecomputeIsBlockedResult(target *RecomputeIsBlockedResult, source Reco
 //
 //nolint:gosec // G201: table names come from WispTableRouting (hardcoded constants)
 func GetIssuesByIDsInTx(ctx context.Context, tx DBTX, ids []string, wispSet map[string]struct{}) ([]*types.Issue, error) {
+	return getIssuesByIDsInTx(ctx, tx, ids, wispSet, false)
+}
+
+// getIssuesByIDsInTx is GetIssuesByIDsInTx with the projection chosen by the
+// caller: lite selects IssueSelectColumnsLite and scans through
+// ScanIssueLiteFrom, leaving the free-form text zero-valued and setting
+// IsLitePartial. It exists for the listing paths whose renderer prints none of
+// that text — today the uncounted ready front (GetReadyWorkInTx) — so their
+// rows cost what they are worth rather than carrying six bodies to the
+// renderer and dropping them. Everything else about the call is unchanged.
+//
+//nolint:gosec // G201: table names come from WispTableRouting (hardcoded constants)
+func getIssuesByIDsInTx(ctx context.Context, tx DBTX, ids []string, wispSet map[string]struct{}, lite bool) ([]*types.Issue, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -1045,9 +1058,14 @@ func GetIssuesByIDsInTx(ctx context.Context, tx DBTX, ids []string, wispSet map[
 			}
 			inClause := strings.Join(placeholders, ",")
 
+			columns, scan := IssueSelectColumns, ScanIssueFrom
+			if lite {
+				columns, scan = IssueSelectColumnsLite, ScanIssueLiteFrom
+			}
+
 			join := sqlbuild.LeaseJoin(pair.table)
 			querySQL := fmt.Sprintf(`SELECT %s FROM %s %s WHERE id IN (%s)`,
-				IssueSelectColumns, pair.table, join, inClause)
+				columns, pair.table, join, inClause)
 			rows, err := tx.QueryContext(ctx, querySQL, args...)
 			if err != nil && leasesTableMissing(err) {
 				// Un-migrated database (pre-0055, be-cm3): retry with the
@@ -1060,7 +1078,7 @@ func GetIssuesByIDsInTx(ctx context.Context, tx DBTX, ids []string, wispSet map[
 			}
 			issueMap := make(map[string]*types.Issue)
 			for rows.Next() {
-				issue, scanErr := ScanIssueFrom(rows)
+				issue, scanErr := scan(rows)
 				if scanErr != nil {
 					_ = rows.Close()
 					return nil, fmt.Errorf("get issues by IDs: scan: %w", scanErr)

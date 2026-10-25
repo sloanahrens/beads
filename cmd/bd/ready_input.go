@@ -33,7 +33,6 @@ type readyInput struct {
 	explain      bool
 	prettyFormat bool
 	plainFormat  bool
-	jsonOut      bool
 }
 
 // gatherReadyInput parses `bd ready`'s flags and builds the work filter. Both
@@ -66,7 +65,6 @@ func gatherReadyInput(cmd *cobra.Command, resolveCap func(*cobra.Command) (int, 
 	if flat, _ := cmd.Flags().GetBool("flat"); flat {
 		in.plainFormat = true
 	}
-	in.jsonOut = jsonOutput
 
 	limit, _ := cmd.Flags().GetInt("limit")
 	in.Limit = &limit
@@ -111,7 +109,7 @@ func gatherReadyInput(cmd *cobra.Command, resolveCap func(*cobra.Command) (int, 
 	if in.claim && in.explain {
 		return in, HandleErrorRespectJSON("--claim cannot be combined with --explain")
 	}
-	if err := briefModeConflict(in.Brief, in.claim, in.gated, in.explain, in.molID, in.jsonOut); err != nil {
+	if err := briefModeConflict(in.Brief, in.claim, in.gated, in.explain, in.molID); err != nil {
 		return in, err
 	}
 	if in.Offset > 0 && in.claim {
@@ -267,12 +265,13 @@ func claimNextRequest(in readyInput) issueops.ClaimNextRequest {
 // route can honor, and nil when there is none.
 //
 // THE PROJECTION IS REFUSED WHEREVER IT CANNOT BE HONORED, rather than accepted
-// and dropped. types.WorkFilter.Lite reaches the driver through one query, the
-// counts mega-query behind GetReadyWorkWithCounts, and `bd ready` only runs
-// that query for --json. Everything else reaches a different one: the text
-// routes call the bare GetReadyWork, and --gated, --mol and --explain answer
-// with shapes of their own. A flag those routes take and ignore is exactly the
-// silent no-op this feature exists to close, so each combination says so.
+// and dropped. The plain listing can serve it in BOTH output modes now: --json
+// runs the counts mega-query (types.WorkFilter.Lite through
+// CountsHydration.Lite) and the text rendering runs the bare GetReadyWork,
+// which honors the same flag on both backends. The three specialized modes
+// below answer with shapes of their own and never read the projection, so a
+// flag they took and ignored is exactly the silent no-op this feature exists to
+// close.
 //
 // --claim is refused for a stronger reason than the rest: it cannot be served
 // on ANY route. ClaimNext refetches its winning row whole and returns
@@ -287,7 +286,7 @@ func claimNextRequest(in readyInput) issueops.ClaimNextRequest {
 // and deleting one of the copies would re-open the silent no-op while every
 // test stayed green. RunE calls this once, above the dispatch, and the gatherer
 // calls it for every other arrival.
-func briefModeConflict(brief, claim, gated, explain bool, molID string, jsonOut bool) error {
+func briefModeConflict(brief, claim, gated, explain bool, molID string) error {
 	if !brief {
 		return nil
 	}
@@ -300,8 +299,6 @@ func briefModeConflict(brief, claim, gated, explain bool, molID string, jsonOut 
 		return HandleErrorRespectJSON("--mol cannot be combined with --brief")
 	case explain:
 		return HandleErrorRespectJSON("--explain cannot be combined with --brief")
-	case !jsonOut:
-		return HandleErrorRespectJSON("--brief requires --json; the text renderings print none of the fields it omits")
 	}
 	return nil
 }
@@ -314,5 +311,5 @@ func briefModeConflictFromFlags(cmd *cobra.Command) error {
 	gated, _ := cmd.Flags().GetBool("gated")
 	explain, _ := cmd.Flags().GetBool("explain")
 	molID, _ := cmd.Flags().GetString("mol")
-	return briefModeConflict(brief, claim, gated, explain, molID, jsonOutput)
+	return briefModeConflict(brief, claim, gated, explain, molID)
 }

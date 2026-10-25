@@ -114,7 +114,7 @@ func GetReadyWorkInTx(
 		return nil, err
 	}
 
-	issues, err := GetIssuesByIDsInTx(ctx, tx, issueIDs, nil)
+	issues, err := getIssuesByIDsInTx(ctx, tx, issueIDs, nil, filter.Lite)
 	if err != nil {
 		return nil, fmt.Errorf("get ready work: fetch issues: %w", err)
 	}
@@ -178,7 +178,7 @@ func getReadyWispsInTx(ctx context.Context, tx DBTX, filter types.WorkFilter, de
 	wispFilter := readyWorkWispIssueFilter(filter)
 	if filter.Limit <= 0 {
 		wispFilter.Limit = 0
-		wisps, err := searchTableInTxT(ctx, tx, "", wispFilter, WispsFilterTables, issueProjection)
+		wisps, err := searchTableInTxT(ctx, tx, "", wispFilter, WispsFilterTables, readyWispProjection(filter.Lite))
 		if err != nil {
 			if missingOptionalWispTable(err) {
 				return nil, nil
@@ -203,7 +203,7 @@ func getReadyWispsInTx(ctx context.Context, tx DBTX, filter types.WorkFilter, de
 			break
 		}
 
-		pageWisps, err := getWispIssuesByIDsInOrderInTx(ctx, tx, pageIDs)
+		pageWisps, err := getWispIssuesByIDsInOrderInTx(ctx, tx, pageIDs, filter.Lite)
 		if err != nil {
 			return nil, fmt.Errorf("search wisps (ready work): %w", err)
 		}
@@ -269,7 +269,19 @@ func queryReadyWispIssueIDPage(ctx context.Context, tx DBTX, filter types.IssueF
 	return ids, nil
 }
 
-func getWispIssuesByIDsInOrderInTx(ctx context.Context, tx DBTX, ids []string) ([]*types.Issue, error) {
+// readyWispProjection picks the same projection for the unbounded wisp arm
+// that GetReadyWorkInTx picked for the issues arm: lite when the filter asked
+// for it, the full row otherwise. Both arms feed one result set, so a listing
+// that projected one side and not the other would hand its renderer rows of
+// two different shapes.
+func readyWispProjection(lite bool) searchProjection[*types.Issue] {
+	if lite {
+		return issueLiteProjection
+	}
+	return issueProjection
+}
+
+func getWispIssuesByIDsInOrderInTx(ctx context.Context, tx DBTX, ids []string, lite bool) ([]*types.Issue, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -277,7 +289,7 @@ func getWispIssuesByIDsInOrderInTx(ctx context.Context, tx DBTX, ids []string) (
 	for _, id := range ids {
 		wispSet[id] = struct{}{}
 	}
-	issues, err := GetIssuesByIDsInTx(ctx, tx, ids, wispSet)
+	issues, err := getIssuesByIDsInTx(ctx, tx, ids, wispSet, lite)
 	if err != nil {
 		return nil, err
 	}

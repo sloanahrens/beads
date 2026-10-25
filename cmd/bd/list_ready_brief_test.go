@@ -69,17 +69,21 @@ func TestBriefFlagIsRegisteredOnBothCommands(t *testing.T) {
 // one assignment is what reaches them; deleting it leaves the storage suite
 // green and the flag inert, which is the failure mode #5546 is about.
 func TestListBriefReachesTheRequest(t *testing.T) {
-	t.Run("off by default", func(t *testing.T) {
+	t.Run("off by default in --json", func(t *testing.T) {
+		// --json is the one output mode where the projection stays opt-in:
+		// a script reading a whole issue must keep getting one.
+		pinJSONOutput(t, true)
 		in, err := gatherListInput(newListFlagsCommand(t))
 		if err != nil {
 			t.Fatalf("gatherListInput: %v", err)
 		}
 		if in.Brief {
-			t.Error("ListRequest.Brief defaulted to true")
+			t.Error("ListRequest.Brief defaulted to true under --json")
 		}
 	})
 
 	t.Run("set", func(t *testing.T) {
+		pinJSONOutput(t, true)
 		in, err := gatherListInput(newListFlagsCommand(t, "--brief"))
 		if err != nil {
 			t.Fatalf("gatherListInput(--brief): %v", err)
@@ -88,6 +92,48 @@ func TestListBriefReachesTheRequest(t *testing.T) {
 			t.Error("gatherListInput did not carry --brief onto ListRequest.Brief")
 		}
 	})
+}
+
+// TestListTextOutputModesPickTheirProjection pins the per-rendering decision
+// that `bd list` now makes by DEFAULT: a text rendering that prints none of
+// the six fields a Lite projection omits asks for the lite SELECT, and the
+// three renderings that can print a body do not.
+//
+// This is the default's whole contract, so it is asserted per rendering rather
+// than once: a future mode added beside these must decide, and the table makes
+// the decision visible. Nothing here executes a store — the decision is
+// gatherListInput's, and every route downstream reads it off the request.
+func TestListTextOutputModesPickTheirProjection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		json bool
+		want bool
+	}{
+		// Text renderings that print ids/titles/statuses/counts only.
+		{"compact", nil, false, true},
+		{"long is excluded: it prints Description", []string{"--long"}, false, false},
+		{"format is excluded: a template can print any body field", []string{"--format", "{{.Issue.Description}}"}, false, false},
+		{"--ready (the ready front, printed as a listing)", []string{"--ready"}, false, true},
+		{"pretty", []string{"--pretty"}, false, true},
+		{"tree", []string{"--tree"}, false, true},
+		{"watch", []string{"--watch"}, false, true},
+		{"parent tree walk", []string{"--parent", "bd-1"}, false, true},
+		// The projection is opt-in on the wire.
+		{"json", nil, true, false},
+		{"json with --format json", []string{"--format", "json"}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pinJSONOutput(t, tc.json)
+			in, err, shown := runGatherListInput(t, newListFlagsCommand(t, tc.args...))
+			if err != nil {
+				t.Fatalf("gatherListInput(%v) = %v (%s), want no error", tc.args, err, shown)
+			}
+			if in.Brief != tc.want {
+				t.Errorf("gatherListInput(%v): Brief = %v, want %v", tc.args, in.Brief, tc.want)
+			}
+		})
+	}
 }
 
 // runGatherListInput captures both streams around gatherListInput, the way
@@ -134,30 +180,24 @@ func runGatherListInput(t *testing.T, cmd *cobra.Command) (listInput, error, str
 }
 
 // TestListBriefIsRefusedWhereItCannotBeHonored is the `bd list` half of the
-// same table. Its page routes all reach issueops.Reader.List, whose query reads
-// types.IssueFilter.Lite, so unlike `bd ready` the flag works in text mode too
-// and is not gated on --json. The three below leave that query:
+// same table, now down to the one mode that cannot project.
 //
-//	--watch re-queries through loadWatchedIssues, whose --ready arm calls the
-//	bare GetReadyWork and whose --parent arm walks the tree; neither reads Lite.
+// --format hands the whole issue to a caller-written template, which can print
+// any of the six dropped fields with nothing to mark the omission. The long
+// format prints one of them and SAYS SO, so it is allowed; a template cannot be
+// annotated.
 //
-//	--parent with --pretty is that tree walk.
-//
-//	--format hands the whole issue to a caller-written template, which can print
-//	any of the six dropped fields with nothing to mark the omission. The long
-//	format prints one of them and says so; a template cannot be annotated.
+// The two modes this table used to refuse — --watch and --parent --pretty — are
+// honored now: both read types.IssueFilter.Lite through the uncounted search,
+// which renders the lite SELECT on both backends. See
+// TestListBriefIsAcceptedOnThePageRoutes.
 func TestListBriefIsRefusedWhereItCannotBeHonored(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
 		want string
 	}{
-		{"watch", []string{"--brief", "--watch"}, "--watch cannot be combined with --brief"},
 		{"format", []string{"--brief", "--format", "{{.Issue.Description}}"}, "--format cannot be combined with --brief"},
-		{"parent tree", []string{"--brief", "--parent", "bd-1", "--pretty"}, "--parent with --pretty cannot be combined with --brief"},
-		// --tree defaults to true, so a bare --parent in text mode is the same
-		// walk without the flag being typed.
-		{"parent implies the tree in text mode", []string{"--brief", "--parent", "bd-1"}, "--parent with --pretty cannot be combined with --brief"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pinJSONOutput(t, false)
@@ -172,16 +212,22 @@ func TestListBriefIsRefusedWhereItCannotBeHonored(t *testing.T) {
 	}
 }
 
-// TestListBriefIsAcceptedOnThePageRoutes is the negative control: the modes
-// above are refusals, not a blanket one. --long is here on purpose, since it is
-// the text rendering that prints an omitted field and is allowed precisely
-// because it marks it.
+// TestListBriefIsAcceptedOnThePageRoutes is the negative control: the mode
+// above is a refusal, not a blanket one.
+//
+// --watch and --parent --pretty are here because the projection reaches their
+// queries now (loadWatchedIssues' bare GetReadyWork / SearchIssues, and the
+// tree walk's per-level SearchIssues), on both backends. --long is here because
+// it is the text rendering that prints an omitted field and is allowed
+// precisely because it marks it.
 func TestListBriefIsAcceptedOnThePageRoutes(t *testing.T) {
 	for _, args := range [][]string{
 		{"--brief"},
 		{"--brief", "--long"},
 		// --flat turns the tree off, which puts --parent back on the page route.
 		{"--brief", "--parent", "bd-1", "--flat"},
+		{"--brief", "--parent", "bd-1", "--pretty"},
+		{"--brief", "--watch"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			pinJSONOutput(t, false)
@@ -201,6 +247,12 @@ func TestListBriefIsAcceptedOnThePageRoutes(t *testing.T) {
 // GetReadyWorkWithCounts(ctx, in.filter) and the proxied one calls the same
 // through the unit of work. The filter is therefore the thing that has to
 // carry the projection, and types.WorkFilter.Lite is where it lands.
+//
+// The TEXT listing's default lives elsewhere — ready.go's text branch sets
+// filter.Lite on its own copy, because --claim and the --json branch carry the
+// same filter and must not inherit it. TestReadyTextListingDefaultsToLite
+// drives that decision through RunE; this table only owns the flag-to-filter
+// hop.
 func TestReadyBriefReachesTheFilter(t *testing.T) {
 	t.Run("off by default", func(t *testing.T) {
 		got := runGatherReadyInput(t, newReadyFlagsCommand(t), nil)
@@ -211,13 +263,11 @@ func TestReadyBriefReachesTheFilter(t *testing.T) {
 			t.Error("ReadyRequest.Brief defaulted to true")
 		}
 		if got.in.filter.Lite {
-			t.Error("WorkFilter.Lite defaulted to true")
+			t.Error("WorkFilter.Lite defaulted to true in the builder; the text listing applies its own default downstream")
 		}
 	})
 
 	t.Run("set", func(t *testing.T) {
-		// --json because the gatherer requires it for --brief; see
-		// TestReadyBriefIsRefusedWhereItCannotBeHonored.
 		pinJSONOutput(t, true)
 		got := runGatherReadyInput(t, newReadyFlagsCommand(t, "--brief"), nil)
 		if got.err != nil {
@@ -235,11 +285,11 @@ func TestReadyBriefReachesTheFilter(t *testing.T) {
 // TestReadyBriefIsRefusedWhereItCannotBeHonored is the table of combinations
 // that would otherwise take the flag and ignore it.
 //
-// types.WorkFilter.Lite reaches the driver through one query, the counts
-// mega-query behind GetReadyWorkWithCounts, and `bd ready` runs that query for
-// --json alone: the text routes call the bare GetReadyWork and the three
-// specialized modes answer with shapes of their own. --claim is refused for a
-// stronger reason, that no route can serve it at all
+// The plain listing serves the projection in BOTH modes: --json through the
+// counts mega-query, text through the bare GetReadyWork, which honors
+// types.WorkFilter.Lite on both backends. The three specialized modes answer
+// with shapes of their own and never read it. --claim is refused for a stronger
+// reason, that no route can serve it at all
 // (issueops.ValidateClaimNextRequest returns ErrValidation for a projected
 // claim, which refetches its winning row whole).
 //
@@ -259,7 +309,6 @@ func TestReadyBriefIsRefusedWhereItCannotBeHonored(t *testing.T) {
 		{"gated", []string{"--brief", "--gated"}, true, "--gated cannot be combined with --brief"},
 		{"mol", []string{"--brief", "--mol", "bd-1"}, true, "--mol cannot be combined with --brief"},
 		{"explain", []string{"--brief", "--explain"}, true, "--explain cannot be combined with --brief"},
-		{"without --json", []string{"--brief"}, false, "--brief requires --json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pinJSONOutput(t, tc.json)

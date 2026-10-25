@@ -253,32 +253,19 @@ func gatherListInput(cmd *cobra.Command) (listInput, error) {
 	in.noPager, _ = cmd.Flags().GetBool("no-pager")
 	in.ReadyFlag, _ = cmd.Flags().GetBool("ready")
 
-	// REFUSED WHERE IT CANNOT BE HONORED OR CANNOT BE SEEN. The page routes,
-	// direct and proxied, JSON and text, all hand this request to
-	// issueops.Reader.List, whose query reads types.IssueFilter.Lite; the three
-	// below leave that query.
+	// REFUSED WHERE IT CANNOT BE HONORED. --format hands the whole issue to a
+	// caller-written template, so `--brief --format '{{.Issue.Description}}'`
+	// would print an empty string with nothing to say it had been dropped,
+	// while the long format prints one omitted field and says so. A template
+	// can print any of the six and cannot be annotated.
 	//
-	//   --watch re-queries on a ticker through loadWatchedIssues, whose --ready
-	//   arm calls the bare GetReadyWork and whose --parent arm walks the tree;
-	//   neither reads Lite.
-	//
-	//   --parent with --pretty is that same tree walk, an unlimited per-level
-	//   query rather than a page.
-	//
-	//   --format hands the whole issue to a caller-written template, so
-	//   `--brief --format '{{.Issue.Description}}'` would print an empty string
-	//   with nothing to say it had been dropped. The long format prints one
-	//   omitted field and says so; a template can print any of the six and
-	//   cannot be annotated.
-	if in.Brief {
-		switch {
-		case in.watchMode:
-			return in, HandleError("--watch cannot be combined with --brief")
-		case in.formatStr != "":
-			return in, HandleError("--format cannot be combined with --brief; a template can print a field --brief omits, with nothing to mark it")
-		case in.ParentID != "" && in.prettyFormat:
-			return in, HandleError("--parent with --pretty cannot be combined with --brief; the hierarchical walk is a different query")
-		}
+	// The two modes that used to be refused here are accepted now: the
+	// projection reaches their queries. --watch re-queries through
+	// loadWatchedIssues and --parent --pretty walks the tree, and both read
+	// types.IssueFilter.Lite through the uncounted search paths, which honor it
+	// on both backends (issueops.SearchIssuesInTx and domain/db's searchTable).
+	if in.Brief && in.formatStr != "" {
+		return in, HandleError("--format cannot be combined with --brief; a template can print a field --brief omits, with nothing to mark it")
 	}
 
 	in.depsMode, _ = cmd.Flags().GetString("deps")
@@ -375,7 +362,45 @@ func gatherListInput(cmd *cobra.Command) (listInput, error) {
 	in.repoOverride, _ = cmd.Flags().GetString("repo")
 	in.repoOverrideSet = cmd.Flags().Changed("repo")
 
+	// THE DEFAULT PROJECTION, applied last so the refusals above are decided on
+	// what the user TYPED rather than on what this line adds. A text rendering
+	// that prints none of the six free-form fields asks the query for them
+	// anyway today; defaulting Brief here means the lite SELECT rides every
+	// route this command has — the page through the counts mega-query, --watch
+	// and --parent through the uncounted search — with no output change, since
+	// none of those renderings prints a dropped field.
+	//
+	// It is the REQUEST that carries the decision, not the filter, because the
+	// request is what both page routes and every filter this command builds
+	// (the watch loop's and the tree walk's) are derived from.
+	if !in.Brief && listTextProjectsLite(in) {
+		in.Brief = true
+	}
+
 	return in, nil
+}
+
+// listTextProjectsLite reports whether the output this command line selects
+// prints none of the six free-form fields a Lite projection omits
+// (description, design, acceptance_criteria, notes, payload, waiters), so the
+// listing can ask for the lite SELECT without changing a byte.
+//
+// The exceptions are exactly the three renderings that CAN print a body:
+//
+//   - --json emits the whole row; a script reading it must keep getting one,
+//     which is why the projection stays opt-in there (--brief).
+//
+//   - --long prints Description (formatIssueLong, which marks a projected row
+//     with "(omitted by --brief)" — a marker no default may start emitting).
+//
+//   - --format hands the whole issue to a caller-written template, which can
+//     print any of the six with nothing to mark the omission.
+//
+// Everything else — compact, --pretty/--tree, agent mode, --watch, the
+// hierarchical --parent walk and --ready — prints ids, titles, statuses,
+// priorities, types and counts only.
+func listTextProjectsLite(in listInput) bool {
+	return !in.jsonOutput && !in.longFormat && in.formatStr == ""
 }
 
 func parseListTimeFlag(cmd *cobra.Command, name string) (*time.Time, error) {

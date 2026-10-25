@@ -184,9 +184,21 @@ func (r *issueSQLRepositoryImpl) fetchIssuesByIDs(ctx context.Context, ids []str
 
 	placeholders, args := buildInPlaceholders(ids)
 
+	// filter.Lite picks the projection, exactly as the store-backed seam's
+	// issueLiteProjection does (internal/storage/issueops/search.go). The
+	// uncounted read paths — SearchIssues and the bare GetReadyWork — serve the
+	// text renderings, which print none of the six fields the lite SELECT
+	// drops; before this the lite flag reached this stack only through the
+	// counts mega-query, so a caller that set it on an uncounted request got
+	// correct rows with every body hydrated anyway.
+	columns, scan := issueSelectColumns, issueops.ScanIssueFrom
+	if filter.Lite {
+		columns, scan = issueops.IssueSelectColumnsLite, issueops.ScanIssueLiteFrom
+	}
+
 	//nolint:gosec // G201: tables.Main is "issues" or "wisps"; placeholders are ?.
 	fetchSQL := fmt.Sprintf(`SELECT %s FROM %s %s WHERE id IN (%s)`,
-		issueSelectColumns, tables.Main, sqlbuild.LeaseJoin(tables.Main), placeholders)
+		columns, tables.Main, sqlbuild.LeaseJoin(tables.Main), placeholders)
 	rows, err := r.runner.QueryContext(ctx, fetchSQL, args...)
 	if err != nil {
 		return nil, err
@@ -195,7 +207,7 @@ func (r *issueSQLRepositoryImpl) fetchIssuesByIDs(ctx context.Context, ids []str
 	out := make(map[string]*types.Issue, len(ids))
 	ordered := make([]*types.Issue, 0, len(ids))
 	for rows.Next() {
-		issue, scanErr := scanIssue(rows)
+		issue, scanErr := scan(rows)
 		if scanErr != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan: %w", scanErr)
@@ -251,9 +263,17 @@ func (r *issueSQLRepositoryImpl) searchTable(ctx context.Context, query string, 
 	orderBy := orderBySQL(filter.SortBy, filter.SortDesc, "")
 	window := searchWindowForFilter(filter)
 
+	// The same projection choice as fetchIssuesByIDs above: an uncounted search
+	// carries whatever the filter asked for, so the caller that projects gets a
+	// lite SELECT on both arms.
+	columns, scan := issueSelectColumns, issueops.ScanIssueFrom
+	if filter.Lite {
+		columns, scan = issueops.IssueSelectColumnsLite, issueops.ScanIssueLiteFrom
+	}
+
 	//nolint:gosec // G201: SQL fragments from fixed table names and parameterized filters.
 	querySQL := fmt.Sprintf(`%s%s FROM %s %s %s %s %s`,
-		selectKw, issueSelectColumns, plan.FromSQL, sqlbuild.LeaseJoin(tables.Main), whereSQL, orderBy, window.sql)
+		selectKw, columns, plan.FromSQL, sqlbuild.LeaseJoin(tables.Main), whereSQL, orderBy, window.sql)
 
 	rows, err := r.runner.QueryContext(ctx, querySQL, args...)
 	if err != nil {
@@ -263,7 +283,7 @@ func (r *issueSQLRepositoryImpl) searchTable(ctx context.Context, query string, 
 	var issues []*types.Issue
 	seen := make(map[string]bool)
 	for rows.Next() {
-		issue, scanErr := scanIssue(rows)
+		issue, scanErr := scan(rows)
 		if scanErr != nil {
 			_ = rows.Close()
 			return domain.SearchPage{}, fmt.Errorf("search %s: scan: %w", tables.Main, scanErr)

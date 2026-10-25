@@ -57,12 +57,21 @@ hydrated, and `Issue.IsLitePartial` is `false`.
 
 ### Backend coverage
 
-`filter.Lite` is currently honored only by the issueops-backed stores
-(Dolt, embedded Dolt) via the dispatch above. The proxied-server
-(`internal/storage/domain/db`) path — `issueSQLRepositoryImpl.searchTable`
-/ `fetchIssuesByIDs` — does not check `filter.Lite` yet: it always issues
-the full `issueSelectColumns` SELECT and returns fully-hydrated issues
-with `IsLitePartial == false`. This is correct-but-unoptimized (no lite
-callers exist yet, so the difference is invisible today); wiring
-`filter.Lite` through the domain/db stack is deferred to the CLI-wiring
-follow-up (be-uwvs.2+), not part of this foundation.
+`filter.Lite` is honored by BOTH stacks, on both the counted and the
+uncounted read paths:
+
+- **Counted** (`SearchIssuesWithCounts` / `GetReadyWorkWithCounts`, i.e.
+  everything that returns `IssueWithCounts`): the flag rides the counts
+  mega-query as `sqlbuild.CountsHydration.Lite`, and `ScanReadyWorkRowWithCounts`
+  scans with `ScanIssueLiteFrom`. Both seams derive the hydration from the
+  same field through their `hydrationFor` helper.
+- **Uncounted** (`SearchIssues`, the bare `GetReadyWork`): the issueops
+  stack selects `issueLiteProjection` (or `ScanIssueLiteFrom` in
+  `GetIssuesByIDsInTx`), and `internal/storage/domain/db` makes the same
+  choice in `searchTable`, `searchUnion`'s hydration and `fetchIssuesByIDs`
+  (`getReadyWorkUnion` passes the flag through).
+
+The uncounted paths serve the text renderings (`bd list --watch`, the
+`--parent` tree walk, `bd ready` without `--json`), which print none of the
+six dropped fields — which is why those renderings default to the
+projection while `--json` keeps whole rows unless `--brief` is passed.

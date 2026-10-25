@@ -207,6 +207,25 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			return nil
 		}
 
+		// THE TEXT RENDERING PRINTS NO FREE-FORM TEXT: id, title, status,
+		// priority, type, assignee and estimate, and nothing else. So it reads
+		// the ready front projected by default — the lite SELECT, which omits
+		// description, design, acceptance_criteria, notes, payload and waiters.
+		//
+		// Both backends honor types.WorkFilter.Lite on this bare query now
+		// (issueops.GetReadyWorkInTx and domain/db's getReadyWorkUnion hydrate
+		// through the lite projection), which is what makes the default free of
+		// output change: every field the six dropped columns feed is one these
+		// renderings never read.
+		//
+		// The --json branch above keeps full rows. Its consumers parse the body
+		// unless they asked for --brief, and the projection stays opt-in there.
+		//
+		// --claim never reaches this line (it returns above, and ClaimNext
+		// refetches its winning row whole), which is what keeps the default from
+		// tripping ValidateClaimNextRequest's refusal of a projected request.
+		filter.Lite = true
+
 		issues, err := activeStore.GetReadyWork(ctx, filter)
 		if err != nil {
 			if capErr := handleMaxRowsError(err); capErr != nil {
@@ -733,8 +752,9 @@ func init() {
 		"Omit the free-form text (description, design, acceptance criteria, notes, "+
 			"payload, waiters) from each row. Filters that read those fields still "+
 			"select on them. An omitted field is indistinguishable from an empty "+
-			"one; fetch a whole issue with bd show. Requires --json, and cannot be "+
-			"combined with --claim, --gated, --mol or --explain.")
+			"one; fetch a whole issue with bd show. Default in text mode, whose "+
+			"renderings print none of those fields; meaningful for --json. Cannot "+
+			"be combined with --claim, --gated, --mol or --explain.")
 	// Metadata filtering (GH#1406)
 	readyCmd.Flags().StringArray("metadata-field", nil, "Filter by metadata field (key=value, repeatable)")
 	readyCmd.Flags().String("has-metadata-key", "", "Filter issues that have this metadata key set")

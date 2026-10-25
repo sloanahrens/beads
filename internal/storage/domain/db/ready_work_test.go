@@ -35,6 +35,36 @@ func (s *testSuite) TestIssueGetReadyWork() {
 	s.Run("OffsetWithLooseLimitReturnsRemainder", s.readyOffsetWithoutLimit)
 	s.Run("OffsetHasMoreSignaling", s.readyOffsetHasMoreSignaling)
 	s.Run("OffsetWalksAllPages", s.readyOffsetWalksAllPages)
+	s.Run("LiteProjectsTheHeavyText", s.readyLiteProjectsTheHeavyText)
+}
+
+// readyLiteProjectsTheHeavyText pins the domain/db half of `bd ready`'s text
+// default. The text rendering calls the UNCOUNTED ready front (GetReadyWork)
+// and prints no free-form field, so cmd/bd asks it for types.WorkFilter.Lite;
+// before this the domain stack hydrated every heavy column anyway, making the
+// flag a no-op on the proxied route.
+func (s *testSuite) readyLiteProjectsTheHeavyText() {
+	r := s.issueRepo()
+	in := newTestIssue("bd-rdy-lite-heavy", "a title the ready listing prints")
+	in.Description = "a body the ready listing never prints"
+	in.Notes = "notes it never prints"
+
+	s.Require().NoError(r.Insert(s.Ctx(), in, "tester", domain.InsertIssueOpts{}))
+
+	out, err := r.GetReadyWork(s.Ctx(), types.WorkFilter{Lite: true})
+	s.Require().NoError(err)
+
+	var row *types.Issue
+	for _, issue := range out.Items {
+		if issue.ID == "bd-rdy-lite-heavy" {
+			row = issue
+		}
+	}
+	s.Require().NotNil(row, "the lite ready front dropped the row it was asked for")
+	s.True(row.IsLitePartial, "IsLitePartial = false; the lite scan did not engage")
+	s.Equal("a title the ready listing prints", row.Title, "identity must still hydrate")
+	s.Empty(row.Description, "Description = %q, want the lite SELECT to leave it zero-valued", row.Description)
+	s.Empty(row.Notes, "Notes = %q, want the lite SELECT to leave it zero-valued", row.Notes)
 }
 
 func (s *testSuite) readyOpenAndInProgress() {
