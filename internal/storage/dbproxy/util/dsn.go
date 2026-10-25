@@ -5,6 +5,8 @@ import (
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
+
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 type DoltServerDSN struct {
@@ -46,6 +48,10 @@ func (d DoltServerDSN) String() string {
 		Timeout:              timeout,
 		AllowNativePasswords: true,
 		ClientFoundRows:      d.ClientFoundRows,
+		// Explicit, not left at the zero value: MaxAllowedPacket=0 makes the
+		// driver issue `SELECT @@max_allowed_packet` on every new connection.
+		// See doltutil.DefaultMaxAllowedPacket.
+		MaxAllowedPacket: doltutil.DefaultMaxAllowedPacket,
 	}
 	switch {
 	case d.TLSConfigName != "":

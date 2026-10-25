@@ -3,6 +3,8 @@ package doltutil
 import (
 	"strings"
 	"testing"
+
+	mysql "github.com/go-sql-driver/mysql"
 )
 
 func TestServerDSN_TLSExplicitlyDisabledByDefault(t *testing.T) {
@@ -34,6 +36,33 @@ func TestServerDSN_InterpolatesParams(t *testing.T) {
 	// connection built from this struct benefits.
 	if !strings.Contains(dsn, "interpolateParams=true") {
 		t.Errorf("DSN should contain interpolateParams=true; got %q", dsn)
+	}
+}
+
+func TestServerDSN_SetsMaxAllowedPacket(t *testing.T) {
+	dsn := ServerDSN{
+		Host: "dolt.example.com",
+		Port: 3307,
+		User: "root",
+	}.String()
+
+	// A zero MaxAllowedPacket is not "driver default" to go-sql-driver/mysql:
+	// it makes every new connection run `SELECT @@max_allowed_packet` before
+	// the first real statement (connector.go). bd opens at least one
+	// connection per invocation, so the parsed DSN — the driver's view, after
+	// FormatDSN has elided any value equal to its default — must carry a
+	// positive ceiling. (strings.Contains cannot see this: FormatDSN omits
+	// maxAllowedPacket when it equals the driver default, and ParseDSN then
+	// restores that default. Only a zero survives the round-trip explicitly.)
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("ParseDSN(%q): %v", dsn, err)
+	}
+	if cfg.MaxAllowedPacket != DefaultMaxAllowedPacket {
+		t.Fatalf("MaxAllowedPacket = %d, want %d; got DSN %q", cfg.MaxAllowedPacket, DefaultMaxAllowedPacket, dsn)
+	}
+	if cfg.MaxAllowedPacket == 0 {
+		t.Fatalf("MaxAllowedPacket = 0 makes the driver query the server on every connection; got DSN %q", dsn)
 	}
 }
 
