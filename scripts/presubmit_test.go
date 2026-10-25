@@ -165,6 +165,42 @@ func TestPresubmitTestsChangedAndDependentPackages(t *testing.T) {
 	}
 }
 
+// TestPresubmitFallsBackWhenTheDependencyGraphIsUnavailable pins the probe's
+// best-effort contract: when `go list` cannot answer, the selection falls back
+// to the changed packages and the run carries on, so an environment problem
+// shows up as whatever the lint or build says instead of as a failure verdict
+// this step invented. The selection stays a superset of what it was before
+// dependents were added, never a subset.
+func TestPresubmitFallsBackWhenTheDependencyGraphIsUnavailable(t *testing.T) {
+	repo := newPresubmitFixtureRepo(t, presubmitFixtureOriginMain)
+	fakeBin, logPath := presubmitFakeTools(t)
+	// Replace the passthrough `go` stub with one that fails every `go list`.
+	writePresubmitFile(t, filepath.Join(fakeBin, "go"), "#!/usr/bin/env bash\n"+
+		"set -euo pipefail\n"+
+		"case \"${1:-}\" in\n"+
+		"    list) exit 1 ;;\n"+
+		"    *) printf 'go %s\\n' \"$*\" >>\"$PRESUBMIT_CALL_LOG\" ;;\n"+
+		"esac\n")
+	if err := os.Chmod(filepath.Join(fakeBin, "go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runPresubmit(t, repo, presubmitFakeEnv(fakeBin, logPath))
+	if err != nil {
+		t.Fatalf("presubmit failed although only the dependency probe was unavailable: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "presubmit: warn: could not read the module path from go.mod") {
+		t.Errorf("presubmit did not report the unavailable module path:\n%s", out)
+	}
+	if !strings.Contains(out, "presubmit: base origin/main; 3 package(s) to test") {
+		t.Errorf("presubmit did not fall back to the changed packages alone:\n%s", out)
+	}
+	calls := readPresubmitCalls(t, logPath)
+	if !strings.Contains(calls, "go test -tags gms_pure_go . ./alpha ./integpkg\n") {
+		t.Errorf("presubmit did not test the changed packages after the probe failed:\n%s", calls)
+	}
+}
+
 // TestPresubmitFailsWhenDependentTestsBreak is the failure be-3osn is about,
 // end to end and with the real toolchain: alpha's exported value changes, none
 // of testonly's files do, and testonly's test pins the old value. The build

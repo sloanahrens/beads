@@ -201,12 +201,15 @@ while IFS= read -r dir; do
 done < <(changed_go_dirs)
 
 # The import path a changed directory's package is named by, so the dependency
-# graph can be asked about it.
+# graph can be asked about it. Best effort: if `go list` cannot answer, the
+# lint and build below still run and report the real problem, and the
+# selection falls back to the changed packages alone rather than this step
+# inventing a failure verdict of its own.
 module_path=""
 if ((${#changed_dirs[@]})); then
-    if ! module_path="$(go list -m -f '{{.Path}}')" || [[ -z "$module_path" ]]; then
-        echo "presubmit: cannot read the module path from go.mod; cannot tell which packages a change affects" >&2
-        exit 1
+    module_path="$(go list -m -f '{{.Path}}')" || module_path=""
+    if [[ -z "$module_path" ]]; then
+        echo "presubmit: warn: could not read the module path from go.mod; testing only the changed packages" >&2
     fi
 fi
 
@@ -223,10 +226,12 @@ for dir in ${changed_dirs[@]+"${changed_dirs[@]}"}; do
     # Every changed package is looked up in the dependency graph, including the
     # ones skipped below: the skip is about what can run here, not about what
     # the change can break.
-    if [[ "$dir" == "." ]]; then
-        changed_imports+=("$module_path")
-    else
-        changed_imports+=("$module_path/$dir")
+    if [[ -n "$module_path" ]]; then
+        if [[ "$dir" == "." ]]; then
+            changed_imports+=("$module_path")
+        else
+            changed_imports+=("$module_path/$dir")
+        fi
     fi
 
     if package_needs_infra "$dir"; then
