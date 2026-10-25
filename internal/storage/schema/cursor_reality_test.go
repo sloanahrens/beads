@@ -249,8 +249,7 @@ func TestMigrationWorkNeededWhenWispTablesAbsent(t *testing.T) {
 	expectScalar(mock, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations", "version", LatestVersion())
 	expectCursorProbe(mock, "ignored_schema_migrations", true)
 	expectScalar(mock, "SELECT COALESCE(MAX(version), 0) FROM ignored_schema_migrations", "version", LatestIgnoredVersion())
-	mock.ExpectQuery(regexp.QuoteMeta("FROM INFORMATION_SCHEMA.TABLES")).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	expectTableProbe(mock, "wisps", false)
 
 	needed, err := migrationWorkNeeded(context.Background(), db)
 	if err != nil {
@@ -279,12 +278,12 @@ func TestMigrationWorkNeededWhenLeaseGrantedNodeAbsent(t *testing.T) {
 	expectScalar(mock, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations", "version", LatestVersion())
 	expectCursorProbe(mock, "ignored_schema_migrations", true)
 	expectScalar(mock, "SELECT COALESCE(MAX(version), 0) FROM ignored_schema_migrations", "version", LatestIgnoredVersion())
-	for range ignoredSource.sentinelTables {
-		mock.ExpectQuery(regexp.QuoteMeta("FROM INFORMATION_SCHEMA.TABLES")).
-			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	for _, table := range ignoredSource.sentinelTables {
+		expectTableProbe(mock, table, true)
 	}
-	mock.ExpectQuery(regexp.QuoteMeta("FROM INFORMATION_SCHEMA.COLUMNS")).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	for _, column := range ignoredSource.sentinelColumns {
+		expectColumnProbe(mock, column.table, column.column, false)
+	}
 
 	needed, err := migrationWorkNeeded(context.Background(), db)
 	if err != nil {
@@ -326,8 +325,7 @@ func TestMigrateAppliesUnderContradictedCursor(t *testing.T) {
 	// The guarded read: cursor claims at-latest, sentinel probe contradicts it.
 	expectCursorProbe(mock, "ignored_schema_migrations", true)
 	expectScalar(mock, "SELECT COALESCE(MAX(version), 0) FROM ignored_schema_migrations", "version", LatestIgnoredVersion())
-	mock.ExpectQuery(regexp.QuoteMeta("FROM INFORMATION_SCHEMA.TABLES")).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	expectTableProbe(mock, "wisps", false)
 
 	// The proof: the applier reaches ignored/0001's SQL. Fail it distinctively
 	// rather than mocking the whole series.

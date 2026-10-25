@@ -3,6 +3,10 @@ package util
 import (
 	"strings"
 	"testing"
+
+	mysql "github.com/go-sql-driver/mysql"
+
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 func TestDoltServerDSN_TLS(t *testing.T) {
@@ -33,4 +37,20 @@ func TestDoltServerDSN_TLS(t *testing.T) {
 			t.Fatalf("dsn %q missing unix socket", dsn)
 		}
 	})
+}
+
+func TestDoltServerDSN_SetsMaxAllowedPacket(t *testing.T) {
+	// MaxAllowedPacket=0 makes go-sql-driver/mysql issue
+	// `SELECT @@max_allowed_packet` on every new connection; the parsed DSN
+	// must carry a positive ceiling instead (see
+	// doltutil.DefaultMaxAllowedPacket). FormatDSN elides a value equal to the
+	// driver default, so assert on the parsed config, not the string.
+	dsn := DoltServerDSN{Host: "127.0.0.1", Port: 3306, User: "root"}.String()
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("ParseDSN(%q): %v", dsn, err)
+	}
+	if cfg.MaxAllowedPacket != doltutil.DefaultMaxAllowedPacket {
+		t.Fatalf("MaxAllowedPacket = %d, want %d; dsn %q", cfg.MaxAllowedPacket, doltutil.DefaultMaxAllowedPacket, dsn)
+	}
 }

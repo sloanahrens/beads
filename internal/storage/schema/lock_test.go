@@ -478,18 +478,23 @@ func expectScalar(mock sqlmock.Sqlmock, query, column string, value any) {
 		WillReturnRows(sqlmock.NewRows([]string{column}).AddRow(value))
 }
 
-// expectCursorProbe mocks the information_schema existence probe that
+// expectCursorProbe mocks the table-existence probe that
 // migrationSource.currentVersion issues before it ever reads the cursor
 // table. The probe was added by be-bv7x so a not-yet-created cursor table
 // never poisons the pooled Dolt session with a failing statement.
 func expectCursorProbe(mock sqlmock.Sqlmock, table string, exists bool) {
-	present := 0
+	expectTableProbe(mock, table, exists)
+}
+
+// expectTableProbe mocks the SHOW TABLES LIKE existence probe showTableExists
+// issues. SHOW TABLES answers with one row per matching table, so existence is
+// "a row came back", not a COUNT value.
+func expectTableProbe(mock sqlmock.Sqlmock, table string, exists bool) {
+	rows := sqlmock.NewRows([]string{"Tables_in_db"})
 	if exists {
-		present = 1
+		rows.AddRow(table)
 	}
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM information_schema\.tables`).
-		WithArgs(table).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(present))
+	mock.ExpectQuery(regexp.QuoteMeta("SHOW TABLES LIKE '" + table + "'")).WillReturnRows(rows)
 }
 
 func expectDoltStatusRows(mock sqlmock.Sqlmock) {
@@ -658,25 +663,30 @@ func TestMigrateUpWithLockFreshBootstrapHealResetsAndRetries(t *testing.T) {
 	}
 }
 
-// expectIgnoredSentinelProbes mocks the INFORMATION_SCHEMA lookups
+// expectIgnoredSentinelProbes mocks the SHOW TABLES / SHOW COLUMNS lookups
 // currentVersion issues to confirm a non-zero ignored cursor against the
 // schema it claims (gh 5033). They fire only for a non-zero cursor, in
 // ignoredSource's table then column sentinel order.
 func expectIgnoredSentinelProbes(mock sqlmock.Sqlmock, present bool) {
-	count := 0
-	if present {
-		count = 1
-	}
-	for range ignoredSource.sentinelTables {
-		mock.ExpectQuery(regexp.QuoteMeta("FROM INFORMATION_SCHEMA.TABLES")).
-			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count))
+	for _, table := range ignoredSource.sentinelTables {
+		expectTableProbe(mock, table, present)
 	}
 	if present {
-		for range ignoredSource.sentinelColumns {
-			mock.ExpectQuery(regexp.QuoteMeta("FROM INFORMATION_SCHEMA.COLUMNS")).
-				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		for _, column := range ignoredSource.sentinelColumns {
+			expectColumnProbe(mock, column.table, column.column, true)
 		}
 	}
+}
+
+// expectColumnProbe mocks the SHOW COLUMNS ... LIKE existence probe
+// columnExists issues. SHOW COLUMNS answers with one row per matching column
+// (Field, Type, Null, Key, Default, Extra); the probe reads Field.
+func expectColumnProbe(mock sqlmock.Sqlmock, table, column string, exists bool) {
+	rows := sqlmock.NewRows([]string{"Field", "Type", "Null", "Key", "Default", "Extra"})
+	if exists {
+		rows.AddRow(column, "varchar(255)", "YES", "", nil, "")
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SHOW COLUMNS FROM " + table + " LIKE '" + column + "'")).WillReturnRows(rows)
 }
 
 func TestMigrateUpWithLockFreshBootstrapHealProbeFailuresStayFatal(t *testing.T) {
