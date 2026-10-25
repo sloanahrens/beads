@@ -60,8 +60,8 @@ var DepTargetColumns = []string{
 // wraps all three columns in an expression no index can match, so Dolt plans
 // every predicate over it as a full Table scan plus a Filter. One bare equality
 // per column lets each branch seek that column's own index instead. Measured
-// on the reference Dolt (2.2.x, `bd sql 'EXPLAIN FORMAT=TREE ...'` against a
-// live rig database):
+// on Dolt 2.3.2 (`bd sql 'EXPLAIN FORMAT=TREE ...'` against a live rig
+// database):
 //
 //	SELECT count(*) FROM wisp_dependencies WHERE COALESCE(...) = 'X'
 //	  -> Filter -> Table(name: wisp_dependencies)          (full scan)
