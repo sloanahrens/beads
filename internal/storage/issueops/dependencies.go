@@ -64,6 +64,10 @@ func depTargetEquals(alias string) string {
 // so the un-ordered COUNT still scans, but the COALESCE form never had any index
 // path either; the type-filtered path seeks the (type, target) composite on both.
 // Use it for target-keyed reads of a single fixed target.
+//
+// Where a bare equality per column IS wanted, sqlbuild.DepTargetSelectSQL spells
+// the same three disjuncts as a UNION ALL, which gives each branch its own index
+// seek on both planners instead of one OR neither can merge.
 func depTargetEqualsOr() string {
 	return "(depends_on_issue_id = ? OR depends_on_wisp_id = ? OR depends_on_external = ?)"
 }
