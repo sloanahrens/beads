@@ -250,10 +250,12 @@ func TestGetActorWithGit_PriorityOrder(t *testing.T) {
 
 // TestGetActorUsesAgentName: a session with CLAUDE_AGENT_NAME and no BEADS_ACTOR or
 // BD_ACTOR writes as town/crew/<name>; BEADS_ACTOR still outranks it.
-func TestGetActorUsesAgentName(t *testing.T) {
+func TestGetActorReadsTheEnvVarItNamesWithItsPrefix(t *testing.T) {
 	t.Setenv("BD_ACTOR", "")
 	t.Setenv("BEADS_ACTOR", "")
-	t.Setenv("CLAUDE_AGENT_NAME", "dunlin")
+	t.Setenv("BEADS_ACTOR_FROM_ENV", "TEST_SESSION_NAME")
+	t.Setenv("BEADS_ACTOR_PREFIX", "town/crew/")
+	t.Setenv("TEST_SESSION_NAME", "dunlin")
 	actor = ""
 	if got := getActorWithGit(); got != "town/crew/dunlin" {
 		t.Errorf("getActorWithGit() = %q, want town/crew/dunlin", got)
@@ -261,5 +263,23 @@ func TestGetActorUsesAgentName(t *testing.T) {
 	t.Setenv("BEADS_ACTOR", "town/crew/other")
 	if got := getActorWithGit(); got != "town/crew/other" {
 		t.Errorf("with BEADS_ACTOR set, getActorWithGit() = %q, want town/crew/other", got)
+	}
+}
+
+// Without BEADS_ACTOR_FROM_ENV core bd reads no session variable, and an empty
+// named variable falls through to the git identity.
+func TestGetActorIgnoresUnnamedAndEmptySessionVariables(t *testing.T) {
+	t.Setenv("BD_ACTOR", "")
+	t.Setenv("BEADS_ACTOR", "")
+	t.Setenv("TEST_SESSION_NAME", "dunlin")
+	t.Setenv("BEADS_ACTOR_PREFIX", "town/crew/")
+	actor = ""
+	t.Setenv("BEADS_ACTOR_FROM_ENV", "")
+	if got := getActorWithGit(); got == "town/crew/dunlin" {
+		t.Errorf("with no BEADS_ACTOR_FROM_ENV, getActorWithGit() = %q: core bd read a session variable", got)
+	}
+	t.Setenv("BEADS_ACTOR_FROM_ENV", "TEST_SESSION_NAME_UNSET")
+	if got := getActorWithGit(); got == "town/crew/" {
+		t.Errorf("with an unset named variable, getActorWithGit() = %q: prefix alone was used", got)
 	}
 }

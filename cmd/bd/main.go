@@ -693,7 +693,7 @@ func resolveConfiguredActor() string {
 }
 
 // getActorWithGit returns the actor for audit trails with git config fallback.
-// Priority: --actor flag > BEADS_ACTOR env > BD_ACTOR env (deprecated) > CLAUDE_AGENT_NAME env (town/crew/<name>) > git config user.name > $USER > "unknown"
+// Priority: --actor flag > BEADS_ACTOR env > BD_ACTOR env (deprecated) > the env var BEADS_ACTOR_FROM_ENV names, prefixed by BEADS_ACTOR_PREFIX > git config user.name > $USER > "unknown"
 // This provides a sensible default for developers: their git identity is used unless
 // explicitly overridden
 func getActorWithGit() string {
@@ -712,11 +712,13 @@ func getActorWithGit() string {
 		return bdActor
 	}
 
-	// A session started through claude-agent names itself. Its bead identity is
-	// town/crew/<name>, the value claude-agent exports as BEADS_ACTOR, so a session
-	// that never got BEADS_ACTOR still writes as itself, not as the human.
-	if agent := os.Getenv("CLAUDE_AGENT_NAME"); agent != "" {
-		return "town/crew/" + agent
+	// A launcher names its sessions by exporting BEADS_ACTOR_FROM_ENV, the name
+	// of the variable that holds the session's name, and BEADS_ACTOR_PREFIX, the
+	// text to put before it. Core bd does not know any launcher's variables.
+	if source := os.Getenv("BEADS_ACTOR_FROM_ENV"); source != "" {
+		if name := os.Getenv(source); name != "" {
+			return os.Getenv("BEADS_ACTOR_PREFIX") + name
+		}
 	}
 
 	// Try git config user.name - the natural default for a git-native tool
