@@ -444,7 +444,7 @@ func init() {
 			"payload, waiters) from each row. Filters that read those fields, such as "+
 			"--desc-contains, still select on them. An omitted field is"+
 			" indistinguishable from an empty one in --json; fetch a whole issue"+
-			" with bd show.")
+			" with bd show. Default in text mode except --long; meaningful for --json.")
 
 	// Priority ranges
 	listCmd.Flags().String("priority-min", "", "Filter by minimum priority (inclusive, 0-4 or P0-P4)")

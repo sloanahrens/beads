@@ -2044,18 +2044,21 @@ type IssueFilter struct {
 	// reference columns in WHERE regardless of SELECT shape. Default false preserves
 	// today's behavior at every call site.
 	//
-	// Backend coverage: honored on BOTH stacks for the COUNTED page, which is
-	// every read that returns IssueWithCounts — issueops.Reader.List on either
-	// implementation, and so `bd list --json` on both routes and
-	// GET /v0/beads/issues. It rides the counts mega-query as
+	// Backend coverage: honored on BOTH stacks, on the counted AND uncounted
+	// paths.
+	//
+	// The COUNTED page is every read that returns IssueWithCounts —
+	// issueops.Reader.List on either implementation, and so `bd list --json` on
+	// both routes and GET /v0/beads/issues. It rides the counts mega-query as
 	// sqlbuild.CountsHydration.Lite, which both seams derive from this field
 	// through their hydrationFor helper.
 	//
-	// The UNCOUNTED search is store-backed only: SearchIssuesInTx selects
-	// issueLiteProjection from this field, and the domain/db SearchIssues has
-	// no equivalent, so a caller on that path gets correct rows fully hydrated
-	// rather than an error. That path serves the text renderings, which print
-	// no body, so the gap costs bytes off the wire and no correctness.
+	// The UNCOUNTED search renders the lite SELECT on both stacks:
+	// issueops.SearchIssuesInTx selects issueLiteProjection, and domain/db's
+	// searchTable and fetchIssuesByIDs choose the same columns and scan. That
+	// path serves the text renderings (`bd list --watch`, the --parent tree
+	// walk), which print no body — and it is why those renderings can default
+	// to the projection without an output change.
 	// See engdocs/EXTENDING.md.
 	Lite bool
 }
@@ -2206,10 +2209,13 @@ type WorkFilter struct {
 	// a predicate that reads a heavy column keeps working, because WHERE is
 	// independent of the SELECT shape.
 	//
-	// Unlike IssueFilter.Lite it is honored on BOTH backends, through the
-	// counts mega-query's CountsHydration. The two knobs beside it there
-	// (SkipLabels, SkipCounts) have no WorkFilter counterpart on purpose; see
-	// issueops.readyHydrationFor.
+	// Honored on BOTH backends, on the counted query (through the counts
+	// mega-query's CountsHydration.Lite; the two knobs beside it there,
+	// SkipLabels and SkipCounts, have no WorkFilter counterpart on purpose —
+	// see issueops.readyHydrationFor) AND on the bare GetReadyWork the text
+	// rendering runs (issueops.GetReadyWorkInTx and domain/db's
+	// getReadyWorkUnion both hydrate through the lite projection). That bare
+	// path is what lets `bd ready`'s text output default to the projection.
 	Lite bool
 }
 

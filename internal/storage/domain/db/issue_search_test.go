@@ -18,6 +18,43 @@ func (s *testSuite) TestIssueSearchAcrossIssuesAndWisps() {
 	s.Run("LimitRespectedPerTable", s.searchAcrossLimitRespected)
 	s.Run("CollisionAcrossTablesKeepsTheWispCopy", s.searchAcrossCollisionKeepsTheWispCopy)
 	s.Run("SkipLabelsLeavesLabelsNil", s.searchAcrossSkipLabels)
+	s.Run("LiteProjectsTheHeavyText", s.searchAcrossLiteProjectsTheHeavyText)
+}
+
+// searchAcrossLiteProjectsTheHeavyText pins the domain/db half of the uncounted
+// search's Lite support. `bd list --watch` and the hierarchical --parent walk
+// read types.IssueFilter.Lite through this path on the proxied route, and the
+// text renderings those feed print no body — so before this the flag was a
+// silent no-op here and every row carried six bodies the renderer discarded.
+func (s *testSuite) searchAcrossLiteProjectsTheHeavyText() {
+	r := s.issueRepo()
+	in := newTestIssue("bd-srx-lite-heavy", "a title the text listing prints")
+	in.Description = "a body the text listing never prints"
+	in.Design = "a design it never prints"
+	in.AcceptanceCriteria = "criteria it never prints"
+	in.Notes = "notes it never prints"
+	s.Require().NoError(r.Insert(s.Ctx(), in, "tester", domain.InsertIssueOpts{}))
+
+	out, err := r.SearchAcrossIssuesAndWisps(s.Ctx(), "", types.IssueFilter{IDPrefix: "bd-srx-lite-", Lite: true})
+	s.Require().NoError(err)
+
+	var row *types.Issue
+	for _, issue := range out.Items {
+		if issue.ID == "bd-srx-lite-heavy" {
+			row = issue
+		}
+	}
+	s.Require().NotNil(row, "the lite search dropped the row it was asked for")
+	s.True(row.IsLitePartial, "IsLitePartial = false; the lite scan did not engage")
+	s.Equal("a title the text listing prints", row.Title, "identity must still hydrate")
+	for what, got := range map[string]string{
+		"Description":        row.Description,
+		"Design":             row.Design,
+		"AcceptanceCriteria": row.AcceptanceCriteria,
+		"Notes":              row.Notes,
+	} {
+		s.Empty(got, "%s = %q, want the lite SELECT to leave it zero-valued", what, got)
+	}
 }
 
 func (s *testSuite) searchAcrossMergesTables() {

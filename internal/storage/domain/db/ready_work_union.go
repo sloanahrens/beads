@@ -86,13 +86,19 @@ func (r *issueSQLRepositoryImpl) getReadyWorkUnion(ctx context.Context, filter t
 		return domain.SearchPage{}, err
 	}
 
-	issuesByID, err := r.fetchIssuesByIDs(ctx, page.issueIDs, issuesFilterTables, types.IssueFilter{})
+	// The projection rides in on the filter: Lite reaches this uncounted arm the
+	// same way it reaches the counted one (readyHydrationFor). Both tables are
+	// hydrated with it, because the two arms feed one result set and a listing
+	// that projected one plane and not the other would hand its renderer rows of
+	// two different shapes.
+	hydrate := types.IssueFilter{Lite: filter.Lite}
+	issuesByID, err := r.fetchIssuesByIDs(ctx, page.issueIDs, issuesFilterTables, hydrate)
 	if err != nil {
 		return domain.SearchPage{}, fmt.Errorf("ready work union: hydrate issues: %w", err)
 	}
 	var wispsByID map[string]*types.Issue
 	if len(page.wispIDs) > 0 {
-		wispsByID, err = r.fetchIssuesByIDs(ctx, page.wispIDs, wispsFilterTables, types.IssueFilter{})
+		wispsByID, err = r.fetchIssuesByIDs(ctx, page.wispIDs, wispsFilterTables, hydrate)
 		if err != nil && !dberrors.IsTableNotExist(err) {
 			return domain.SearchPage{}, fmt.Errorf("ready work union: hydrate wisps: %w", err)
 		}
