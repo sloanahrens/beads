@@ -26,9 +26,11 @@ func TestPresubmitMakefileTargetWiresTheScript(t *testing.T) {
 }
 
 // TestPresubmitListSelectsChangedPackages drives the selection against a
-// throwaway git repo: only the packages holding a changed Go file, minus the
-// ones whose tests need a container or a Dolt server, and minus the examples
-// (separate Go modules, outside the root module's ./...).
+// throwaway git repo: the packages holding a changed Go file, minus the ones
+// whose tests need a container or a Dolt server, and minus the examples
+// (separate Go modules, outside the root module's ./...). The dependents the
+// same change selects are pinned by
+// TestPresubmitListIncludesDependentPackages.
 func TestPresubmitListSelectsChangedPackages(t *testing.T) {
 	repo := newPresubmitFixtureRepo(t, presubmitFixtureOriginMain)
 	out, err := runPresubmit(t, repo, nil, "--list")
@@ -43,7 +45,7 @@ func TestPresubmitListSelectsChangedPackages(t *testing.T) {
 		"presubmit: run ./integpkg",
 		"presubmit: skip ./doltpkg: its tests need a Docker container or a Dolt server; the Forgejo gate covers it",
 		"presubmit: skip ./examples/demo: separate Go module",
-		"presubmit: base origin/main; 3 package(s) to test",
+		"presubmit: base origin/main; 6 package(s) to test (3 changed, 3 pulled in as dependents)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("presubmit --list output lacks %q:\n%s", want, out)
@@ -52,6 +54,43 @@ func TestPresubmitListSelectsChangedPackages(t *testing.T) {
 	// beta/notes.md changed, but no Go file in beta/ did.
 	if strings.Contains(out, "beta") {
 		t.Errorf("presubmit --list selected beta from a non-Go change:\n%s", out)
+	}
+}
+
+// TestPresubmitListIncludesDependentPackages pins the half of the selection
+// that a changed-directory list alone misses: a package whose own files are
+// untouched but whose build or tests reach a changed one has to be tested
+// here, because `go build` does not compile test files and would leave the
+// candidate gate to find the break.
+//
+// The fixture packs all four shapes into one graph off alpha: a dependent in
+// its own code (depender), a dependent of that dependent (deep), one that
+// reaches alpha only through a test file (testonly), and one that would be a
+// dependent but needs a container (infraconsumer, skipped). bystander imports
+// beta, which did not change, so it stays out.
+func TestPresubmitListIncludesDependentPackages(t *testing.T) {
+	repo := newPresubmitFixtureRepo(t, presubmitFixtureOriginMain)
+	out, err := runPresubmit(t, repo, nil, "--list")
+	if err != nil {
+		t.Fatalf("presubmit --list: %v\n%s", err, out)
+	}
+
+	for _, want := range []string{
+		"presubmit: run ./depender (depends on ./alpha)\n",
+		"presubmit: run ./testonly (depends on ./alpha)\n",
+		"presubmit: skip ./infraconsumer (depends on ./alpha): its tests need a Docker container or a Dolt server; the Forgejo gate covers it",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("presubmit --list output lacks %q:\n%s", want, out)
+		}
+	}
+	// deep reaches alpha through depender; which of the two the output names
+	// is go list's order, so only the selection itself is pinned.
+	if !strings.Contains(out, "\npresubmit: run ./deep (depends on ./") {
+		t.Errorf("presubmit --list did not select the transitive dependent deep:\n%s", out)
+	}
+	if strings.Contains(out, "./bystander") {
+		t.Errorf("presubmit --list selected bystander, which only depends on the unchanged beta:\n%s", out)
 	}
 }
 
@@ -68,7 +107,7 @@ func TestPresubmitListFallsBackToMergeBaseWithMain(t *testing.T) {
 	if !strings.Contains(out, "presubmit: base ") || strings.Contains(out, "presubmit: base origin/main") {
 		t.Errorf("presubmit --list did not fall back to the merge base with main:\n%s", out)
 	}
-	for _, want := range []string{"presubmit: run ./alpha", "presubmit: skip ./doltpkg", "3 package(s) to test"} {
+	for _, want := range []string{"presubmit: run ./alpha", "presubmit: skip ./doltpkg", "6 package(s) to test"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("presubmit --list output lacks %q:\n%s", want, out)
 		}
@@ -100,10 +139,10 @@ func TestPresubmitRunsLintAndBuildWithoutGoChanges(t *testing.T) {
 	}
 }
 
-// TestPresubmitTestsOnlyChangedPackages is the end-to-end counterpart: the test
-// command names the changed packages and nothing else, and the skipped package
-// is reported.
-func TestPresubmitTestsOnlyChangedPackages(t *testing.T) {
+// TestPresubmitTestsChangedAndDependentPackages is the end-to-end counterpart:
+// the test command names the changed packages, the packages that depend on
+// them, and nothing else, and every skipped package is reported.
+func TestPresubmitTestsChangedAndDependentPackages(t *testing.T) {
 	repo := newPresubmitFixtureRepo(t, presubmitFixtureOriginMain)
 	fakeBin, logPath := presubmitFakeTools(t)
 	out, err := runPresubmit(t, repo, presubmitFakeEnv(fakeBin, logPath))
@@ -112,14 +151,79 @@ func TestPresubmitTestsOnlyChangedPackages(t *testing.T) {
 	}
 
 	calls := readPresubmitCalls(t, logPath)
-	if !strings.Contains(calls, "go test -tags gms_pure_go . ./alpha ./integpkg") {
-		t.Errorf("presubmit did not test exactly the changed packages:\n%s", calls)
+	// Changed packages first, in git's order, then the dependents sorted.
+	if !strings.Contains(calls, "go test -tags gms_pure_go . ./alpha ./integpkg ./deep ./depender ./testonly\n") {
+		t.Errorf("presubmit did not test exactly the changed packages and their dependents:\n%s", calls)
 	}
-	if strings.Contains(calls, "doltpkg") || strings.Contains(calls, "examples/demo") {
-		t.Errorf("presubmit tested a skipped package:\n%s", calls)
+	for _, skipped := range []string{"doltpkg", "examples/demo", "infraconsumer", "bystander"} {
+		if strings.Contains(calls, skipped) {
+			t.Errorf("presubmit tested %s, which the selection skipped:\n%s", skipped, calls)
+		}
 	}
 	if !strings.Contains(out, "presubmit: skip ./doltpkg") {
 		t.Errorf("presubmit output does not report the skipped package:\n%s", out)
+	}
+}
+
+// TestPresubmitFallsBackWhenTheDependencyGraphIsUnavailable pins the probe's
+// best-effort contract: when `go list` cannot answer, the selection falls back
+// to the changed packages and the run carries on, so an environment problem
+// shows up as whatever the lint or build says instead of as a failure verdict
+// this step invented. The selection stays a superset of what it was before
+// dependents were added, never a subset.
+func TestPresubmitFallsBackWhenTheDependencyGraphIsUnavailable(t *testing.T) {
+	repo := newPresubmitFixtureRepo(t, presubmitFixtureOriginMain)
+	fakeBin, logPath := presubmitFakeTools(t)
+	// Replace the passthrough `go` stub with one that fails every `go list`.
+	writePresubmitFile(t, filepath.Join(fakeBin, "go"), "#!/usr/bin/env bash\n"+
+		"set -euo pipefail\n"+
+		"case \"${1:-}\" in\n"+
+		"    list) exit 1 ;;\n"+
+		"    *) printf 'go %s\\n' \"$*\" >>\"$PRESUBMIT_CALL_LOG\" ;;\n"+
+		"esac\n")
+	if err := os.Chmod(filepath.Join(fakeBin, "go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runPresubmit(t, repo, presubmitFakeEnv(fakeBin, logPath))
+	if err != nil {
+		t.Fatalf("presubmit failed although only the dependency probe was unavailable: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "presubmit: warn: could not read the module path from go.mod") {
+		t.Errorf("presubmit did not report the unavailable module path:\n%s", out)
+	}
+	if !strings.Contains(out, "presubmit: base origin/main; 3 package(s) to test") {
+		t.Errorf("presubmit did not fall back to the changed packages alone:\n%s", out)
+	}
+	calls := readPresubmitCalls(t, logPath)
+	if !strings.Contains(calls, "go test -tags gms_pure_go . ./alpha ./integpkg\n") {
+		t.Errorf("presubmit did not test the changed packages after the probe failed:\n%s", calls)
+	}
+}
+
+// TestPresubmitFailsWhenDependentTestsBreak is the failure be-3osn is about,
+// end to end and with the real toolchain: alpha's exported value changes, none
+// of testonly's files do, and testonly's test pins the old value. The build
+// stays green — Go does not compile test files — so a selection of changed
+// directories alone would report success while the candidate gate went red.
+func TestPresubmitFailsWhenDependentTestsBreak(t *testing.T) {
+	repo := newPresubmitFixtureRepo(t, presubmitFixtureOriginMain)
+	writePresubmitFile(t, filepath.Join(repo, "alpha", "alpha.go"),
+		"package alpha\n\n// Value is what the dependent's test pins.\nconst Value = 2\n")
+	runPresubmitGit(t, repo, "commit", "-am", "change alpha's value")
+
+	binDir, logPath := presubmitStubMake(t)
+	out, err := runPresubmit(t, repo, presubmitFakeEnv(binDir, logPath))
+	if err == nil {
+		t.Fatalf("presubmit passed although testonly's test pins alpha's changed value:\n%s", out)
+	}
+	// Build passed and only the dependent's test failed: the run reaches the
+	// dependents' tests, where the change is actually observable.
+	if !strings.Contains(out, "presubmit: build") {
+		t.Errorf("presubmit did not build before testing:\n%s", out)
+	}
+	if !strings.Contains(out, "--- FAIL: TestTestonly") {
+		t.Errorf("presubmit did not fail in the dependent's test:\n%s", out)
 	}
 }
 
@@ -139,7 +243,9 @@ const (
 // presubmitChangedFiles are the second-commit edits: two packages that can be
 // tested, one that needs a Dolt container, one whose only container test is
 // behind //go:build integration, an example in its own Go module, the module
-// root, and a markdown file whose package has no Go change.
+// root, and a markdown file whose package has no Go change. None of them is a
+// dependent of another and none of the dependent packages is edited, so a
+// dependent in the selection got there through the import graph alone.
 var presubmitChangedFiles = []string{
 	"root.go",
 	"alpha/alpha.go",
@@ -159,22 +265,10 @@ const (
 	presubmitDoltServerStart    = "doltserver." + "Start("
 )
 
-var presubmitBaseFiles = map[string]string{
-	"go.mod":              "module example.com/fixture\n\ngo 1.21\n",
-	"root.go":             "package fixture\n",
-	"alpha/alpha.go":      "package alpha\n",
-	"alpha/alpha_test.go": "package alpha\n\nimport \"testing\"\n\nfunc TestAlpha(t *testing.T) {}\n",
-	"beta/beta.go":        "package beta\n",
-	"beta/notes.md":       "# notes\n",
-	"doltpkg/main.go":     "package doltpkg\n",
-	"integpkg/main.go":    "package integpkg\n",
-
-	"examples/demo/go.mod":  "module example.com/demo\n\ngo 1.21\n",
-	"examples/demo/demo.go": "package demo\n",
-
-	// A package-level Dolt container: no environment can run these tests
-	// without one, so presubmit must skip the package rather than build it.
-	"doltpkg/testmain_test.go": `package doltpkg
+// presubmitContainerTestMain renders a TestMain that bootstraps a Dolt
+// container for the named package: the shape package_needs_infra scans for.
+func presubmitContainerTestMain(pkg string) string {
+	return "package " + pkg + `
 
 import (
 	"os"
@@ -187,7 +281,39 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
-`,
+`
+}
+
+var presubmitBaseFiles = map[string]string{
+	"go.mod":              "module example.com/fixture\n\ngo 1.21\n",
+	"root.go":             "package fixture\n",
+	"alpha/alpha.go":      "package alpha\n\n// Value is what the dependent's test pins.\nconst Value = 1\n",
+	"alpha/alpha_test.go": "package alpha\n\nimport \"testing\"\n\nfunc TestAlpha(t *testing.T) {}\n",
+	"beta/beta.go":        "package beta\n",
+	"beta/notes.md":       "# notes\n",
+	"doltpkg/main.go":     "package doltpkg\n",
+	"integpkg/main.go":    "package integpkg\n",
+
+	"examples/demo/go.mod":  "module example.com/demo\n\ngo 1.21\n",
+	"examples/demo/demo.go": "package demo\n",
+
+	// A package-level Dolt container: no environment can run these tests
+	// without one, so presubmit must skip the package rather than build it.
+	"doltpkg/testmain_test.go": presubmitContainerTestMain("doltpkg"),
+
+	// The graph a change to alpha reaches through, in the four shapes that
+	// matter: a dependent in its own code (depender), a dependent of that
+	// dependent (deep), one that reaches alpha only through a test file
+	// (testonly), and one that needs a container and is therefore skipped
+	// rather than tested (infraconsumer). bystander depends on beta, which
+	// this change set never touches.
+	"depender/depender.go":           "package depender\n\nimport _ \"example.com/fixture/alpha\"\n",
+	"deep/deep.go":                   "package deep\n\nimport _ \"example.com/fixture/depender\"\n",
+	"testonly/testonly.go":           "package testonly\n",
+	"testonly/testonly_test.go":      "package testonly\n\nimport (\n\t\"testing\"\n\n\t\"example.com/fixture/alpha\"\n)\n\nfunc TestTestonly(t *testing.T) {\n\tif alpha.Value != 1 {\n\t\tt.Fatalf(\"alpha.Value = %d, want 1\", alpha.Value)\n\t}\n}\n",
+	"infraconsumer/infraconsumer.go": "package infraconsumer\n\nimport _ \"example.com/fixture/alpha\"\n",
+	"infraconsumer/testmain_test.go": presubmitContainerTestMain("infraconsumer"),
+	"bystander/bystander.go":         "package bystander\n\nimport _ \"example.com/fixture/beta\"\n",
 
 	// Behind the integration tag, so the unit tier presubmit runs never builds
 	// it — the package itself stays runnable.
@@ -252,20 +378,43 @@ func runPresubmit(t *testing.T, repo string, extraEnv []string, args ...string) 
 	return string(out), err
 }
 
-// presubmitFakeTools returns a PATH directory holding stub `go` and `make`
-// binaries that append their argv to a log, so a test can assert what the
-// script ran without compiling anything.
-func presubmitFakeTools(t *testing.T) (binDir, logPath string) {
+// presubmitStubMake returns a PATH directory holding a stub `make` that
+// appends its argv to a log, so the lint step is recorded instead of running
+// this checkout's lint against the fixture repo. `go` is left alone, so a test
+// that wants the build and the tests to actually run can have them.
+func presubmitStubMake(t *testing.T) (binDir, logPath string) {
 	t.Helper()
 	binDir = t.TempDir()
 	logPath = filepath.Join(t.TempDir(), "calls.log")
-	for _, name := range []string{"go", "make"} {
-		writePresubmitFile(t, filepath.Join(binDir, name), "#!/usr/bin/env bash\n"+
-			"set -euo pipefail\n"+
-			"printf '%s %s\\n' \""+name+"\" \"$*\" >>\"$PRESUBMIT_CALL_LOG\"\n")
-		if err := os.Chmod(filepath.Join(binDir, name), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	writePresubmitFile(t, filepath.Join(binDir, "make"), "#!/usr/bin/env bash\n"+
+		"set -euo pipefail\n"+
+		"printf 'make %s\\n' \"$*\" >>\"$PRESUBMIT_CALL_LOG\"\n")
+	if err := os.Chmod(filepath.Join(binDir, "make"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binDir, logPath
+}
+
+// presubmitFakeTools adds a `go` stub to presubmitStubMake's directory, so a
+// test can assert what the script ran without compiling anything. The stub
+// answers only `build` and `test`: `go list` falls through to the real
+// toolchain, because the selection is read from the fixture repo's import
+// graph and a stubbed graph would leave no selection to assert.
+func presubmitFakeTools(t *testing.T) (binDir, logPath string) {
+	t.Helper()
+	binDir, logPath = presubmitStubMake(t)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("go is not on PATH: %v", err)
+	}
+	writePresubmitFile(t, filepath.Join(binDir, "go"), "#!/usr/bin/env bash\n"+
+		"set -euo pipefail\n"+
+		"case \"${1:-}\" in\n"+
+		"    build|test) printf 'go %s\\n' \"$*\" >>\"$PRESUBMIT_CALL_LOG\" ;;\n"+
+		"    *) exec \""+realGo+"\" \"$@\" ;;\n"+
+		"esac\n")
+	if err := os.Chmod(filepath.Join(binDir, "go"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	return binDir, logPath
 }

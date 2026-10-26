@@ -249,10 +249,12 @@ gate-lint:
 gate-test:
 	@$(MAKE) test
 
-# Fast local presubmit: lint, build, and the tests of only the packages whose
-# Go files differ from origin/main. `gt done` runs this before pushing a branch
-# for landing, and the Forgejo gate runs the full `make gate` on the candidate.
-# A subset of the unit tier by design: no Docker container, no Dolt server, and
+# Fast local presubmit: lint, build, and the tests of the packages whose Go
+# files differ from origin/main plus the packages that depend on them (test
+# files included, so a dependent whose tests the change breaks fails here
+# rather than at the Forgejo gate). `gt done` runs this before pushing a branch
+# for landing, and the gate runs the full `make gate` on the candidate. A
+# subset of the unit tier by design: no Docker container, no Dolt server, and
 # no coverage. See scripts/presubmit.sh (and `scripts/presubmit.sh --list` to
 # see which packages it would test).
 presubmit:
@@ -557,7 +559,7 @@ help:
 	@echo "  make gate         - Landing gate: ci-pr-lint, then make test (never the integration tier)"
 	@echo "  make gate-lint    - First stage of make gate (ci-pr-lint)"
 	@echo "  make gate-test    - Second stage of make gate (make test)"
-	@echo "  make presubmit    - Fast local check: lint, build, tests of changed packages only (no containers)"
+	@echo "  make presubmit    - Fast local check: lint, build, tests of changed packages and their dependents (no containers)"
 	@echo "  make ci-pr-core  - Run required PR core Go test wrapper"
 	@echo "  make ci-pr-policy - Run required PR policy wrapper"
 	@echo "  make ci-pr-lint  - Run required PR formatting and lint wrapper"
