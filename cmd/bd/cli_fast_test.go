@@ -4,16 +4,21 @@ package main
 
 import (
 	"bytes"
-	"fmt"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
 // Fast CLI tests converted from scripttest suite
@@ -29,87 +34,201 @@ var (
 	inProcessMutex sync.Mutex // Protects concurrent access to rootCmd and global state
 )
 
-// templateDB holds a pre-initialized bd database directory.
-// Created once via sync.Once, then copied for each test to avoid
-// running bd init (which creates SQLite DB, config files, etc.) per test.
-// This optimization eliminates ~2s per test from repeated initialization.
-var (
-	templateDBDir  string
-	templateDBOnce sync.Once
-	templateDBErr  error
-)
-
-// initTemplateDB creates a single template database that can be copied for each test.
-// Uses exec.Command (subprocess) to avoid polluting Cobra global state.
-// The testBD binary is already built once in init().
-func initTemplateDB() {
-	templateDBOnce.Do(func() {
-		tmpDir, err := os.MkdirTemp("", "bd-cli-template-*")
-		if err != nil {
-			templateDBErr = fmt.Errorf("failed to create template dir: %w", err)
-			return
-		}
-		templateDBDir = tmpDir
-
-		// Use exec.Command to run bd init in a subprocess.
-		// This avoids any Cobra global state pollution that would affect subsequent
-		// in-process test runs.
-		cmd := exec.Command(testBD, "init", "--prefix", "test", "--quiet")
-		cmd.Dir = tmpDir
-		cmd.Env = os.Environ()
-		if out, err := cmd.CombinedOutput(); err != nil {
-			templateDBErr = fmt.Errorf("template bd init failed: %v\n%s", err, out)
-			return
-		}
-	})
-}
-
-// copyDir recursively copies a directory tree.
-func copyDir(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dst, 0750); err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			data, err := os.ReadFile(srcPath)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(dstPath, data, 0600); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// setupCLITestDB creates a fresh initialized bd database for CLI tests.
-// Uses a cached template directory to avoid running bd init for every test.
-// The template is created once via sync.Once and copied for each test.
+// setupCLITestDB creates a fresh bd workspace whose data lives in a Dolt
+// database of its own on the test server.
+//
+// In server mode the data lives on the shared Dolt server under the database
+// name in metadata.json, so a workspace initialized once and then reused points
+// every test at the same database and tests see each other's issues. Each call
+// therefore initializes a new workspace against a database whose name carries a
+// fresh random suffix (newCLITestDatabaseName), and drops exactly that database
+// in cleanup, so each test starts from and leaves an empty database of its own.
+//
+// The workspace is initialized instead of copied from a template because bd
+// init refuses a workspace that already holds a database (checkExistingBeadsData
+// in init.go), so in server mode there is nothing to save by copying: the
+// database work is the cost, and any fix pays one bd init per test.
 func setupCLITestDB(t *testing.T) string {
+	t.Helper()
+	return setupCLITestDBFor(t, t.Name())
+}
+
+// setupCLITestDBFor is setupCLITestDB with the database named for name instead
+// of the test name, for a test that needs more than one isolated workspace. Two
+// calls never share a database, even with the same name.
+func setupCLITestDBFor(t *testing.T, name string) string {
 	t.Helper()
 	if testDoltServerPort == 0 {
 		t.Skip("skipping: Dolt test container not available")
 	}
-	initTemplateDB()
-	if templateDBErr != nil {
-		t.Fatalf("Template DB initialization failed: %v", templateDBErr)
-	}
+	dbName := newCLITestDatabaseName(t, name)
 	tmpDir := createTempDirWithCleanup(t)
-	if err := copyDir(templateDBDir, tmpDir); err != nil {
-		t.Fatalf("Failed to copy template DB: %v", err)
-	}
+	initCLITestDatabase(t, tmpDir, dbName)
+	// Registered only after init succeeds, so the drop names a database this
+	// call created. If init reported that the name already existed, the test
+	// stops before this line and nothing is dropped. A database init left
+	// half-built is swept by the cliTestDatabaseNamePrefix sweep.
+	t.Cleanup(func() {
+		if err := dropDatabaseOnServer(dbName, testDoltServerPort, false); err != nil {
+			t.Errorf("Failed to drop test database %s: %v", dbName, err)
+		}
+	})
 	return tmpDir
+}
+
+const (
+	// cliTestDatabaseNameMaxLen is the longest name dolt.ValidateDatabaseName accepts.
+	cliTestDatabaseNameMaxLen = 64
+	// cliTestDatabaseNamePrefix keeps per-test databases inside the namespace
+	// the storage layer reserves for tests (testDatabasePrefixes in
+	// internal/storage/dolt). bd init refuses to create a database on a server
+	// that already serves others unless the name is reserved for tests or the
+	// caller opts in with --allow-new-database, and bd dolt clean-databases
+	// sweeps leftovers by this prefix.
+	cliTestDatabaseNamePrefix = "testdb_clitest_"
+	// cliTestDatabaseSuffixBytes is the random part of a database name. Eight
+	// bytes is 16 hex digits: 64 bits, so runs sharing one server do not collide.
+	cliTestDatabaseSuffixBytes = 8
+	// cliTestInitTimeout bounds one bd init subprocess, so a hung server fails
+	// the test instead of stalling the whole run.
+	cliTestInitTimeout = 2 * time.Minute
+)
+
+// newCLITestDatabaseName returns a database name for one setupCLITestDB call.
+// The suffix comes from crypto/rand, so no two calls share a name, including
+// two calls for the same test and calls from concurrent runs on one server.
+func newCLITestDatabaseName(t *testing.T, testName string) string {
+	t.Helper()
+	raw := make([]byte, cliTestDatabaseSuffixBytes)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("Failed to generate a test database suffix: %v", err)
+	}
+	return cliTestDatabaseName(testName, hex.EncodeToString(raw))
+}
+
+// cliTestDatabaseName builds a database name from a test name and a suffix. The
+// result is valid for dolt.ValidateDatabaseName and is in the test-database
+// namespace. The same inputs give the same name; a different suffix gives a
+// different name even for the same test. A test name too long for the limit is
+// cut, so two long names that share a prefix need different suffixes to differ.
+func cliTestDatabaseName(testName, suffix string) string {
+	readable := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, testName)
+	maxReadable := cliTestDatabaseNameMaxLen - len(cliTestDatabaseNamePrefix) - 1 - len(suffix)
+	if len(readable) > maxReadable {
+		readable = readable[:maxReadable]
+	}
+	return cliTestDatabaseNamePrefix + readable + "_" + suffix
+}
+
+// initCLITestDatabase initializes dir as a bd workspace whose data lives in
+// dbName on the test Dolt server.
+//
+// --database names the database explicitly. It is the supported way to pick a
+// server database, and it is what init records in metadata.json, so the
+// commands the test runs afterwards resolve to the same database. The flags
+// mirror the server-init pattern other tests in this package use
+// (init_realstore_integration_test.go).
+func initCLITestDatabase(t *testing.T, dir, dbName string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), cliTestInitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, testBD, "init",
+		"--server", "--external",
+		"--server-host", "127.0.0.1",
+		"--server-port", strconv.Itoa(testDoltServerPort),
+		"--database", dbName,
+		"--prefix", "test", "--quiet", "--skip-hooks", "--skip-agents")
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("bd init for database %s did not finish within %v\n%s", dbName, cliTestInitTimeout, out)
+	}
+	if err != nil {
+		t.Fatalf("bd init for database %s failed: %v\n%s", dbName, err, out)
+	}
+}
+
+// TestUniqueCLITestDatabaseName checks the name rules without a Dolt server:
+// every name is valid for the server and in the test namespace, the same test
+// name and suffix give the same name, and a different test name or a different
+// suffix gives a different one.
+func TestUniqueCLITestDatabaseName(t *testing.T) {
+	const suffixA = "0123456789abcdef"
+	const suffixB = "fedcba9876543210"
+	long := strings.Repeat("TestVeryLongName", 10)
+	tests := []struct {
+		name             string
+		a, b             string
+		suffixA, suffixB string
+		wantEqual        bool
+	}{
+		{"different test names differ", "TestCLI_List", "TestCLI_Create", suffixA, suffixA, false},
+		{"same test name and suffix match", "TestCLI_List", "TestCLI_List", suffixA, suffixA, true},
+		{"same test name with a new suffix differs", "TestCLI_List", "TestCLI_List", suffixA, suffixB, false},
+		{"long names differ by suffix", long, long, suffixA, suffixB, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotA := cliTestDatabaseName(tc.a, tc.suffixA)
+			gotB := cliTestDatabaseName(tc.b, tc.suffixB)
+			if (gotA == gotB) != tc.wantEqual {
+				t.Fatalf("cliTestDatabaseName(%q, %q) = %q, cliTestDatabaseName(%q, %q) = %q; equal = %v, want %v",
+					tc.a, tc.suffixA, gotA, tc.b, tc.suffixB, gotB, gotA == gotB, tc.wantEqual)
+			}
+			for _, got := range []string{gotA, gotB} {
+				if err := dolt.ValidateDatabaseName(got); err != nil {
+					t.Fatalf("database name %q is invalid: %v", got, err)
+				}
+				// bd init only creates a database on a server that already
+				// serves others when the name is reserved for tests; see
+				// cliTestDatabaseNamePrefix.
+				if !strings.HasPrefix(got, "testdb_") {
+					t.Fatalf("database name %q is not in the test-database namespace, so bd init would refuse to create it on a populated server", got)
+				}
+			}
+		})
+	}
+}
+
+// TestSetupCLITestDBIsolatesDatabases proves on the live test server that
+// setupCLITestDB does not hand two tests the same database: an issue created
+// through one workspace is invisible through the other. This is the regression
+// be-34sb fixes (TestCLI_List saw the issues three earlier TestCLI_ tests had
+// created).
+func TestSetupCLITestDBIsolatesDatabases(t *testing.T) {
+	if testDoltServerPort == 0 {
+		t.Skip("skipping: Dolt test container not available")
+	}
+	first := setupCLITestDBFor(t, t.Name()+"/first")
+	second := setupCLITestDBFor(t, t.Name()+"/second")
+
+	runBDInProcess(t, first, "create", "only in first", "-p", "1")
+
+	out := runBDInProcess(t, second, "list", "--json")
+	var issues []map[string]interface{}
+	if err := unmarshalEnvelope([]byte(out), &issues); err != nil {
+		t.Fatalf("Failed to parse list output: %v\nOutput: %s", err, out)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("second workspace sees %d issue(s) created in the first; each setupCLITestDB must own its database", len(issues))
+	}
+
+	// The first workspace must hold the issue, or the empty list above proves
+	// nothing but a create that silently failed.
+	out = runBDInProcess(t, first, "list", "--json")
+	issues = nil
+	if err := unmarshalEnvelope([]byte(out), &issues); err != nil {
+		t.Fatalf("Failed to parse list output: %v\nOutput: %s", err, out)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("first workspace lists %d issue(s), want 1", len(issues))
+	}
 }
 
 // createTempDirWithCleanup creates a temp directory with non-fatal cleanup
