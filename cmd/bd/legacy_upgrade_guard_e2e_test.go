@@ -119,10 +119,11 @@ func TestLegacyUpgradeGuardRefusesBeforeMutatingHistoricalWorkspace(t *testing.T
 						t.Fatalf("bd %s did not report the expected migration refusal:\n%s", strings.Join(tc.args, " "), output)
 					}
 					if tc.wantJSON {
-						var payload map[string]any
-						if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+						var envelope map[string]any
+						if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 							t.Fatalf("doctor stdout is not valid JSON: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 						}
+						payload, _ := envelope["data"].(map[string]any)
 						if payload["code"] != "legacy_upgrade_required" {
 							t.Fatalf("doctor code = %v, want legacy_upgrade_required", payload["code"])
 						}

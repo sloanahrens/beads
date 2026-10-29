@@ -36,12 +36,14 @@ func TestFormulaSchemaList_JSON(t *testing.T) {
 		return runFormulaSchemaList()
 	})
 
-	// outputJSON injects a schema_version on objects but passes arrays
-	// through unchanged. Primitives is a slice → we get a bare JSON array.
-	var got []formula.PrimitiveDoc
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
+	// The envelope wraps the slice of primitives under "data".
+	var envelope struct {
+		Data []formula.PrimitiveDoc `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
 	}
+	got := envelope.Data
 	if len(got) != len(formula.Primitives) {
 		t.Errorf("got %d primitives, want %d", len(got), len(formula.Primitives))
 	}
@@ -104,12 +106,15 @@ func TestFormulaSchemaShow_JSON(t *testing.T) {
 		return runFormulaSchemaShow("loop")
 	})
 
-	// Single-primitive output goes through outputJSON which injects
-	// schema_version into objects. Decode into a generic map and assert
-	// the payload fields are present.
-	var got map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
+	// Single-primitive output is the envelope's "data" object. Decode into a
+	// generic map and assert the payload fields are present.
+	var envelope map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
+	}
+	got, _ := envelope["data"].(map[string]interface{})
+	if got == nil {
+		t.Fatalf("no data object in JSON output: %s", out)
 	}
 	if got["name"] != "LoopSpec" {
 		t.Errorf("name = %v, want LoopSpec", got["name"])

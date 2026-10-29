@@ -12,15 +12,39 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
+// decodeEnvelopeData returns the "data" object of a --json envelope, the shape
+// every --json reply has outside machine mode.
+func decodeEnvelopeData(t *testing.T, envelope map[string]any) map[string]any {
+	t.Helper()
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("no data object in --json envelope: %v", envelope)
+	}
+	return data
+}
+
+// decodeJSONEnvelopeArray returns the array under the "data" key of a --json
+// envelope.
+func decodeJSONEnvelopeArray(t *testing.T, stdout string) []map[string]any {
+	t.Helper()
+	var envelope struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatalf("stdout is not a --json envelope of an array: %v\nstdout:\n%s", err, stdout)
+	}
+	return envelope.Data
+}
+
 // TestParityCreateJSONShape pins `bd create --json`: a SINGLE pretty-printed
-// JSON object (not an array), emitted from the LOCAL *types.Issue the CLI
-// built — never a re-read — carrying a synthesized "schema_version" key and,
-// because outputJSON round-trips a non-slice through map[string]any, SORTED
-// key order.
+// envelope whose "data" is one JSON object (not an array), emitted from the
+// LOCAL *types.Issue the CLI built — never a re-read — with the envelope's
+// "schema_version" beside it and, because outputJSON round-trips a non-slice
+// through map[string]any, SORTED key order.
 //
 // Source of truth: cmd/bd/create.go:601-604 (outputJSON(issue)) over the
 // struct from cmd/bd/create.go:521 (buildCreateIssue), via
-// cmd/bd/output.go:68-99 (wrapWithSchemaVersion).
+// cmd/bd/output.go (wrapWithSchemaVersion).
 func TestParityCreateJSONShape(t *testing.T) {
 	env := newParityEnv(t)
 	jsonOutput = true
@@ -38,14 +62,16 @@ func TestParityCreateJSONShape(t *testing.T) {
 		t.Fatalf("exit=%d err=%v stderr=%s", res.exitCode, res.err, res.stderr)
 	}
 
-	obj := decodeJSONObject(t, res.stdout)
+	envelope := decodeJSONObject(t, res.stdout)
+	obj := decodeEnvelopeData(t, envelope)
 
-	// The exact key set. `dependencies` and `comments` are absent because the
-	// local struct never carries them — create does not re-read.
+	// The exact key set of the data object. `dependencies` and `comments` are
+	// absent because the local struct never carries them — create does not
+	// re-read.
 	assertKeySet(t, obj, []string{
 		"id", "title", "description", "status", "priority", "issue_type",
 		"assignee", "created_at", "created_by", "updated_at", "labels",
-		"owner", "schema_version",
+		"owner",
 	})
 	if obj["owner"] != parityOwnerEmail {
 		t.Errorf("owner = %v, want %q from the git identity", obj["owner"], parityOwnerEmail)
@@ -56,8 +82,8 @@ func TestParityCreateJSONShape(t *testing.T) {
 	if _, ok := obj["comments"]; ok {
 		t.Error("create --json emitted a `comments` key; today it prints a local struct that has none")
 	}
-	if obj["schema_version"] != float64(JSONSchemaVersion) {
-		t.Errorf("schema_version = %v, want %d", obj["schema_version"], JSONSchemaVersion)
+	if envelope["schema_version"] != float64(JSONSchemaVersion) {
+		t.Errorf("schema_version = %v, want %d", envelope["schema_version"], JSONSchemaVersion)
 	}
 
 	// Byte shape: two-space indent, trailing newline, sorted top-level keys.
@@ -108,7 +134,7 @@ func TestParityCreateJSONTimestamps(t *testing.T) {
 		t.Fatalf("exit=%d err=%v stderr=%s", res.exitCode, res.err, res.stderr)
 	}
 
-	obj := decodeJSONObject(t, res.stdout)
+	obj := decodeEnvelopeData(t, decodeJSONObject(t, res.stdout))
 	createdAt, _ := obj["created_at"].(string)
 	updatedAt, _ := obj["updated_at"].(string)
 	if createdAt == "" || updatedAt == "" {
@@ -211,7 +237,7 @@ func TestParityCreateWithDepsOmitsDependenciesKey(t *testing.T) {
 		t.Fatalf("exit=%d err=%v stderr=%s", res.exitCode, res.err, res.stderr)
 	}
 
-	obj := decodeJSONObject(t, res.stdout)
+	obj := decodeEnvelopeData(t, decodeJSONObject(t, res.stdout))
 	if _, ok := obj["dependencies"]; ok {
 		t.Error("create --json emitted a `dependencies` key even though it prints a local struct")
 	}
@@ -356,10 +382,11 @@ func TestParityCreateJSONErrorShape(t *testing.T) {
 	if res.exitCode != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
 	}
-	obj := decodeJSONObject(t, res.stdout)
-	assertKeySet(t, obj, []string{"error", "schema_version"})
-	if obj["schema_version"] != float64(JSONSchemaVersion) {
-		t.Errorf("schema_version = %v, want %d", obj["schema_version"], JSONSchemaVersion)
+	envelope := decodeJSONObject(t, res.stdout)
+	obj := decodeEnvelopeData(t, envelope)
+	assertKeySet(t, obj, []string{"error"})
+	if envelope["schema_version"] != float64(JSONSchemaVersion) {
+		t.Errorf("schema_version = %v, want %d", envelope["schema_version"], JSONSchemaVersion)
 	}
 	if msg, _ := obj["error"].(string); msg == "" {
 		t.Error("error message is empty")
@@ -371,9 +398,9 @@ func TestParityCreateJSONErrorShape(t *testing.T) {
 
 // ===== bd update =====
 
-// TestParityUpdateJSONShape pins `bd update --json`: a JSON ARRAY of re-read
-// issues, in struct-field order, with NO schema_version wrapper (outputJSON
-// leaves slices alone — cmd/bd/output.go:85-87).
+// TestParityUpdateJSONShape pins `bd update --json`: an envelope whose "data"
+// is a JSON ARRAY of re-read issues, in struct-field order. The envelope wraps
+// the array; the elements carry no schema_version of their own.
 //
 // Source: cmd/bd/update.go:586 (re-fetch) and :631-635 (outputJSON).
 func TestParityUpdateJSONShape(t *testing.T) {
@@ -387,18 +414,18 @@ func TestParityUpdateJSONShape(t *testing.T) {
 		t.Fatalf("exit=%d err=%v stderr=%s", res.exitCode, res.err, res.stderr)
 	}
 
-	if !strings.HasPrefix(res.stdout, "[\n  {") {
-		t.Errorf("update --json is not a 2-space-indented array: %q", firstLine(res.stdout, 2))
+	if !strings.HasPrefix(res.stdout, "{\n  \"data\": [\n    {") {
+		t.Errorf("update --json is not a 2-space-indented envelope of an array: %q", firstLine(res.stdout, 2))
 	}
-	if !strings.HasSuffix(res.stdout, "]\n") {
-		t.Errorf("update --json does not end with \"]\\n\"")
+	if !strings.HasSuffix(res.stdout, "}\n") {
+		t.Errorf("update --json does not end with \"}\\n\"")
 	}
-	arr := decodeJSONArray(t, res.stdout)
+	arr := decodeJSONEnvelopeArray(t, res.stdout)
 	if len(arr) != 1 {
 		t.Fatalf("array length = %d, want 1", len(arr))
 	}
 	if _, ok := arr[0]["schema_version"]; ok {
-		t.Error("update --json array elements carry schema_version; today outputJSON leaves slices unwrapped")
+		t.Error("update --json array elements carry schema_version; the envelope, not each element, carries it")
 	}
 	if arr[0]["priority"] != float64(0) {
 		t.Errorf("priority = %v, want 0 (the value written)", arr[0]["priority"])
@@ -406,7 +433,9 @@ func TestParityUpdateJSONShape(t *testing.T) {
 
 	// Struct-field order (types.Issue), not sorted: `id` then `title` — the
 	// reverse of alphabetical, which is what create emits.
-	inner := res.stdout[strings.Index(res.stdout, "{"):]
+	// The first element sits inside the envelope's "data" array.
+	afterArray := res.stdout[strings.Index(res.stdout, "["):]
+	inner := afterArray[strings.Index(afterArray, "{"):]
 	order := rawJSONKeyOrder(t, inner)
 	if len(order) < 2 || order[0] != "id" || order[1] != "title" {
 		t.Errorf("update --json element key order starts %v; today it is types.Issue struct order (id, title, ...)", order)
@@ -656,23 +685,26 @@ func TestParityUpdateJSONFailureReport(t *testing.T) {
 
 	lines := strings.Split(strings.TrimRight(res.stderr, "\n"), "\n")
 	report := lines[len(lines)-1]
-	var payload struct {
-		Error         string `json:"error"`
-		SchemaVersion int    `json:"schema_version"`
-		Failed        []struct {
-			ID            string `json:"id"`
-			Error         string `json:"error"`
-			GuardMismatch bool   `json:"guard_mismatch"`
-		} `json:"failed"`
+	var envelope struct {
+		SchemaVersion int `json:"schema_version"`
+		Data          struct {
+			Error  string `json:"error"`
+			Failed []struct {
+				ID            string `json:"id"`
+				Error         string `json:"error"`
+				GuardMismatch bool   `json:"guard_mismatch"`
+			} `json:"failed"`
+		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(report), &payload); err != nil {
+	if err := json.Unmarshal([]byte(report), &envelope); err != nil {
 		t.Fatalf("last stderr line is not the JSON failure report: %v\nline: %s\nstderr:\n%s", err, report, res.stderr)
 	}
+	payload := envelope.Data
 	if payload.Error != "1 of 1 issues failed to update" {
 		t.Errorf("error = %q, want %q", payload.Error, "1 of 1 issues failed to update")
 	}
-	if payload.SchemaVersion != JSONSchemaVersion {
-		t.Errorf("schema_version = %d, want %d", payload.SchemaVersion, JSONSchemaVersion)
+	if envelope.SchemaVersion != JSONSchemaVersion {
+		t.Errorf("schema_version = %d, want %d", envelope.SchemaVersion, JSONSchemaVersion)
 	}
 	if len(payload.Failed) != 1 {
 		t.Fatalf("failed entries = %d, want 1", len(payload.Failed))
@@ -884,15 +916,15 @@ func TestParityCloseJSONShape(t *testing.T) {
 		t.Fatalf("exit=%d err=%v stderr=%s", res.exitCode, res.err, res.stderr)
 	}
 
-	if !strings.HasPrefix(res.stdout, "[\n  {") {
-		t.Errorf("close --json is not a 2-space-indented array: %q", firstLine(res.stdout, 2))
+	if !strings.HasPrefix(res.stdout, "{\n  \"data\": [\n    {") {
+		t.Errorf("close --json is not a 2-space-indented envelope of an array: %q", firstLine(res.stdout, 2))
 	}
-	arr := decodeJSONArray(t, res.stdout)
+	arr := decodeJSONEnvelopeArray(t, res.stdout)
 	if len(arr) != 1 {
 		t.Fatalf("array length = %d, want 1", len(arr))
 	}
 	if _, ok := arr[0]["schema_version"]; ok {
-		t.Error("close --json array elements carry schema_version; today slices are unwrapped")
+		t.Error("close --json array elements carry schema_version; the envelope, not each element, carries it")
 	}
 	if arr[0]["status"] != string(types.StatusClosed) {
 		t.Errorf("status = %v, want closed", arr[0]["status"])
@@ -1091,15 +1123,15 @@ func TestParityReopenJSONShape(t *testing.T) {
 		t.Fatalf("exit=%d err=%v stderr=%s", res.exitCode, res.err, res.stderr)
 	}
 
-	if !strings.HasPrefix(res.stdout, "[\n  {") {
-		t.Errorf("reopen --json is not a 2-space-indented array: %q", firstLine(res.stdout, 2))
+	if !strings.HasPrefix(res.stdout, "{\n  \"data\": [\n    {") {
+		t.Errorf("reopen --json is not a 2-space-indented envelope of an array: %q", firstLine(res.stdout, 2))
 	}
-	arr := decodeJSONArray(t, res.stdout)
+	arr := decodeJSONEnvelopeArray(t, res.stdout)
 	if len(arr) != 1 {
 		t.Fatalf("array length = %d, want 1", len(arr))
 	}
 	if _, ok := arr[0]["schema_version"]; ok {
-		t.Error("reopen --json array elements carry schema_version; today slices are unwrapped")
+		t.Error("reopen --json array elements carry schema_version; the envelope, not each element, carries it")
 	}
 	if arr[0]["status"] != string(types.StatusOpen) {
 		t.Errorf("status = %v, want open", arr[0]["status"])

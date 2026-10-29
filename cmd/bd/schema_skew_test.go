@@ -35,9 +35,13 @@ func TestHandleSchemaSkewJSON_Shape(t *testing.T) {
 	}
 	_ = r.Close()
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &envelope); err != nil {
 		t.Fatalf("json.Unmarshal stderr: %v\nstderr was: %s", err, buf.String())
+	}
+	parsed, ok := envelope["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data key missing or wrong type: %T\nstderr was: %s", envelope["data"], buf.String())
 	}
 
 	// "error" key must contain the terse Error() string.
@@ -52,9 +56,9 @@ func TestHandleSchemaSkewJSON_Shape(t *testing.T) {
 		t.Errorf("hint = %v, want %q", parsed["hint"], wantHint)
 	}
 
-	// "schema_version" key must be JSONSchemaVersion.
-	if got, ok := parsed["schema_version"].(float64); !ok || int(got) != JSONSchemaVersion {
-		t.Errorf("schema_version = %v, want %d", parsed["schema_version"], JSONSchemaVersion)
+	// The envelope's "schema_version" key must be JSONSchemaVersion.
+	if got, ok := envelope["schema_version"].(float64); !ok || int(got) != JSONSchemaVersion {
+		t.Errorf("schema_version = %v, want %d", envelope["schema_version"], JSONSchemaVersion)
 	}
 
 	// "schema_skew" subobject must be present with current_version, required_version, delta.

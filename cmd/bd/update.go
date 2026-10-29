@@ -888,17 +888,7 @@ func reportUpdateFailures(failures []updateIDFailure, succeeded, total int) erro
 			"error":  msg,
 			"failed": failures,
 		}
-		var payload interface{}
-		if jsonEnvelopeEnabled() {
-			payload = map[string]interface{}{
-				"schema_version": JSONSchemaVersion,
-				"data":           inner,
-			}
-		} else {
-			inner["schema_version"] = JSONSchemaVersion
-			payload = inner
-		}
-		data, err := json.Marshal(payload)
+		data, err := json.Marshal(wrapWithSchemaVersion(inner))
 		if err != nil {
 			// Marshaling flat strings cannot realistically fail; fall back to
 			// the text summary rather than exiting silently.
