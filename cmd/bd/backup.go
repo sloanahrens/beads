@@ -84,7 +84,17 @@ func newBackupStatusCommand(sizeDatabase backupSizeFunc) *cobra.Command {
 				if sizeAvailable {
 					result["database_size"] = showDBSizeJSON(databaseSize)
 				}
-				data, err := json.MarshalIndent(result, "", "  ")
+				// Every other --json command emits the schema envelope through
+				// wrapWithSchemaVersion; this branch hand-rolled its marshal and
+				// so had no schema_version at all. Machine mode keeps the bare
+				// object it has always printed: BD_MACHINE's shape is the
+				// machine envelope's contract (cmd/bd/envelope.go), not this
+				// branch's.
+				var out interface{} = result
+				if !machineModeActive() {
+					out = wrapWithSchemaVersion(result)
+				}
+				data, err := json.MarshalIndent(out, "", "  ")
 				if err != nil {
 					return err
 				}
