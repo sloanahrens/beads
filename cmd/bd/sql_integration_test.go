@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,7 +77,7 @@ func TestSqlCommand(t *testing.T) {
 		})
 
 		var result []map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		if err := unmarshalEnvelope([]byte(output), &result); err != nil {
 			t.Fatalf("Failed to parse JSON output: %v\nOutput: %s", err, output)
 		}
 
@@ -102,7 +101,7 @@ func TestSqlCommand(t *testing.T) {
 		})
 
 		var result []map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		if err := unmarshalEnvelope([]byte(output), &result); err != nil {
 			t.Fatalf("Failed to parse JSON output: %v\nOutput: %s", err, output)
 		}
 
@@ -123,7 +122,7 @@ func TestSqlCommand(t *testing.T) {
 		})
 
 		var result []map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		if err := unmarshalEnvelope([]byte(output), &result); err != nil {
 			t.Fatalf("Failed to parse JSON output: %v\nOutput: %s", err, output)
 		}
 
