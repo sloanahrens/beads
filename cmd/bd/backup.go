@@ -84,12 +84,18 @@ func newBackupStatusCommand(sizeDatabase backupSizeFunc) *cobra.Command {
 				if sizeAvailable {
 					result["database_size"] = showDBSizeJSON(databaseSize)
 				}
-				// Every other --json command emits the schema envelope through
-				// wrapWithSchemaVersion; this branch hand-rolled its marshal and
-				// so had no schema_version at all. Machine mode keeps the bare
-				// object it has always printed: BD_MACHINE's shape is the
-				// machine envelope's contract (cmd/bd/envelope.go), not this
-				// branch's.
+				// Every other --json command emits the schema wrapper's report;
+				// this branch hand-rolled its marshal and so carried no
+				// schema_version at all. Going through the shared wrapper makes
+				// backup status follow the CLI-wide shape: schema_version on
+				// the report, and the report under "data" when
+				// BD_JSON_ENVELOPE=1 asks for the envelope, exactly as
+				// outputJSONWithPagination does for every other command. That
+				// opt-in nesting is the migration for BD_JSON_ENVELOPE=1
+				// consumers, who now read data.backup and data.database_size.
+				// Machine mode keeps the bare object it has always printed:
+				// BD_MACHINE's shape is the machine envelope's contract
+				// (cmd/bd/envelope.go), not this branch's.
 				var out interface{} = result
 				if !machineModeActive() {
 					out = wrapWithSchemaVersion(result)
