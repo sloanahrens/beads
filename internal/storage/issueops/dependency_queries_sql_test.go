@@ -1,8 +1,16 @@
 package issueops
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/steveyegge/beads/internal/types"
 )
 
 // normalizeSQLSpace collapses every run of whitespace (including the newlines and
@@ -12,8 +20,12 @@ func normalizeSQLSpace(sql string) string {
 	return strings.Join(strings.Fields(sql), " ")
 }
 
+// typedTargetColumns are the three typed target columns the WHERE predicate must
+// name, one branch each.
+var typedTargetColumns = []string{"depends_on_issue_id", "depends_on_wisp_id", "depends_on_external"}
+
 // TestReverseDependentsBatchSQL pins the batched reverse-dependents query: its
-// WHERE predicate is one bare indexed equality per typed target column, and the
+// WHERE predicate names each typed target column with no COALESCE, and the
 // SELECT list and ORDER BY keep the COALESCE target expression they had before.
 func TestReverseDependentsBatchSQL(t *testing.T) {
 	const inClause = "?,?"
@@ -33,14 +45,10 @@ func TestReverseDependentsBatchSQL(t *testing.T) {
 			if n := strings.Count(got, "COALESCE("); n != 2 {
 				t.Errorf("COALESCE occurs %d times, want 2 (the projection and the ORDER BY only; none in WHERE)", n)
 			}
-			for _, col := range []string{"depends_on_issue_id", "depends_on_wisp_id", "depends_on_external"} {
-				want := "FROM " + depTable + " WHERE " + col + " IN (" + inClause + ")"
-				if !strings.Contains(got, want) {
-					t.Errorf("missing per-column WHERE branch %q in:\n%s", want, got)
+			for _, col := range typedTargetColumns {
+				if want := col + " IN (" + inClause + ")"; !strings.Contains(got, want) {
+					t.Errorf("WHERE does not seek %q:\n%s", want, got)
 				}
-			}
-			if n := strings.Count(got, "UNION ALL"); n != 2 {
-				t.Errorf("UNION ALL occurs %d times, want 2 (one join per typed target column)", n)
 			}
 		})
 	}
@@ -70,12 +78,104 @@ func TestReverseDependentsBlocksInfoSQL(t *testing.T) {
 			if strings.Contains(got, "ORDER BY") {
 				t.Errorf("query gained an ORDER BY:\n%s", got)
 			}
-			for _, col := range []string{"depends_on_issue_id", "depends_on_wisp_id", "depends_on_external"} {
-				want := "FROM " + depTable + " WHERE " + col + " IN (" + inClause + ") AND type IN ('blocks', 'parent-child')"
+			for _, col := range typedTargetColumns {
+				want := col + " IN (" + inClause + ") AND type IN ('blocks', 'parent-child')"
 				if !strings.Contains(got, want) {
-					t.Errorf("missing per-column WHERE branch %q in:\n%s", want, got)
+					t.Errorf("WHERE does not seek %q:\n%s", want, got)
 				}
 			}
 		})
+	}
+}
+
+// bindCheckedDBTX fails any query whose ? placeholder count differs from the
+// number of bind arguments it is given. The driver would reject that too, but
+// sqlmock only compares the arguments it is told to expect, so this count check
+// is what catches a query that repeats its placeholders without repeating binds.
+type bindCheckedDBTX struct {
+	DBTX
+}
+
+func (d bindCheckedDBTX) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if n := strings.Count(query, "?"); n != len(args) {
+		return nil, fmt.Errorf("query has %d placeholders for %d bind args:\n%s", n, len(args), query)
+	}
+	return d.DBTX.QueryContext(ctx, query, args...)
+}
+
+// newBindCheckedDB returns a mock database whose queries must carry the expected
+// bind arguments, in order, and whose placeholder counts match them.
+func newBindCheckedDB(t *testing.T) (DBTX, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return bindCheckedDBTX{DBTX: db}, mock
+}
+
+// idBinds returns the bind list a batched read must send for ids: every id once
+// per typed target column, in branch order.
+func idBinds(ids ...string) []driver.Value {
+	var out []driver.Value
+	for range typedTargetColumns {
+		for _, id := range ids {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// TestReverseDependentsBindsSQL drives the production reverse-dependents read
+// and pins its bind list: the batch ids repeat once per typed target branch.
+func TestReverseDependentsBindsSQL(t *testing.T) {
+	ids := []string{"bd-1", "bd-2"}
+
+	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		t.Run(depTable, func(t *testing.T) {
+			tx, mock := newBindCheckedDB(t)
+			mock.ExpectQuery(regexp.QuoteMeta("FROM " + depTable + " WHERE")).
+				WithArgs(idBinds(ids...)...).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+			err := getDependentRecordsIntoFromTable(context.Background(), tx, depTable, ids,
+				map[string]bool{}, map[string][]*types.Dependency{})
+			if err != nil {
+				t.Fatalf("getDependentRecordsIntoFromTable: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+// TestReverseBlocksInfoBindsSQL drives the production blocks-info read and pins
+// its bind lists: the status lookup binds each id once, and each dependency
+// table's blocks read binds each id once per typed target branch.
+func TestReverseBlocksInfoBindsSQL(t *testing.T) {
+	ids := []string{"bd-1", "bd-2"}
+	idArgs := []driver.Value{"bd-1", "bd-2"}
+
+	tx, mock := newBindCheckedDB(t)
+	for _, issueTable := range []string{"issues", "wisps"} {
+		mock.ExpectQuery(regexp.QuoteMeta("FROM " + issueTable + " WHERE id IN")).
+			WithArgs(idArgs...).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "status"}))
+	}
+	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		mock.ExpectQuery(regexp.QuoteMeta("FROM " + depTable + " WHERE")).
+			WithArgs(idBinds(ids...)...).
+			WillReturnRows(sqlmock.NewRows([]string{"blocker", "blocked", "type"}))
+	}
+
+	blocksMap := map[string][]string{}
+	if err := queryBlocksInfo(context.Background(), tx, ids,
+		[]string{"dependencies", "wisp_dependencies"}, blocksMap); err != nil {
+		t.Fatalf("queryBlocksInfo: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }

@@ -231,7 +231,8 @@ func getDependentRecordsIntoFromTable(ctx context.Context, tx DBTX, depTable str
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		rows, err := tx.QueryContext(ctx, reverseDependentsBatchSQL(depTable, strings.Join(placeholders, ",")), args...)
+		rows, err := tx.QueryContext(ctx, reverseDependentsBatchSQL(depTable, strings.Join(placeholders, ",")),
+			sqlbuild.DepTargetBranchArgs(args...)...)
 		if err != nil {
 			return fmt.Errorf("get dependent records from %s: %w", depTable, err)
 		}
@@ -262,6 +263,8 @@ func getDependentRecordsIntoFromTable(ctx context.Context, tx DBTX, depTable str
 // the per-column UNION ALL of sqlbuild.DepTargetSelectSQL, so each branch seeks
 // its own typed target column. The outer SELECT list and ORDER BY still name the
 // target with DepTargetExpr; only the WHERE predicate moves into the branches.
+// inClause repeats in every branch, so the caller binds the ids with
+// sqlbuild.DepTargetBranchArgs, once per branch.
 //
 //nolint:gosec // G201: depTable is "dependencies" or "wisp_dependencies" (hardcoded by caller); inClause contains only ? placeholders.
 func reverseDependentsBatchSQL(depTable, inClause string) string {
@@ -740,7 +743,8 @@ func queryBlocksInfo(
 
 		for _, depTable := range depTables {
 			// Query: "blocks" — deps where depends_on_id is in our set.
-			rows, err := tx.QueryContext(ctx, reverseBlocksInfoSQL(depTable, inClause), args...)
+			rows, err := tx.QueryContext(ctx, reverseBlocksInfoSQL(depTable, inClause),
+				sqlbuild.DepTargetBranchArgs(args...)...)
 			if err != nil {
 				if optionalBlockedTable(depTable) && isTableNotExistError(err) {
 					continue
@@ -775,7 +779,8 @@ func queryBlocksInfo(
 // blocking and parent-child rows whose target is one of the ? placeholders in
 // inClause. As in reverseDependentsBatchSQL, the target predicate is the
 // per-column UNION ALL of sqlbuild.DepTargetSelectSQL and the projection keeps
-// its DepTargetExpr-style COALESCE.
+// its DepTargetExpr-style COALESCE. As in reverseDependentsBatchSQL, the caller
+// binds the ids once per branch with sqlbuild.DepTargetBranchArgs.
 //
 //nolint:gosec // G201: depTable is a caller-controlled constant; inClause contains only ? placeholders.
 func reverseBlocksInfoSQL(depTable, inClause string) string {
