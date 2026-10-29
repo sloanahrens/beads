@@ -123,7 +123,10 @@ func TestLegacyUpgradeGuardRefusesBeforeMutatingHistoricalWorkspace(t *testing.T
 						if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 							t.Fatalf("doctor stdout is not valid JSON: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 						}
-						payload, _ := envelope["data"].(map[string]any)
+						payload, ok := envelope["data"].(map[string]any)
+						if !ok {
+							t.Fatalf("doctor stdout has no data object in its envelope:\n%s", stdout.String())
+						}
 						if payload["code"] != "legacy_upgrade_required" {
 							t.Fatalf("doctor code = %v, want legacy_upgrade_required", payload["code"])
 						}

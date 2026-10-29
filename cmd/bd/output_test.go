@@ -149,27 +149,18 @@ func TestOutputJSONWithPagination_TruncatedPageAlwaysPaginated_NoStderrNotice(t 
 	items := []string{"a", "b", "c"}
 	pag := paginationMetaFor(true, 3)
 
-	out := captureStdout(t, func() error {
-		return outputJSONWithPagination(items, pag)
-	})
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(bytes.TrimSpace([]byte(out))), &m); err != nil {
-		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	// One call, both streams: a notice written once per process would be
+	// spent by an earlier call, so a second call under the stderr capture could
+	// not show it. captureStderr holds stdioMutex, so captureStdout cannot nest
+	// inside it; stdout goes to a file the test reads back.
+	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout-*.json")
+	if err != nil {
+		t.Fatalf("create stdout file: %v", err)
 	}
-	if _, ok := m["pagination"]; !ok {
-		t.Fatalf("truncated page has no 'pagination' key; output: %s", out)
-	}
-
+	defer stdoutFile.Close()
 	stderr := captureStderr(t, func() {
-		// captureStderr already holds stdioMutex, so captureStdout cannot
-		// nest here; the stdout of this call is discarded by hand.
-		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		if err != nil {
-			t.Fatalf("open %s: %v", os.DevNull, err)
-		}
-		defer devNull.Close()
 		oldStdout := os.Stdout
-		os.Stdout = devNull
+		os.Stdout = stdoutFile
 		defer func() { os.Stdout = oldStdout }()
 		if err := outputJSONWithPagination(items, pag); err != nil {
 			t.Errorf("outputJSONWithPagination: %v", err)
@@ -177,6 +168,17 @@ func TestOutputJSONWithPagination_TruncatedPageAlwaysPaginated_NoStderrNotice(t 
 	})
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	raw, err := os.ReadFile(stdoutFile.Name())
+	if err != nil {
+		t.Fatalf("read stdout file: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &m); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, raw)
+	}
+	if _, ok := m["pagination"]; !ok {
+		t.Fatalf("truncated page has no 'pagination' key; output: %s", raw)
 	}
 }
 
