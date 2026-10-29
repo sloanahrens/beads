@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
 // Fast CLI tests converted from scripttest suite
@@ -96,6 +100,12 @@ func copyDir(src, dst string) error {
 // setupCLITestDB creates a fresh initialized bd database for CLI tests.
 // Uses a cached template directory to avoid running bd init for every test.
 // The template is created once via sync.Once and copied for each test.
+//
+// In server mode the data lives on the shared Dolt server under the database
+// named in metadata.json, so a plain copy would point every test at the
+// template's database. Each copy therefore gets its own database: its
+// metadata.json names a database unique to the test, and bd init creates that
+// database. The database is dropped in cleanup.
 func setupCLITestDB(t *testing.T) string {
 	t.Helper()
 	if testDoltServerPort == 0 {
@@ -109,7 +119,127 @@ func setupCLITestDB(t *testing.T) string {
 	if err := copyDir(templateDBDir, tmpDir); err != nil {
 		t.Fatalf("Failed to copy template DB: %v", err)
 	}
+	dbName := uniqueCLITestDatabaseName(fmt.Sprintf("%d/%s", os.Getpid(), t.Name()))
+	if err := withCLITestDatabase(filepath.Join(tmpDir, ".beads"), dbName); err != nil {
+		t.Fatalf("Failed to point test copy at database %s: %v", dbName, err)
+	}
+	t.Cleanup(func() { dropTestDatabase(dbName, testDoltServerPort) })
+	initCLITestDatabase(t, tmpDir, dbName)
 	return tmpDir
+}
+
+// cliTestDatabaseNameMaxLen is the longest name dolt.ValidateDatabaseName accepts.
+const cliTestDatabaseNameMaxLen = 64
+
+// uniqueCLITestDatabaseName returns the Dolt database name for one CLI test.
+// The name is valid for dolt.ValidateDatabaseName, is the same for the same
+// input, and differs between inputs. A short hash of the full input keeps two
+// inputs that sanitize to the same text from sharing a database.
+func uniqueCLITestDatabaseName(testName string) string {
+	sum := sha256.Sum256([]byte(testName))
+	suffix := hex.EncodeToString(sum[:6])
+	readable := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, testName)
+	const prefix = "clitest_"
+	maxReadable := cliTestDatabaseNameMaxLen - len(prefix) - 1 - len(suffix)
+	if len(readable) > maxReadable {
+		readable = readable[:maxReadable]
+	}
+	return prefix + readable + "_" + suffix
+}
+
+// withCLITestDatabase rewrites the dolt_database field of the metadata.json in
+// beadsDir and leaves every other field as it was.
+func withCLITestDatabase(beadsDir, dbName string) error {
+	cfg, err := configfile.Load(beadsDir)
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return fmt.Errorf("no metadata.json in %s", beadsDir)
+	}
+	cfg.DoltDatabase = dbName
+	return cfg.Save(beadsDir)
+}
+
+// initCLITestDatabase runs bd init in dir so that dbName is created on the
+// Dolt server with the schema. BEADS_DOLT_SERVER_DATABASE is pinned to dbName
+// so the name does not depend on the ambient environment.
+func initCLITestDatabase(t *testing.T, dir, dbName string) {
+	t.Helper()
+	cmd := exec.Command(testBD, "init", "--prefix", "test", "--quiet")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "BEADS_DOLT_SERVER_DATABASE="+dbName)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("bd init for database %s failed: %v\n%s", dbName, err, out)
+	}
+}
+
+// TestUniqueCLITestDatabaseName checks the name rules without a Dolt server:
+// each name is valid for the server, the same test name gives the same name,
+// and different test names give different names.
+func TestUniqueCLITestDatabaseName(t *testing.T) {
+	tests := []struct {
+		name      string
+		a, b      string
+		wantEqual bool
+	}{
+		{"different test names differ", "TestCLI_List", "TestCLI_Create", false},
+		{"same test name matches", "TestCLI_List", "TestCLI_List", true},
+		{"names that sanitize alike differ", "TestA/b", "TestA_b", false},
+		{"long names stay valid and differ", strings.Repeat("TestVeryLongName", 10), strings.Repeat("TestVeryLongName", 10) + "x", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotA := uniqueCLITestDatabaseName(tc.a)
+			gotB := uniqueCLITestDatabaseName(tc.b)
+			if (gotA == gotB) != tc.wantEqual {
+				t.Fatalf("uniqueCLITestDatabaseName(%q) = %q, uniqueCLITestDatabaseName(%q) = %q; equal = %v, want %v",
+					tc.a, gotA, tc.b, gotB, gotA == gotB, tc.wantEqual)
+			}
+			for _, got := range []string{gotA, gotB} {
+				if err := dolt.ValidateDatabaseName(got); err != nil {
+					t.Fatalf("database name %q is invalid: %v", got, err)
+				}
+			}
+		})
+	}
+}
+
+// TestWithCLITestDatabase_ChangesOnlyDatabaseName checks the metadata rewrite
+// on its own: only dolt_database changes, and no server is needed.
+func TestWithCLITestDatabase_ChangesOnlyDatabaseName(t *testing.T) {
+	beadsDir := filepath.Join(t.TempDir(), ".beads")
+	if err := os.MkdirAll(beadsDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	before := configfile.DefaultConfig()
+	before.Backend = configfile.BackendDolt
+	before.DoltMode = configfile.DoltModeServer
+	before.DoltDatabase = "test"
+	before.DoltServerPort = 3307
+	if err := before.Save(beadsDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := withCLITestDatabase(beadsDir, "clitest_one"); err != nil {
+		t.Fatalf("withCLITestDatabase: %v", err)
+	}
+	after, err := configfile.Load(beadsDir)
+	if err != nil || after == nil {
+		t.Fatalf("configfile.Load after rewrite: cfg=%v err=%v", after, err)
+	}
+	if after.DoltDatabase != "clitest_one" {
+		t.Errorf("DoltDatabase = %q, want %q", after.DoltDatabase, "clitest_one")
+	}
+	if after.DoltServerPort != 3307 || after.DoltMode != configfile.DoltModeServer || after.Backend != configfile.BackendDolt {
+		t.Errorf("rewrite changed other fields: port=%d mode=%q backend=%q",
+			after.DoltServerPort, after.DoltMode, after.Backend)
+	}
 }
 
 // createTempDirWithCleanup creates a temp directory with non-fatal cleanup
