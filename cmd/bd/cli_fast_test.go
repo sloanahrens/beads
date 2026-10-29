@@ -6,17 +6,16 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
@@ -33,104 +32,61 @@ var (
 	inProcessMutex sync.Mutex // Protects concurrent access to rootCmd and global state
 )
 
-// templateDB holds a pre-initialized bd database directory.
-// Created once via sync.Once, then copied for each test to avoid
-// running bd init (which creates SQLite DB, config files, etc.) per test.
-// This optimization eliminates ~2s per test from repeated initialization.
-var (
-	templateDBDir  string
-	templateDBOnce sync.Once
-	templateDBErr  error
-)
-
-// initTemplateDB creates a single template database that can be copied for each test.
-// Uses exec.Command (subprocess) to avoid polluting Cobra global state.
-// The testBD binary is already built once in init().
-func initTemplateDB() {
-	templateDBOnce.Do(func() {
-		tmpDir, err := os.MkdirTemp("", "bd-cli-template-*")
-		if err != nil {
-			templateDBErr = fmt.Errorf("failed to create template dir: %w", err)
-			return
-		}
-		templateDBDir = tmpDir
-
-		// Use exec.Command to run bd init in a subprocess.
-		// This avoids any Cobra global state pollution that would affect subsequent
-		// in-process test runs.
-		cmd := exec.Command(testBD, "init", "--prefix", "test", "--quiet")
-		cmd.Dir = tmpDir
-		cmd.Env = os.Environ()
-		if out, err := cmd.CombinedOutput(); err != nil {
-			templateDBErr = fmt.Errorf("template bd init failed: %v\n%s", err, out)
-			return
-		}
-	})
-}
-
-// copyDir recursively copies a directory tree.
-func copyDir(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dst, 0750); err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			data, err := os.ReadFile(srcPath)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(dstPath, data, 0600); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// setupCLITestDB creates a fresh initialized bd database for CLI tests.
-// The template directory is created once via sync.Once and copied for each test
-// to supply the .beads skeleton.
+// setupCLITestDB creates a fresh bd workspace whose data lives in a Dolt
+// database of its own on the test server.
 //
 // In server mode the data lives on the shared Dolt server under the database
-// named in metadata.json, so a plain copy would point every test at the
-// template's database. Each copy therefore gets its own database: its
-// metadata.json names a database unique to the test, and bd init creates that
-// database there, so each call pays for one bd init. The database is dropped
-// in cleanup.
+// name in metadata.json, so a workspace initialized once and then reused points
+// every test at the same database and tests see each other's issues. Each call
+// therefore initializes a new workspace against a database named for the
+// calling test (uniqueCLITestDatabaseName) and drops that database in cleanup,
+// so each test starts from and leaves an empty database.
+//
+// The workspace is initialized instead of copied from a template because bd
+// init refuses a workspace that already holds a database (checkExistingBeadsData
+// in init.go), so in server mode there is nothing to save by copying: the
+// database work is the cost, and any fix pays one bd init per test.
 func setupCLITestDB(t *testing.T) string {
+	t.Helper()
+	return setupCLITestDBFor(t, t.Name())
+}
+
+// setupCLITestDBFor is setupCLITestDB with the database keyed by name instead
+// of the test name, for a test that needs more than one isolated workspace. The
+// name must be unique among a test's calls: same name means same database.
+func setupCLITestDBFor(t *testing.T, name string) string {
 	t.Helper()
 	if testDoltServerPort == 0 {
 		t.Skip("skipping: Dolt test container not available")
 	}
-	initTemplateDB()
-	if templateDBErr != nil {
-		t.Fatalf("Template DB initialization failed: %v", templateDBErr)
+	dbName := uniqueCLITestDatabaseName(name)
+	// The name is derived from the test alone, so a run that died before its
+	// cleanup leaves this database behind. Drop it first so a rerun (or
+	// -count=2) starts from an empty database instead of inheriting issues.
+	if err := dropTestDatabase(dbName, testDoltServerPort); err != nil {
+		t.Fatalf("Failed to clear leftover test database %s: %v", dbName, err)
 	}
+	t.Cleanup(func() {
+		if err := dropTestDatabase(dbName, testDoltServerPort); err != nil {
+			t.Errorf("Failed to drop test database %s: %v", dbName, err)
+		}
+	})
 	tmpDir := createTempDirWithCleanup(t)
-	if err := copyDir(templateDBDir, tmpDir); err != nil {
-		t.Fatalf("Failed to copy template DB: %v", err)
-	}
-	dbName := uniqueCLITestDatabaseName(fmt.Sprintf("%d/%s", os.Getpid(), t.Name()))
-	if err := withCLITestDatabase(filepath.Join(tmpDir, ".beads"), dbName); err != nil {
-		t.Fatalf("Failed to point test copy at database %s: %v", dbName, err)
-	}
-	t.Cleanup(func() { dropTestDatabase(dbName, testDoltServerPort) })
 	initCLITestDatabase(t, tmpDir, dbName)
 	return tmpDir
 }
 
-// cliTestDatabaseNameMaxLen is the longest name dolt.ValidateDatabaseName accepts.
-const cliTestDatabaseNameMaxLen = 64
+const (
+	// cliTestDatabaseNameMaxLen is the longest name dolt.ValidateDatabaseName accepts.
+	cliTestDatabaseNameMaxLen = 64
+	// cliTestDatabaseNamePrefix keeps per-test databases inside the namespace
+	// the storage layer reserves for tests (testDatabasePrefixes in
+	// internal/storage/dolt). bd init refuses to create a database on a server
+	// that already serves others unless the name is reserved for tests or the
+	// caller opts in with --allow-new-database, and bd dolt clean-databases
+	// sweeps leftovers by this prefix.
+	cliTestDatabaseNamePrefix = "testdb_clitest_"
+)
 
 // uniqueCLITestDatabaseName returns the Dolt database name for one CLI test.
 // The name is valid for dolt.ValidateDatabaseName, is the same for the same
@@ -145,36 +101,31 @@ func uniqueCLITestDatabaseName(testName string) string {
 		}
 		return '_'
 	}, testName)
-	const prefix = "clitest_"
-	maxReadable := cliTestDatabaseNameMaxLen - len(prefix) - 1 - len(suffix)
+	maxReadable := cliTestDatabaseNameMaxLen - len(cliTestDatabaseNamePrefix) - 1 - len(suffix)
 	if len(readable) > maxReadable {
 		readable = readable[:maxReadable]
 	}
-	return prefix + readable + "_" + suffix
+	return cliTestDatabaseNamePrefix + readable + "_" + suffix
 }
 
-// withCLITestDatabase rewrites the dolt_database field of the metadata.json in
-// beadsDir and leaves every other field as it was.
-func withCLITestDatabase(beadsDir, dbName string) error {
-	cfg, err := configfile.Load(beadsDir)
-	if err != nil {
-		return err
-	}
-	if cfg == nil {
-		return fmt.Errorf("no metadata.json in %s", beadsDir)
-	}
-	cfg.DoltDatabase = dbName
-	return cfg.Save(beadsDir)
-}
-
-// initCLITestDatabase runs bd init in dir so that dbName is created on the
-// Dolt server with the schema. BEADS_DOLT_SERVER_DATABASE is pinned to dbName
-// so the name does not depend on the ambient environment.
+// initCLITestDatabase initializes dir as a bd workspace whose data lives in
+// dbName on the test Dolt server.
+//
+// --database names the database explicitly. It is the supported way to pick a
+// server database, and it is what init records in metadata.json, so the
+// commands the test runs afterwards resolve to the same database. The flags
+// mirror the server-init pattern other tests in this package use
+// (init_realstore_integration_test.go).
 func initCLITestDatabase(t *testing.T, dir, dbName string) {
 	t.Helper()
-	cmd := exec.Command(testBD, "init", "--prefix", "test", "--quiet")
+	cmd := exec.Command(testBD, "init",
+		"--server", "--external",
+		"--server-host", "127.0.0.1",
+		"--server-port", strconv.Itoa(testDoltServerPort),
+		"--database", dbName,
+		"--prefix", "test", "--quiet", "--skip-hooks", "--skip-agents")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "BEADS_DOLT_SERVER_DATABASE="+dbName)
+	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("bd init for database %s failed: %v\n%s", dbName, err, out)
 	}
@@ -206,40 +157,49 @@ func TestUniqueCLITestDatabaseName(t *testing.T) {
 				if err := dolt.ValidateDatabaseName(got); err != nil {
 					t.Fatalf("database name %q is invalid: %v", got, err)
 				}
+				// bd init only creates a database on a server that already
+				// serves others when the name is reserved for tests; see
+				// cliTestDatabaseNamePrefix.
+				if !strings.HasPrefix(got, "testdb_") {
+					t.Fatalf("database name %q is not in the test-database namespace, so bd init would refuse to create it on a populated server", got)
+				}
 			}
 		})
 	}
 }
 
-// TestWithCLITestDatabase_ChangesOnlyDatabaseName checks the metadata rewrite
-// on its own: only dolt_database changes, and no server is needed.
-func TestWithCLITestDatabase_ChangesOnlyDatabaseName(t *testing.T) {
-	beadsDir := filepath.Join(t.TempDir(), ".beads")
-	if err := os.MkdirAll(beadsDir, 0750); err != nil {
-		t.Fatal(err)
+// TestSetupCLITestDBIsolatesDatabases proves on the live test server that
+// setupCLITestDB does not hand two tests the same database: an issue created
+// through one workspace is invisible through the other. This is the regression
+// be-34sb fixes (TestCLI_List saw the issues three earlier TestCLI_ tests had
+// created).
+func TestSetupCLITestDBIsolatesDatabases(t *testing.T) {
+	if testDoltServerPort == 0 {
+		t.Skip("skipping: Dolt test container not available")
 	}
-	before := configfile.DefaultConfig()
-	before.Backend = configfile.BackendDolt
-	before.DoltMode = configfile.DoltModeServer
-	before.DoltDatabase = "test"
-	before.DoltServerPort = 3307
-	if err := before.Save(beadsDir); err != nil {
-		t.Fatal(err)
+	first := setupCLITestDBFor(t, t.Name()+"/first")
+	second := setupCLITestDBFor(t, t.Name()+"/second")
+
+	runBDInProcess(t, first, "create", "only in first", "-p", "1")
+
+	out := runBDInProcess(t, second, "list", "--json")
+	var issues []map[string]interface{}
+	if err := unmarshalEnvelope([]byte(out), &issues); err != nil {
+		t.Fatalf("Failed to parse list output: %v\nOutput: %s", err, out)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("second workspace sees %d issue(s) created in the first; each setupCLITestDB must own its database", len(issues))
 	}
 
-	if err := withCLITestDatabase(beadsDir, "clitest_one"); err != nil {
-		t.Fatalf("withCLITestDatabase: %v", err)
+	// The first workspace must hold the issue, or the empty list above proves
+	// nothing but a create that silently failed.
+	out = runBDInProcess(t, first, "list", "--json")
+	issues = nil
+	if err := unmarshalEnvelope([]byte(out), &issues); err != nil {
+		t.Fatalf("Failed to parse list output: %v\nOutput: %s", err, out)
 	}
-	after, err := configfile.Load(beadsDir)
-	if err != nil || after == nil {
-		t.Fatalf("configfile.Load after rewrite: cfg=%v err=%v", after, err)
-	}
-	if after.DoltDatabase != "clitest_one" {
-		t.Errorf("DoltDatabase = %q, want %q", after.DoltDatabase, "clitest_one")
-	}
-	if after.DoltServerPort != 3307 || after.DoltMode != configfile.DoltModeServer || after.Backend != configfile.BackendDolt {
-		t.Errorf("rewrite changed other fields: port=%d mode=%q backend=%q",
-			after.DoltServerPort, after.DoltMode, after.Backend)
+	if len(issues) != 1 {
+		t.Fatalf("first workspace lists %d issue(s), want 1", len(issues))
 	}
 }
 
