@@ -101,7 +101,7 @@ func TestContributorRoutingTracer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		projectStore, err := dolt.New(ctx, &dolt.Config{Path: projectDBPath})
+		projectStore, err := dolt.New(ctx, &dolt.Config{Path: projectDBPath, CreateIfMissing: true})
 		if err != nil {
 			testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 		}
@@ -152,7 +152,7 @@ func TestContributorRoutingTracer(t *testing.T) {
 
 		// Initialize planning database and verify we can create issues there
 		planningDBPath := filepath.Join(planningBeadsDir, "beads.db")
-		planningStore, err := dolt.New(ctx, &dolt.Config{Path: planningDBPath})
+		planningStore, err := dolt.New(ctx, &dolt.Config{Path: planningDBPath, CreateIfMissing: true})
 		if err != nil {
 			testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 		}
@@ -206,7 +206,7 @@ func TestBackwardCompatContributorConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -310,7 +310,7 @@ func (env *contributorRoutingEnv) cleanup() {
 func (env *contributorRoutingEnv) initProjectStore(syncMode string) *dolt.DoltStore {
 	env.t.Helper()
 	projectDBPath := filepath.Join(env.projectDir, ".beads", "beads.db")
-	store, err := dolt.New(env.ctx, &dolt.Config{Path: projectDBPath})
+	store, err := dolt.New(env.ctx, &dolt.Config{Path: projectDBPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(env.t, "skipping: Dolt server not available: %v", err)
 	}
@@ -351,7 +351,7 @@ func (env *contributorRoutingEnv) initProjectStore(syncMode string) *dolt.DoltSt
 func (env *contributorRoutingEnv) initPlanningStore() *dolt.DoltStore {
 	env.t.Helper()
 	planningDBPath := filepath.Join(env.planningDir, ".beads", "beads.db")
-	store, err := dolt.New(env.ctx, &dolt.Config{Path: planningDBPath})
+	store, err := dolt.New(env.ctx, &dolt.Config{Path: planningDBPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(env.t, "skipping: Dolt server not available: %v", err)
 	}
@@ -664,7 +664,7 @@ func TestExplicitRepoOverride(t *testing.T) {
 	}
 
 	overrideDBPath := filepath.Join(overrideBeadsDir, "beads.db")
-	overrideStore, err := dolt.New(env.ctx, &dolt.Config{Path: overrideDBPath})
+	overrideStore, err := dolt.New(env.ctx, &dolt.Config{Path: overrideDBPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -739,7 +739,7 @@ func TestBEADS_DIRPrecedence(t *testing.T) {
 	}
 
 	externalDBPath := filepath.Join(externalBeadsDir, "beads.db")
-	externalStore, err := dolt.New(env.ctx, &dolt.Config{Path: externalDBPath})
+	externalStore, err := dolt.New(env.ctx, &dolt.Config{Path: externalDBPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}

@@ -72,7 +72,7 @@ func setupTestDB(t *testing.T) (*dolt.DoltStore, func()) {
 	}
 
 	testDB := filepath.Join(tmpDir, "test.db")
-	store, err := dolt.New(context.Background(), &dolt.Config{Path: testDB})
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: testDB, CreateIfMissing: true})
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)

@@ -17,7 +17,7 @@ func TestRenamePrefixCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
+	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestRenamePrefixInDB(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
+	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestRenamePrefixInDB_HalfMigratedConfigNotDoubled(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath})
+	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}

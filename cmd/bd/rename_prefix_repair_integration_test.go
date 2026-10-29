@@ -18,7 +18,7 @@ func TestRepairMultiplePrefixes(t *testing.T) {
 
 	ctx := context.Background()
 
-	testStore, err := dolt.New(ctx, &dolt.Config{Path: testDBPath})
+	testStore, err := dolt.New(ctx, &dolt.Config{Path: testDBPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
