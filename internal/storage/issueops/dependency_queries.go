@@ -779,8 +779,8 @@ func queryBlocksInfo(
 // blocking and parent-child rows whose target is one of the ? placeholders in
 // inClause. As in reverseDependentsBatchSQL, the target predicate is the
 // per-column UNION ALL of sqlbuild.DepTargetSelectSQL and the projection keeps
-// its DepTargetExpr-style COALESCE. As in reverseDependentsBatchSQL, the caller
-// binds the ids once per branch with sqlbuild.DepTargetBranchArgs.
+// its DepTargetExpr-style COALESCE. The caller binds the ids once per branch
+// with sqlbuild.DepTargetBranchArgs.
 //
 //nolint:gosec // G201: depTable is a caller-controlled constant; inClause contains only ? placeholders.
 func reverseBlocksInfoSQL(depTable, inClause string) string {
