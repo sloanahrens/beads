@@ -22,7 +22,7 @@ func TestSqlCommand(t *testing.T) {
 		t.Fatalf("Failed to create .beads directory: %v", err)
 	}
 
-	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: testDBPath})
+	testStore, err := dolt.New(context.Background(), &dolt.Config{Path: testDBPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}

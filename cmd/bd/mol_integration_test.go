@@ -17,7 +17,7 @@ import (
 func TestBondProtoProto(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestBondProtoProto(t *testing.T) {
 func TestBondProtoMol(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestBondProtoMol(t *testing.T) {
 func TestBondMolMol(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	store, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestBondMolMol(t *testing.T) {
 func TestSquashMolecule(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestSquashMolecule(t *testing.T) {
 func TestSquashMoleculeWithDelete(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestSquashMoleculeWithDelete(t *testing.T) {
 func TestSquashMoleculeWithAgentSummary(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestSquashMoleculeWithAgentSummary(t *testing.T) {
 func TestSquashWispMoleculeClearsRootEphemeral(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -577,7 +577,7 @@ func TestSquashWispMoleculeClearsRootEphemeral(t *testing.T) {
 func TestSpawnWithBasicAttach(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -710,7 +710,7 @@ func TestSpawnWithBasicAttach(t *testing.T) {
 func TestSpawnWithMultipleAttachments(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -828,7 +828,7 @@ func TestSpawnWithMultipleAttachments(t *testing.T) {
 func TestSpawnAttachTypes(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -920,7 +920,7 @@ func TestSpawnAttachTypes(t *testing.T) {
 func TestSpawnVariableAggregation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1049,7 +1049,7 @@ func TestSpawnVariableAggregation(t *testing.T) {
 func TestWispFilteringFromExport(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1115,7 +1115,7 @@ func TestWispFilteringFromExport(t *testing.T) {
 func TestGetMoleculeProgress(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1216,7 +1216,7 @@ func TestGetMoleculeProgress(t *testing.T) {
 func TestFindParentMolecule(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1313,7 +1313,7 @@ func TestFindParentMolecule(t *testing.T) {
 func TestFindParentMoleculesBatch(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1415,7 +1415,7 @@ func TestFindParentMoleculesBatch(t *testing.T) {
 func TestFindParentMolecule_RootShapes(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1490,7 +1490,7 @@ func TestFindParentMolecule_RootShapes(t *testing.T) {
 func TestAdvanceToNextStep_PouredMolecule(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1573,7 +1573,7 @@ func TestAdvanceToNextStep_PouredMolecule(t *testing.T) {
 func TestFindHookedMolecules(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1656,7 +1656,7 @@ func TestFindHookedMolecules(t *testing.T) {
 func TestAdvanceToNextStep(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1758,7 +1758,7 @@ func TestAdvanceToNextStep(t *testing.T) {
 func TestAdvanceToNextStepMoleculeComplete(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1816,7 +1816,7 @@ func TestAdvanceToNextStepMoleculeComplete(t *testing.T) {
 func TestAdvanceToNextStepOrphanIssue(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1852,7 +1852,7 @@ func TestAdvanceToNextStepOrphanIssue(t *testing.T) {
 func TestAdvanceToNextStepConcurrentClaim(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -1956,7 +1956,7 @@ func TestAdvanceToNextStepConcurrentClaim(t *testing.T) {
 func TestAdvanceToNextStepAllClaimed(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2040,7 +2040,7 @@ func TestAdvanceToNextStepAllClaimed(t *testing.T) {
 func TestBondProtoMolWithRef(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2130,7 +2130,7 @@ func TestBondProtoMolWithRef(t *testing.T) {
 func TestBondProtoMolMultipleArms(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2210,7 +2210,7 @@ func TestBondProtoMolMultipleArms(t *testing.T) {
 func TestSpawnMoleculeEphemeralFlag(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2286,7 +2286,7 @@ func TestSpawnMoleculeEphemeralFlag(t *testing.T) {
 func TestSpawnMoleculeFromFormulaEphemeral(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2374,7 +2374,7 @@ func TestSpawnMoleculeFromFormulaEphemeral(t *testing.T) {
 func TestSpawnMolecule_PreservesStepMetadata(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2439,7 +2439,7 @@ func TestSpawnMolecule_PreservesStepMetadata(t *testing.T) {
 func TestPourRootTitleDescSubstitution(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2529,7 +2529,7 @@ func TestPourRootTitleDescSubstitution(t *testing.T) {
 func TestPourRootTitleOnly(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
@@ -2584,7 +2584,7 @@ func TestPourRootTitleOnly(t *testing.T) {
 func TestPourRootNoVars(t *testing.T) {
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/test.db"
-	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath})
+	s, err := dolt.New(ctx, &dolt.Config{Path: dbPath, CreateIfMissing: true})
 	if err != nil {
 		testutil.SkipOrFailUnavailable(t, "skipping: Dolt server not available: %v", err)
 	}
