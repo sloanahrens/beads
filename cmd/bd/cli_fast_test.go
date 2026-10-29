@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -231,7 +230,7 @@ func TestCLI_Create(t *testing.T) {
 	jsonOut := out[jsonStart:]
 
 	var result map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonOut), &result); err != nil {
+	if err := unmarshalEnvelope([]byte(jsonOut), &result); err != nil {
 		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, jsonOut)
 	}
 	if result["title"] != "Test issue" {
@@ -262,7 +261,7 @@ func TestCLI_CreateActorPrecedence(t *testing.T) {
 	jsonOut := out[jsonStart:]
 
 	var result map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonOut), &result); err != nil {
+	if err := unmarshalEnvelope([]byte(jsonOut), &result); err != nil {
 		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, jsonOut)
 	}
 	if result["created_by"] != "from-beads-actor" {
@@ -278,7 +277,7 @@ func TestCLI_List(t *testing.T) {
 
 	out := runBDInProcess(t, tmpDir, "list", "--json")
 	var issues []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issues); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &issues); err != nil {
 		t.Fatalf("Failed to parse JSON: %v", err)
 	}
 	if len(issues) != 2 {
@@ -292,14 +291,14 @@ func TestCLI_Update(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Issue to update", "-p", "1", "--json")
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	runBDInProcess(t, tmpDir, "update", id, "--status", "in_progress")
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	if updated[0]["status"] != "in_progress" {
 		t.Errorf("Expected status 'in_progress', got: %v", updated[0]["status"])
 	}
@@ -317,7 +316,7 @@ func TestCLI_UpdateAcceptanceSyncsDescriptionSection(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Spec-shaped bead", "--description", description, "--json")
 
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &issue); err != nil {
 		t.Fatalf("Failed to parse create output: %v", err)
 	}
 	id := issue["id"].(string)
@@ -326,7 +325,7 @@ func TestCLI_UpdateAcceptanceSyncsDescriptionSection(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &updated); err != nil {
 		t.Fatalf("Failed to parse show output: %v", err)
 	}
 	if got := updated[0]["acceptance_criteria"]; got != "- [x] make check pass" {
@@ -348,7 +347,7 @@ func TestCLI_UpdateAcceptanceRefusesAmbiguousDescription(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Two acceptance sections", "--description", description, "--json")
 
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &issue); err != nil {
 		t.Fatalf("Failed to parse create output: %v", err)
 	}
 	id := issue["id"].(string)
@@ -360,7 +359,7 @@ func TestCLI_UpdateAcceptanceRefusesAmbiguousDescription(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &updated); err != nil {
 		t.Fatalf("Failed to parse show output: %v", err)
 	}
 	if got, ok := updated[0]["acceptance_criteria"]; ok {
@@ -409,7 +408,7 @@ func TestCLI_CreateAcceptanceSyncsDescriptionSection(t *testing.T) {
 		"--description", description, "--acceptance", "- [x] make check pass", "--json")
 
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &issue); err != nil {
 		t.Fatalf("Failed to parse create output: %v", err)
 	}
 	if got := issue["acceptance_criteria"]; got != "- [x] make check pass" {
@@ -437,7 +436,7 @@ func TestCLI_CreateWithoutAcceptanceLeavesDescriptionAlone(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Dispatcher-shaped bead", "--description", description, "--json")
 
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &issue); err != nil {
 		t.Fatalf("Failed to parse create output: %v", err)
 	}
 	if got, _ := issue["description"].(string); got != description {
@@ -481,7 +480,7 @@ func TestCLI_UpdateLabels(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Issue for label testing", "-p", "2", "--json")
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	// Test adding labels
@@ -489,7 +488,7 @@ func TestCLI_UpdateLabels(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	labels := updated[0]["labels"].([]interface{})
 	if len(labels) != 2 {
 		t.Errorf("Expected 2 labels after add, got: %d", len(labels))
@@ -511,7 +510,7 @@ func TestCLI_UpdateLabels(t *testing.T) {
 	runBDInProcess(t, tmpDir, "update", id, "--remove-label", "backend")
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	labels = updated[0]["labels"].([]interface{})
 	if len(labels) != 1 {
 		t.Errorf("Expected 1 label after remove, got: %d", len(labels))
@@ -524,7 +523,7 @@ func TestCLI_UpdateLabels(t *testing.T) {
 	runBDInProcess(t, tmpDir, "update", id, "--set-labels", "api,database,critical")
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	labels = updated[0]["labels"].([]interface{})
 	if len(labels) != 3 {
 		t.Errorf("Expected 3 labels after set, got: %d", len(labels))
@@ -543,7 +542,7 @@ func TestCLI_UpdateEphemeral(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Issue for ephemeral testing", "-p", "2", "--json")
 
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &issue); err != nil {
 		t.Fatalf("Failed to parse create output: %v", err)
 	}
 	id := issue["id"].(string)
@@ -553,7 +552,7 @@ func TestCLI_UpdateEphemeral(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &updated); err != nil {
 		t.Fatalf("Failed to parse show output: %v", err)
 	}
 	if updated[0]["ephemeral"] != true {
@@ -569,7 +568,7 @@ func TestCLI_UpdatePersistent(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Ephemeral issue", "-p", "2", "--ephemeral", "--json")
 
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &issue); err != nil {
 		t.Fatalf("Failed to parse create output: %v", err)
 	}
 	id := issue["id"].(string)
@@ -577,7 +576,7 @@ func TestCLI_UpdatePersistent(t *testing.T) {
 	// Verify it's ephemeral
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var initial []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &initial); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &initial); err != nil {
 		t.Fatalf("Failed to parse show output: %v", err)
 	}
 	if initial[0]["ephemeral"] != true {
@@ -589,7 +588,7 @@ func TestCLI_UpdatePersistent(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &updated); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &updated); err != nil {
 		t.Fatalf("Failed to parse show output after persistent: %v", err)
 	}
 	if updated[0]["ephemeral"] == true {
@@ -603,7 +602,7 @@ func TestCLI_UpdateEphemeralMutualExclusion(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Issue for mutual exclusion test", "-p", "2", "--json")
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	// Both flags should error
@@ -621,7 +620,7 @@ func TestCLI_UpdateAppendNotes(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Issue for append-notes test", "-p", "2", "--notes", "Original notes", "--json")
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	// Test appending notes
@@ -629,7 +628,7 @@ func TestCLI_UpdateAppendNotes(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	notes := updated[0]["notes"].(string)
 	if notes != "Original notes\nAppended content" {
 		t.Errorf("Expected 'Original notes\\nAppended content', got: %q", notes)
@@ -637,13 +636,13 @@ func TestCLI_UpdateAppendNotes(t *testing.T) {
 
 	// Test appending to empty notes
 	out = runBDInProcess(t, tmpDir, "create", "Issue with empty notes", "-p", "2", "--json")
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id2 := issue["id"].(string)
 
 	runBDInProcess(t, tmpDir, "update", id2, "--append-notes", "First note")
 
 	out = runBDInProcess(t, tmpDir, "show", id2, "--json")
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	notes = updated[0]["notes"].(string)
 	if notes != "First note" {
 		t.Errorf("Expected 'First note', got: %q", notes)
@@ -655,7 +654,7 @@ func TestCLI_UpdateAppendNotesMutualExclusion(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Issue for notes mutual exclusion", "-p", "2", "--json")
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	// Both --notes and --append-notes should error
@@ -674,14 +673,14 @@ func TestCLI_NoteCommand(t *testing.T) {
 	// Create an issue with initial notes
 	out := runBDInProcess(t, tmpDir, "create", "Issue for note test", "-p", "2", "--notes", "Original notes", "--json")
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	// Test: bd note <id> <text> appends to existing notes
 	runBDInProcess(t, tmpDir, "note", id, "Added via note command")
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	notes := updated[0]["notes"].(string)
 	if notes != "Original notes\nAdded via note command" {
 		t.Errorf("Expected 'Original notes\\nAdded via note command', got: %q", notes)
@@ -690,7 +689,7 @@ func TestCLI_NoteCommand(t *testing.T) {
 	// Test: bd note <id> with multiple words joins them
 	runBDInProcess(t, tmpDir, "note", id, "second", "note", "here")
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	notes = updated[0]["notes"].(string)
 	if notes != "Original notes\nAdded via note command\nsecond note here" {
 		t.Errorf("Expected three lines, got: %q", notes)
@@ -698,12 +697,12 @@ func TestCLI_NoteCommand(t *testing.T) {
 
 	// Test: bd note on issue with no existing notes
 	out = runBDInProcess(t, tmpDir, "create", "Issue with no notes", "-p", "2", "--json")
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id2 := issue["id"].(string)
 
 	runBDInProcess(t, tmpDir, "note", id2, "First note ever")
 	out = runBDInProcess(t, tmpDir, "show", id2, "--json")
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	notes = updated[0]["notes"].(string)
 	if notes != "First note ever" {
 		t.Errorf("Expected 'First note ever', got: %q", notes)
@@ -737,7 +736,7 @@ func TestCLI_NoteListMisplacedSyntax(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("Failed to parse create JSON: %v\nOutput: %s", err, out)
 	}
 	fullID := issue["id"].(string)
@@ -749,7 +748,7 @@ func TestCLI_NoteListMisplacedSyntax(t *testing.T) {
 	// command wrote nothing (GH#5370 review fix-round).
 	beforeShow := runBDInProcess(t, tmpDir, "show", fullID, "--json")
 	var beforeShown []map[string]interface{}
-	if err := json.Unmarshal([]byte(beforeShow), &beforeShown); err != nil {
+	if err := unmarshalEnvelope([]byte(beforeShow), &beforeShown); err != nil {
 		t.Fatalf("Failed to parse pre-reject show JSON: %v\nOutput: %s", err, beforeShow)
 	}
 	if len(beforeShown) == 0 {
@@ -771,7 +770,7 @@ func TestCLI_NoteListMisplacedSyntax(t *testing.T) {
 	// bead's id happened to contain "list" as a substring.
 	showOut := runBDInProcess(t, tmpDir, "show", fullID, "--json")
 	var shown []map[string]interface{}
-	if err := json.Unmarshal([]byte(showOut), &shown); err != nil {
+	if err := unmarshalEnvelope([]byte(showOut), &shown); err != nil {
 		t.Fatalf("Failed to parse show JSON: %v\nOutput: %s", err, showOut)
 	}
 	if len(shown) == 0 {
@@ -796,7 +795,7 @@ func TestCLI_NoteAddMisplacedSyntax(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("Failed to parse create JSON: %v\nOutput: %s", err, out)
 	}
 	fullID := issue["id"].(string)
@@ -805,7 +804,7 @@ func TestCLI_NoteAddMisplacedSyntax(t *testing.T) {
 	// rationale as TestCLI_NoteListMisplacedSyntax).
 	beforeShow := runBDInProcess(t, tmpDir, "show", fullID, "--json")
 	var beforeShown []map[string]interface{}
-	if err := json.Unmarshal([]byte(beforeShow), &beforeShown); err != nil {
+	if err := unmarshalEnvelope([]byte(beforeShow), &beforeShown); err != nil {
 		t.Fatalf("Failed to parse pre-reject show JSON: %v\nOutput: %s", err, beforeShow)
 	}
 	if len(beforeShown) == 0 {
@@ -824,7 +823,7 @@ func TestCLI_NoteAddMisplacedSyntax(t *testing.T) {
 
 	showOut := runBDInProcess(t, tmpDir, "show", fullID, "--json")
 	var shown []map[string]interface{}
-	if err := json.Unmarshal([]byte(showOut), &shown); err != nil {
+	if err := unmarshalEnvelope([]byte(showOut), &shown); err != nil {
 		t.Fatalf("Failed to parse show JSON: %v\nOutput: %s", err, showOut)
 	}
 	if len(shown) == 0 {
@@ -875,7 +874,7 @@ func TestCLI_NoteTextStartingWithReservedWordStillWorks(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("Failed to parse create JSON: %v\nOutput: %s", err, out)
 	}
 	fullID := issue["id"].(string)
@@ -900,14 +899,14 @@ func TestCLI_Close(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Issue to close", "-p", "1", "--json")
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	runBDInProcess(t, tmpDir, "close", id, "--reason", "Done")
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var closed []map[string]interface{}
-	json.Unmarshal([]byte(out), &closed)
+	unmarshalEnvelope([]byte(out), &closed)
 	if closed[0]["status"] != "closed" {
 		t.Errorf("Expected status 'closed', got: %v", closed[0]["status"])
 	}
@@ -924,8 +923,8 @@ func TestCLI_DepAdd(t *testing.T) {
 	out2 := runBDInProcess(t, tmpDir, "create", "Second", "-p", "1", "--json")
 
 	var issue1, issue2 map[string]interface{}
-	json.Unmarshal([]byte(out1), &issue1)
-	json.Unmarshal([]byte(out2), &issue2)
+	unmarshalEnvelope([]byte(out1), &issue1)
+	unmarshalEnvelope([]byte(out2), &issue2)
 
 	id1 := issue1["id"].(string)
 	id2 := issue2["id"].(string)
@@ -950,8 +949,8 @@ func TestCLI_DepAdd_TypeBlockedByAliasGates(t *testing.T) {
 	out2 := runBDInProcess(t, tmpDir, "create", "Blocked", "-p", "1", "--json")
 
 	var issue1, issue2 map[string]interface{}
-	json.Unmarshal([]byte(out1), &issue1)
-	json.Unmarshal([]byte(out2), &issue2)
+	unmarshalEnvelope([]byte(out1), &issue1)
+	unmarshalEnvelope([]byte(out2), &issue2)
 
 	blockerID := issue1["id"].(string)
 	blockedID := issue2["id"].(string)
@@ -987,8 +986,8 @@ func TestCLI_Show_SupersedesIsNotABlocker(t *testing.T) {
 	outNew := runBDInProcess(t, tmpDir, "create", "V2 spec", "-p", "1", "--json")
 
 	var oldIssue, newIssue map[string]interface{}
-	json.Unmarshal([]byte(outOld), &oldIssue)
-	json.Unmarshal([]byte(outNew), &newIssue)
+	unmarshalEnvelope([]byte(outOld), &oldIssue)
+	unmarshalEnvelope([]byte(outNew), &newIssue)
 
 	oldID := oldIssue["id"].(string)
 	newID := newIssue["id"].(string)
@@ -1022,8 +1021,8 @@ func TestCLI_DepRemove(t *testing.T) {
 	out2 := runBDInProcess(t, tmpDir, "create", "Second", "-p", "1", "--json")
 
 	var issue1, issue2 map[string]interface{}
-	json.Unmarshal([]byte(out1), &issue1)
-	json.Unmarshal([]byte(out2), &issue2)
+	unmarshalEnvelope([]byte(out1), &issue1)
+	unmarshalEnvelope([]byte(out2), &issue2)
 
 	id1 := issue1["id"].(string)
 	id2 := issue2["id"].(string)
@@ -1043,8 +1042,8 @@ func TestCLI_DepTree(t *testing.T) {
 	out2 := runBDInProcess(t, tmpDir, "create", "Child", "-p", "1", "--json")
 
 	var issue1, issue2 map[string]interface{}
-	json.Unmarshal([]byte(out1), &issue1)
-	json.Unmarshal([]byte(out2), &issue2)
+	unmarshalEnvelope([]byte(out1), &issue1)
+	unmarshalEnvelope([]byte(out2), &issue2)
 
 	id1 := issue1["id"].(string)
 	id2 := issue2["id"].(string)
@@ -1064,8 +1063,8 @@ func TestCLI_Blocked(t *testing.T) {
 	out2 := runBDInProcess(t, tmpDir, "create", "Blocked", "-p", "1", "--json")
 
 	var issue1, issue2 map[string]interface{}
-	json.Unmarshal([]byte(out1), &issue1)
-	json.Unmarshal([]byte(out2), &issue2)
+	unmarshalEnvelope([]byte(out1), &issue1)
+	unmarshalEnvelope([]byte(out2), &issue2)
 
 	id1 := issue1["id"].(string)
 	id2 := issue2["id"].(string)
@@ -1095,7 +1094,7 @@ func TestCLI_Show(t *testing.T) {
 	out := runBDInProcess(t, tmpDir, "create", "Show test", "-p", "1", "--json")
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(out), &issue)
+	unmarshalEnvelope([]byte(out), &issue)
 	id := issue["id"].(string)
 
 	out = runBDInProcess(t, tmpDir, "show", id)
@@ -1132,7 +1131,7 @@ func TestCLI_Import(t *testing.T) {
 
 	out := runBDInProcess(t, tmpDir2, "list", "--json")
 	var issues []map[string]interface{}
-	json.Unmarshal([]byte(out), &issues)
+	unmarshalEnvelope([]byte(out), &issues)
 	if len(issues) != 1 {
 		t.Errorf("Expected 1 imported issue, got %d", len(issues))
 	}
@@ -1223,7 +1222,7 @@ func TestCLI_EndToEnd(t *testing.T) {
 	out := runBDExec(t, tmpDir, "create", "E2E test", "-p", "1", "--json")
 	var issue map[string]interface{}
 	jsonStart := strings.Index(out, "{")
-	json.Unmarshal([]byte(out[jsonStart:]), &issue)
+	unmarshalEnvelope([]byte(out[jsonStart:]), &issue)
 	id := issue["id"].(string)
 
 	runBDExec(t, tmpDir, "update", id, "--status", "in_progress")
@@ -1231,7 +1230,7 @@ func TestCLI_EndToEnd(t *testing.T) {
 
 	out = runBDExec(t, tmpDir, "show", id, "--json")
 	var closed []map[string]interface{}
-	json.Unmarshal([]byte(out), &closed)
+	unmarshalEnvelope([]byte(out), &closed)
 
 	if closed[0]["status"] != "closed" {
 		t.Errorf("Expected status 'closed', got: %v", closed[0]["status"])
@@ -1255,7 +1254,7 @@ func TestCLI_Labels(t *testing.T) {
 	jsonOut := out[jsonStart:]
 
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(jsonOut), &issue)
+	unmarshalEnvelope([]byte(jsonOut), &issue)
 	id := issue["id"].(string)
 
 	// Add label
@@ -1284,7 +1283,7 @@ func TestCLI_PriorityFormats(t *testing.T) {
 	jsonStart := strings.Index(out, "{")
 	jsonOut := out[jsonStart:]
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(jsonOut), &issue)
+	unmarshalEnvelope([]byte(jsonOut), &issue)
 	if issue["priority"].(float64) != 0 {
 		t.Errorf("Expected priority 0, got: %v", issue["priority"])
 	}
@@ -1293,7 +1292,7 @@ func TestCLI_PriorityFormats(t *testing.T) {
 	out = runBDInProcess(t, tmpDir, "create", "Test P3", "-p", "P3", "--json")
 	jsonStart = strings.Index(out, "{")
 	jsonOut = out[jsonStart:]
-	json.Unmarshal([]byte(jsonOut), &issue)
+	unmarshalEnvelope([]byte(jsonOut), &issue)
 	if issue["priority"].(float64) != 3 {
 		t.Errorf("Expected priority 3, got: %v", issue["priority"])
 	}
@@ -1304,7 +1303,7 @@ func TestCLI_PriorityFormats(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var updated []map[string]interface{}
-	json.Unmarshal([]byte(out), &updated)
+	unmarshalEnvelope([]byte(out), &updated)
 	if updated[0]["priority"].(float64) != 1 {
 		t.Errorf("Expected priority 1 after update, got: %v", updated[0]["priority"])
 	}
@@ -1318,7 +1317,7 @@ func TestCLI_Reopen(t *testing.T) {
 	jsonStart := strings.Index(out, "{")
 	jsonOut := out[jsonStart:]
 	var issue map[string]interface{}
-	json.Unmarshal([]byte(jsonOut), &issue)
+	unmarshalEnvelope([]byte(jsonOut), &issue)
 	id := issue["id"].(string)
 
 	// Close it
@@ -1329,7 +1328,7 @@ func TestCLI_Reopen(t *testing.T) {
 
 	out = runBDInProcess(t, tmpDir, "show", id, "--json")
 	var reopened []map[string]interface{}
-	json.Unmarshal([]byte(out), &reopened)
+	unmarshalEnvelope([]byte(out), &reopened)
 	if reopened[0]["status"] != "open" {
 		t.Errorf("Expected status 'open', got: %v", reopened[0]["status"])
 	}
@@ -1420,7 +1419,7 @@ func TestCLI_CreateDryRun(t *testing.T) {
 		// Verify no issue was actually created
 		listOut := runBDInProcess(t, tmpDir, "list", "--json")
 		var issues []map[string]interface{}
-		json.Unmarshal([]byte(listOut), &issues)
+		unmarshalEnvelope([]byte(listOut), &issues)
 		if len(issues) != 0 {
 			t.Errorf("Expected 0 issues after dry-run, got %d", len(issues))
 		}
@@ -1440,7 +1439,7 @@ func TestCLI_CreateDryRun(t *testing.T) {
 		jsonOut := out[jsonStart:]
 
 		var issue map[string]interface{}
-		if err := json.Unmarshal([]byte(jsonOut), &issue); err != nil {
+		if err := unmarshalEnvelope([]byte(jsonOut), &issue); err != nil {
 			t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, jsonOut)
 		}
 
@@ -1467,7 +1466,7 @@ func TestCLI_CreateDryRun(t *testing.T) {
 		// Verify no issue was actually created
 		listOut := runBDInProcess(t, tmpDir, "list", "--json")
 		var issues []map[string]interface{}
-		json.Unmarshal([]byte(listOut), &issues)
+		unmarshalEnvelope([]byte(listOut), &issues)
 		if len(issues) != 0 {
 			t.Errorf("Expected 0 issues after dry-run, got %d", len(issues))
 		}
@@ -1652,7 +1651,7 @@ func TestCLI_CommentsAddShortID(t *testing.T) {
 		jsonOut := out[jsonStart:]
 
 		var issue map[string]interface{}
-		if err := json.Unmarshal([]byte(jsonOut), &issue); err != nil {
+		if err := unmarshalEnvelope([]byte(jsonOut), &issue); err != nil {
 			t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, jsonOut)
 		}
 
@@ -1699,7 +1698,7 @@ func TestCLI_CommentsAddShortID(t *testing.T) {
 		jsonOut := out[jsonStart:]
 
 		var issue map[string]interface{}
-		json.Unmarshal([]byte(jsonOut), &issue)
+		unmarshalEnvelope([]byte(jsonOut), &issue)
 		fullID := issue["id"].(string)
 
 		// Extract short ID and use only first 4 characters (partial match)
@@ -1731,7 +1730,7 @@ func TestCLI_CommentsAddShortID(t *testing.T) {
 		jsonOut := out[jsonStart:]
 
 		var issue map[string]interface{}
-		json.Unmarshal([]byte(jsonOut), &issue)
+		unmarshalEnvelope([]byte(jsonOut), &issue)
 		fullID := issue["id"].(string)
 
 		// Extract short ID
@@ -1773,7 +1772,7 @@ func TestCLI_CommentListMisplacedSyntax(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("Failed to parse create JSON: %v\nOutput: %s", err, out)
 	}
 	fullID := issue["id"].(string)
@@ -1814,7 +1813,7 @@ func TestCLI_CommentAddMisplacedSyntax(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("Failed to parse create JSON: %v\nOutput: %s", err, out)
 	}
 	fullID := issue["id"].(string)
@@ -1876,7 +1875,7 @@ func TestCLI_CommentTextStartingWithReservedWordStillWorks(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("Failed to parse create JSON: %v\nOutput: %s", err, out)
 	}
 	fullID := issue["id"].(string)
@@ -1988,7 +1987,7 @@ func TestCLI_CreateNoHistory(t *testing.T) {
 		out := runBDInProcess(t, tmpDir, "create", "No-history agent bead", "-p", "2", "--no-history", "--json")
 
 		var result map[string]interface{}
-		if err := json.Unmarshal([]byte(out), &result); err != nil {
+		if err := unmarshalEnvelope([]byte(out), &result); err != nil {
 			t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, out)
 		}
 		if result["no_history"] != true {
@@ -2005,14 +2004,14 @@ func TestCLI_CreateNoHistory(t *testing.T) {
 		out := runBDInProcess(t, tmpDir, "create", "No-history bead for show test", "-p", "2", "--no-history", "--json")
 
 		var created map[string]interface{}
-		if err := json.Unmarshal([]byte(out), &created); err != nil {
+		if err := unmarshalEnvelope([]byte(out), &created); err != nil {
 			t.Fatalf("Failed to parse create output: %v\nOutput: %s", err, out)
 		}
 		id := created["id"].(string)
 
 		showOut := runBDInProcess(t, tmpDir, "show", id, "--json")
 		var issues []map[string]interface{}
-		if err := json.Unmarshal([]byte(showOut), &issues); err != nil {
+		if err := unmarshalEnvelope([]byte(showOut), &issues); err != nil {
 			t.Fatalf("Failed to parse show output: %v\nOutput: %s", err, showOut)
 		}
 		if len(issues) == 0 {
@@ -2047,7 +2046,7 @@ func TestCLI_WispListTypeFilter(t *testing.T) {
 	// --type bug should return only the bug wisp
 	out := runBDInProcess(t, tmpDir, "mol", "wisp", "list", "--type", "bug", "--json")
 	var result map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &result); err != nil {
 		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, out)
 	}
 	wisps, ok := result["wisps"].([]interface{})
@@ -2066,7 +2065,7 @@ func TestCLI_WispListTypeFilter(t *testing.T) {
 
 	// --type task should return only the task wisp
 	out = runBDInProcess(t, tmpDir, "mol", "wisp", "list", "--type", "task", "--json")
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &result); err != nil {
 		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, out)
 	}
 	wisps, ok = result["wisps"].([]interface{})
@@ -2085,7 +2084,7 @@ func TestCLI_WispListTypeFilter(t *testing.T) {
 
 	// No --type filter returns both
 	out = runBDInProcess(t, tmpDir, "mol", "wisp", "list", "--json")
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &result); err != nil {
 		t.Fatalf("Failed to parse JSON: %v\nOutput: %s", err, out)
 	}
 	wisps = result["wisps"].([]interface{})
@@ -2107,10 +2106,10 @@ func TestCLI_WispGCExcludeType(t *testing.T) {
 	taskOut := runBDInProcess(t, tmpDir, "create", "Task wisp to gc", "--ephemeral", "--type", "task", "-p", "2", "--json")
 
 	var bugCreated, taskCreated map[string]interface{}
-	if err := json.Unmarshal([]byte(bugOut), &bugCreated); err != nil {
+	if err := unmarshalEnvelope([]byte(bugOut), &bugCreated); err != nil {
 		t.Fatalf("Failed to parse bug create output: %v\nOutput: %s", err, bugOut)
 	}
-	if err := json.Unmarshal([]byte(taskOut), &taskCreated); err != nil {
+	if err := unmarshalEnvelope([]byte(taskOut), &taskCreated); err != nil {
 		t.Fatalf("Failed to parse task create output: %v\nOutput: %s", err, taskOut)
 	}
 	bugID := bugCreated["id"].(string)
@@ -2120,7 +2119,7 @@ func TestCLI_WispGCExcludeType(t *testing.T) {
 	// The WispGCResult dry-run JSON uses cleaned_ids to list what would be deleted.
 	gcOut := runBDInProcess(t, tmpDir, "mol", "wisp", "gc", "--exclude-type", "bug", "--age", "0s", "--dry-run", "--json")
 	var gcResult map[string]interface{}
-	if err := json.Unmarshal([]byte(gcOut), &gcResult); err != nil {
+	if err := unmarshalEnvelope([]byte(gcOut), &gcResult); err != nil {
 		t.Fatalf("Failed to parse gc JSON: %v\nOutput: %s", err, gcOut)
 	}
 
