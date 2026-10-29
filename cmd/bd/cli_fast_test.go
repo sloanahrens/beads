@@ -4,7 +4,8 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/storage/dolt"
@@ -38,9 +40,9 @@ var (
 // In server mode the data lives on the shared Dolt server under the database
 // name in metadata.json, so a workspace initialized once and then reused points
 // every test at the same database and tests see each other's issues. Each call
-// therefore initializes a new workspace against a database named for the
-// calling test (uniqueCLITestDatabaseName) and drops that database in cleanup,
-// so each test starts from and leaves an empty database.
+// therefore initializes a new workspace against a database whose name carries a
+// fresh random suffix (newCLITestDatabaseName), and drops exactly that database
+// in cleanup, so each test starts from and leaves an empty database of its own.
 //
 // The workspace is initialized instead of copied from a template because bd
 // init refuses a workspace that already holds a database (checkExistingBeadsData
@@ -51,28 +53,26 @@ func setupCLITestDB(t *testing.T) string {
 	return setupCLITestDBFor(t, t.Name())
 }
 
-// setupCLITestDBFor is setupCLITestDB with the database keyed by name instead
-// of the test name, for a test that needs more than one isolated workspace. The
-// name must be unique among a test's calls: same name means same database.
+// setupCLITestDBFor is setupCLITestDB with the database named for name instead
+// of the test name, for a test that needs more than one isolated workspace. Two
+// calls never share a database, even with the same name.
 func setupCLITestDBFor(t *testing.T, name string) string {
 	t.Helper()
 	if testDoltServerPort == 0 {
 		t.Skip("skipping: Dolt test container not available")
 	}
-	dbName := uniqueCLITestDatabaseName(name)
-	// The name is derived from the test alone, so a run that died before its
-	// cleanup leaves this database behind. Drop it first so a rerun (or
-	// -count=2) starts from an empty database instead of inheriting issues.
-	if err := dropTestDatabase(dbName, testDoltServerPort); err != nil {
-		t.Fatalf("Failed to clear leftover test database %s: %v", dbName, err)
-	}
+	dbName := newCLITestDatabaseName(t, name)
+	tmpDir := createTempDirWithCleanup(t)
+	initCLITestDatabase(t, tmpDir, dbName)
+	// Registered only after init succeeds, so the drop names a database this
+	// call created. If init reported that the name already existed, the test
+	// stops before this line and nothing is dropped. A database init left
+	// half-built is swept by the cliTestDatabaseNamePrefix sweep.
 	t.Cleanup(func() {
-		if err := dropTestDatabase(dbName, testDoltServerPort); err != nil {
+		if err := dropDatabaseOnServer(dbName, testDoltServerPort, false); err != nil {
 			t.Errorf("Failed to drop test database %s: %v", dbName, err)
 		}
 	})
-	tmpDir := createTempDirWithCleanup(t)
-	initCLITestDatabase(t, tmpDir, dbName)
 	return tmpDir
 }
 
@@ -86,15 +86,32 @@ const (
 	// caller opts in with --allow-new-database, and bd dolt clean-databases
 	// sweeps leftovers by this prefix.
 	cliTestDatabaseNamePrefix = "testdb_clitest_"
+	// cliTestDatabaseSuffixBytes is the random part of a database name. Eight
+	// bytes is 16 hex digits: 64 bits, so runs sharing one server do not collide.
+	cliTestDatabaseSuffixBytes = 8
+	// cliTestInitTimeout bounds one bd init subprocess, so a hung server fails
+	// the test instead of stalling the whole run.
+	cliTestInitTimeout = 2 * time.Minute
 )
 
-// uniqueCLITestDatabaseName returns the Dolt database name for one CLI test.
-// The name is valid for dolt.ValidateDatabaseName, is the same for the same
-// input, and differs between inputs. A short hash of the full input keeps two
-// inputs that sanitize to the same text from sharing a database.
-func uniqueCLITestDatabaseName(testName string) string {
-	sum := sha256.Sum256([]byte(testName))
-	suffix := hex.EncodeToString(sum[:6])
+// newCLITestDatabaseName returns a database name for one setupCLITestDB call.
+// The suffix comes from crypto/rand, so no two calls share a name, including
+// two calls for the same test and calls from concurrent runs on one server.
+func newCLITestDatabaseName(t *testing.T, testName string) string {
+	t.Helper()
+	raw := make([]byte, cliTestDatabaseSuffixBytes)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("Failed to generate a test database suffix: %v", err)
+	}
+	return cliTestDatabaseName(testName, hex.EncodeToString(raw))
+}
+
+// cliTestDatabaseName builds a database name from a test name and a suffix. The
+// result is valid for dolt.ValidateDatabaseName and is in the test-database
+// namespace. The same inputs give the same name; a different suffix gives a
+// different name even for the same test. A test name too long for the limit is
+// cut, so two long names that share a prefix need different suffixes to differ.
+func cliTestDatabaseName(testName, suffix string) string {
 	readable := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			return r
@@ -118,7 +135,9 @@ func uniqueCLITestDatabaseName(testName string) string {
 // (init_realstore_integration_test.go).
 func initCLITestDatabase(t *testing.T, dir, dbName string) {
 	t.Helper()
-	cmd := exec.Command(testBD, "init",
+	ctx, cancel := context.WithTimeout(context.Background(), cliTestInitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, testBD, "init",
 		"--server", "--external",
 		"--server-host", "127.0.0.1",
 		"--server-port", strconv.Itoa(testDoltServerPort),
@@ -126,32 +145,41 @@ func initCLITestDatabase(t *testing.T, dir, dbName string) {
 		"--prefix", "test", "--quiet", "--skip-hooks", "--skip-agents")
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("bd init for database %s did not finish within %v\n%s", dbName, cliTestInitTimeout, out)
+	}
+	if err != nil {
 		t.Fatalf("bd init for database %s failed: %v\n%s", dbName, err, out)
 	}
 }
 
 // TestUniqueCLITestDatabaseName checks the name rules without a Dolt server:
-// each name is valid for the server, the same test name gives the same name,
-// and different test names give different names.
+// every name is valid for the server and in the test namespace, the same test
+// name and suffix give the same name, and a different test name or a different
+// suffix gives a different one.
 func TestUniqueCLITestDatabaseName(t *testing.T) {
+	const suffixA = "0123456789abcdef"
+	const suffixB = "fedcba9876543210"
+	long := strings.Repeat("TestVeryLongName", 10)
 	tests := []struct {
-		name      string
-		a, b      string
-		wantEqual bool
+		name             string
+		a, b             string
+		suffixA, suffixB string
+		wantEqual        bool
 	}{
-		{"different test names differ", "TestCLI_List", "TestCLI_Create", false},
-		{"same test name matches", "TestCLI_List", "TestCLI_List", true},
-		{"names that sanitize alike differ", "TestA/b", "TestA_b", false},
-		{"long names stay valid and differ", strings.Repeat("TestVeryLongName", 10), strings.Repeat("TestVeryLongName", 10) + "x", false},
+		{"different test names differ", "TestCLI_List", "TestCLI_Create", suffixA, suffixA, false},
+		{"same test name and suffix match", "TestCLI_List", "TestCLI_List", suffixA, suffixA, true},
+		{"same test name with a new suffix differs", "TestCLI_List", "TestCLI_List", suffixA, suffixB, false},
+		{"long names differ by suffix", long, long, suffixA, suffixB, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotA := uniqueCLITestDatabaseName(tc.a)
-			gotB := uniqueCLITestDatabaseName(tc.b)
+			gotA := cliTestDatabaseName(tc.a, tc.suffixA)
+			gotB := cliTestDatabaseName(tc.b, tc.suffixB)
 			if (gotA == gotB) != tc.wantEqual {
-				t.Fatalf("uniqueCLITestDatabaseName(%q) = %q, uniqueCLITestDatabaseName(%q) = %q; equal = %v, want %v",
-					tc.a, gotA, tc.b, gotB, gotA == gotB, tc.wantEqual)
+				t.Fatalf("cliTestDatabaseName(%q, %q) = %q, cliTestDatabaseName(%q, %q) = %q; equal = %v, want %v",
+					tc.a, tc.suffixA, gotA, tc.b, tc.suffixB, gotB, gotA == gotB, tc.wantEqual)
 			}
 			for _, got := range []string{gotA, gotB} {
 				if err := dolt.ValidateDatabaseName(got); err != nil {

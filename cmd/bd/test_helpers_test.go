@@ -408,6 +408,14 @@ func tryNewTestStoreWithReadTimeout(t *testing.T, dbPath string, readTimeout tim
 // best-effort in every case: it only reclaims disk space and does not affect
 // whether the database was dropped.
 func dropTestDatabase(dbName string, port int) error {
+	return dropDatabaseOnServer(dbName, port, true)
+}
+
+// dropDatabaseOnServer drops dbName from the shared server and returns the
+// error from the DROP. purge also empties Dolt's trash directory, best-effort,
+// which is server-wide: a caller that owns one database and must not touch
+// others passes purge false.
+func dropDatabaseOnServer(dbName string, port int, purge bool) error {
 	dsn := doltutil.ServerDSN{Host: "127.0.0.1", Port: port, User: "root"}.String()
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -416,12 +424,14 @@ func dropTestDatabase(dbName string, port int) error {
 	defer db.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	//nolint:gosec // G201: dbName comes from uniqueTestDBName or uniqueCLITestDatabaseName, never user input
+	//nolint:gosec // G201: dbName comes from uniqueTestDBName or newCLITestDatabaseName, never user input
 	if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName)); err != nil {
 		return err
 	}
-	// Purge dropped databases from Dolt's trash directory to reclaim disk space
-	_, _ = db.ExecContext(ctx, "CALL dolt_purge_dropped_databases()")
+	if purge {
+		// Purge dropped databases from Dolt's trash directory to reclaim disk space
+		_, _ = db.ExecContext(ctx, "CALL dolt_purge_dropped_databases()")
+	}
 	return nil
 }
 
