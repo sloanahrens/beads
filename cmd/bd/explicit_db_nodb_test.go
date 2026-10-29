@@ -179,6 +179,7 @@ func evalPath(t *testing.T, path string) string {
 	return resolved
 }
 
+// decodeJSONOutput decodes the "data" payload of a --json envelope into target.
 func decodeJSONOutput(t *testing.T, out []byte, target any) {
 	t.Helper()
 	trimmed := strings.TrimSpace(string(out))
@@ -186,8 +187,17 @@ func decodeJSONOutput(t *testing.T, out []byte, target any) {
 	if idx == -1 {
 		t.Fatalf("no JSON object found in output:\n%s", out)
 	}
-	if err := json.Unmarshal([]byte(trimmed[idx:]), target); err != nil {
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(trimmed[idx:]), &envelope); err != nil {
 		t.Fatalf("unmarshal json: %v\n%s", err, out)
+	}
+	if envelope.Data == nil {
+		t.Fatalf("no data key in JSON envelope:\n%s", out)
+	}
+	if err := json.Unmarshal(envelope.Data, target); err != nil {
+		t.Fatalf("unmarshal json data: %v\n%s", err, out)
 	}
 }
 

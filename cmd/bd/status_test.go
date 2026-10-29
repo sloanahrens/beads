@@ -16,8 +16,6 @@ import (
 // copy of the test here would pin a function this package no longer has.
 
 func TestRenderStatusJSON(t *testing.T) {
-	t.Setenv("BD_JSON_ENVELOPE", "0")
-
 	count := func(n int) *int { return &n }
 	tests := []struct {
 		name    string
@@ -45,10 +43,13 @@ func TestRenderStatusJSON(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out := captureStdout(t, func() error { return renderStatus(tt.stats, nil) })
-			var got StatusOutput
-			if err := json.Unmarshal([]byte(out), &got); err != nil {
+			var envelope struct {
+				Data StatusOutput `json:"data"`
+			}
+			if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 				t.Fatalf("unmarshal status JSON: %v\n%s", err, out)
 			}
+			got := envelope.Data
 			if got.Summary == nil || got.Summary.TotalIssues != tt.stats.TotalIssues {
 				t.Errorf("summary = %+v, want %+v", got.Summary, tt.stats)
 			}

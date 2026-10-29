@@ -582,10 +582,13 @@ func TestEmitGraphApplyDryRun_JSON(t *testing.T) {
 		return nil
 	})
 
-	var result GraphApplyDryRun
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
+	var envelope struct {
+		Data GraphApplyDryRun `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 		t.Fatalf("dry-run JSON output is not valid JSON: %v\nraw: %s", err, out)
 	}
+	result := envelope.Data
 
 	if !result.DryRun {
 		t.Error("expected dry_run=true in JSON output")
@@ -652,10 +655,13 @@ func TestCreateIssuesFromGraph_DryRunDoesNotPersist(t *testing.T) {
 		return nil
 	})
 
-	var result GraphApplyDryRun
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
+	var envelope struct {
+		Data GraphApplyDryRun `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 		t.Fatalf("output is not valid dry-run JSON: %v\nraw: %s", err, out)
 	}
+	result := envelope.Data
 	if !result.DryRun {
 		t.Error("expected dry_run=true")
 	}

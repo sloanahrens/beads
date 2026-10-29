@@ -72,10 +72,11 @@ func TestVersionCommand(t *testing.T) {
 		output := buf.String()
 
 		// Parse JSON output
-		var result map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		var envelope map[string]interface{}
+		if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 			t.Fatalf("Failed to parse JSON output: %v", err)
 		}
+		result, _ := envelope["data"].(map[string]interface{})
 
 		// Verify JSON contains version and build
 		if result["version"] != Version {
@@ -208,10 +209,11 @@ func TestVersionOutputWithCommitAndBranch(t *testing.T) {
 		buf.ReadFrom(r)
 		output := buf.String()
 
-		var result map[string]interface{}
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		var envelope map[string]interface{}
+		if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 			t.Fatalf("Failed to parse JSON output: %v", err)
 		}
+		result, _ := envelope["data"].(map[string]interface{})
 
 		if result["commit"] != Commit {
 			t.Errorf("Expected commit %q, got %q", Commit, result["commit"])

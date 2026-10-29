@@ -70,14 +70,18 @@ func buildJSONError(message, hint string) interface{} {
 	if hint != "" {
 		inner["hint"] = hint
 	}
-	if jsonEnvelopeEnabled() {
-		return map[string]interface{}{
-			"schema_version": JSONSchemaVersion,
-			"data":           inner,
-		}
+	return wrapWithSchemaVersion(inner)
+}
+
+// envelopeData returns the "data" object of an envelope from buildJSONError,
+// where a caller's extra error fields belong next to "error" and "hint".
+func envelopeData(envelope interface{}) (map[string]interface{}, bool) {
+	m, ok := envelope.(map[string]interface{})
+	if !ok {
+		return nil, false
 	}
-	inner["schema_version"] = JSONSchemaVersion
-	return inner
+	data, ok := m["data"].(map[string]interface{})
+	return data, ok
 }
 
 func jsonStderrError(message, hint string) {

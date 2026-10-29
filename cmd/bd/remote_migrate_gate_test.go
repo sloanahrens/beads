@@ -35,9 +35,13 @@ func TestHandleRemoteMigrateGateJSON_Shape(t *testing.T) {
 	}
 	_ = r.Close()
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &envelope); err != nil {
 		t.Fatalf("json.Unmarshal stderr: %v\nstderr was: %s", err, buf.String())
+	}
+	parsed, ok := envelope["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("data key missing or wrong type: %T\nstderr was: %s", envelope["data"], buf.String())
 	}
 
 	if got, ok := parsed["error"].(string); !ok || got != gate.Error() {
@@ -130,10 +134,11 @@ func TestHandleRemoteMigrateGateJSON_FallbackReason(t *testing.T) {
 		}
 		_ = r.Close()
 
-		var parsed map[string]interface{}
-		if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		var envelope map[string]interface{}
+		if err := json.Unmarshal(buf.Bytes(), &envelope); err != nil {
 			t.Fatalf("json.Unmarshal stderr: %v\nstderr was: %s", err, buf.String())
 		}
+		parsed, _ := envelope["data"].(map[string]interface{})
 		obj, ok := parsed["remote_migrate_gate"].(map[string]interface{})
 		if !ok {
 			t.Fatalf("remote_migrate_gate key missing or wrong type: %T", parsed["remote_migrate_gate"])
@@ -194,10 +199,11 @@ func TestHandleRemoteMigrateGateJSON_ServerNoRemote(t *testing.T) {
 	}
 	_ = r.Close()
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &envelope); err != nil {
 		t.Fatalf("json.Unmarshal stderr: %v\nstderr was: %s", err, buf.String())
 	}
+	parsed, _ := envelope["data"].(map[string]interface{})
 	obj, ok := parsed["remote_migrate_gate"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("remote_migrate_gate key missing or wrong type: %T", parsed["remote_migrate_gate"])

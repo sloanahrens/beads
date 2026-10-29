@@ -208,10 +208,13 @@ func TestDepListPrintsGhostAnchorsToStderr(t *testing.T) {
 		if !strings.Contains(stderr, "warning: no issue found: bd-ghost (skipped)") {
 			t.Errorf("stderr = %q, want the ghost warning in --json mode too", stderr)
 		}
-		var got []*types.Dependency
-		if err := json.Unmarshal([]byte(stdout), &got); err != nil {
-			t.Fatalf("--json output %q is not an array of dependency records: %v", stdout, err)
+		var envelope struct {
+			Data []*types.Dependency `json:"data"`
 		}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+			t.Fatalf("--json output %q is not an envelope of dependency records: %v", stdout, err)
+		}
+		got := envelope.Data
 		if len(got) != 1 || got[0].DependsOnID != "bd-2" {
 			t.Fatalf("--json output = %q, want the one edge flattened across the anchors", stdout)
 		}

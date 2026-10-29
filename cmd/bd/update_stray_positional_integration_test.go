@@ -6,7 +6,6 @@
 package main
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func showStrayMetadata(t *testing.T, bd, dir, id string) map[string]interface{} 
 		ID       string                 `json:"id"`
 		Metadata map[string]interface{} `json:"metadata"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &details); err != nil {
+	if err := unmarshalEnvelope([]byte(stdout), &details); err != nil {
 		t.Fatalf("parsing show --json for %s: %v\n%s", id, err, stdout)
 	}
 	if len(details) != 1 || details[0].ID != id {

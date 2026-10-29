@@ -3,52 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"testing"
 )
 
-func TestWrapWithSchemaVersion_Legacy_Object(t *testing.T) {
-	input := map[string]string{"id": "beads-123", "title": "Test"}
-	result := wrapWithSchemaVersion(input)
-
-	m, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if m["schema_version"] != JSONSchemaVersion {
-		t.Errorf("schema_version = %v, want %d", m["schema_version"], JSONSchemaVersion)
-	}
-	if m["id"] != "beads-123" {
-		t.Errorf("id = %v, want beads-123", m["id"])
-	}
-}
-
-func TestWrapWithSchemaVersion_Legacy_Slice(t *testing.T) {
-	input := []string{"a", "b", "c"}
-	result := wrapWithSchemaVersion(input)
-
-	arr, ok := result.([]string)
-	if !ok {
-		t.Fatalf("expected []string (passthrough), got %T", result)
-	}
-	if len(arr) != 3 {
-		t.Errorf("slice length = %d, want 3", len(arr))
-	}
-}
-
-func TestWrapWithSchemaVersion_Legacy_Nil(t *testing.T) {
-	result := wrapWithSchemaVersion(nil)
-	m, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-	if m["schema_version"] != JSONSchemaVersion {
-		t.Errorf("schema_version = %v, want %d", m["schema_version"], JSONSchemaVersion)
-	}
-}
-
 func TestWrapWithSchemaVersion_Envelope_Object(t *testing.T) {
-	t.Setenv("BD_JSON_ENVELOPE", "1")
-
 	input := map[string]string{"id": "beads-123", "title": "Test"}
 	result := wrapWithSchemaVersion(input)
 
@@ -73,8 +32,6 @@ func TestWrapWithSchemaVersion_Envelope_Object(t *testing.T) {
 }
 
 func TestWrapWithSchemaVersion_Envelope_Slice(t *testing.T) {
-	t.Setenv("BD_JSON_ENVELOPE", "1")
-
 	input := []string{"a", "b", "c"}
 	result := wrapWithSchemaVersion(input)
 
@@ -99,8 +56,6 @@ func TestWrapWithSchemaVersion_Envelope_Slice(t *testing.T) {
 }
 
 func TestWrapWithSchemaVersion_Envelope_Nil(t *testing.T) {
-	t.Setenv("BD_JSON_ENVELOPE", "1")
-
 	result := wrapWithSchemaVersion(nil)
 	m, ok := result.(map[string]interface{})
 	if !ok {
@@ -115,8 +70,6 @@ func TestWrapWithSchemaVersion_Envelope_Nil(t *testing.T) {
 }
 
 func TestWrapWithSchemaVersion_Envelope_RoundTrip(t *testing.T) {
-	t.Setenv("BD_JSON_ENVELOPE", "1")
-
 	input := map[string]interface{}{"count": 42, "name": "test"}
 	result := wrapWithSchemaVersion(input)
 
@@ -147,9 +100,14 @@ func TestOutputJSONWithPagination_NoTruncation(t *testing.T) {
 	out := captureStdout(t, func() error {
 		return outputJSONWithPagination(items, nil)
 	})
-	var arr []string
-	if err := json.Unmarshal([]byte(bytes.TrimSpace([]byte(out))), &arr); err != nil {
+
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(bytes.TrimSpace([]byte(out))), &m); err != nil {
 		t.Fatalf("unmarshal: %v\noutput: %s", err, out)
+	}
+	var arr []string
+	if err := json.Unmarshal(m["data"], &arr); err != nil {
+		t.Fatalf("unmarshal data: %v\noutput: %s", err, out)
 	}
 	if len(arr) != 2 {
 		t.Errorf("len = %d, want 2", len(arr))
@@ -157,8 +115,6 @@ func TestOutputJSONWithPagination_NoTruncation(t *testing.T) {
 }
 
 func TestOutputJSONWithPagination_EnvelopeTruncated(t *testing.T) {
-	t.Setenv("BD_JSON_ENVELOPE", "1")
-
 	items := []string{"a", "b", "c"}
 	pag := &PaginationMeta{Returned: 3, Total: 10, Truncated: true}
 	out := captureStdout(t, func() error {
@@ -187,6 +143,45 @@ func TestOutputJSONWithPagination_EnvelopeTruncated(t *testing.T) {
 	}
 }
 
+// A truncated page must carry the pagination block on stdout, and nothing
+// may be written to stderr: the old deprecation notice is gone.
+func TestOutputJSONWithPagination_TruncatedPageAlwaysPaginated_NoStderrNotice(t *testing.T) {
+	items := []string{"a", "b", "c"}
+	pag := paginationMetaFor(true, 3)
+
+	// One call, both streams: a notice written once per process would be
+	// spent by an earlier call, so a second call under the stderr capture could
+	// not show it. captureStderr holds stdioMutex, so captureStdout cannot nest
+	// inside it; stdout goes to a file the test reads back.
+	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout-*.json")
+	if err != nil {
+		t.Fatalf("create stdout file: %v", err)
+	}
+	defer stdoutFile.Close()
+	stderr := captureStderr(t, func() {
+		oldStdout := os.Stdout
+		os.Stdout = stdoutFile
+		defer func() { os.Stdout = oldStdout }()
+		if err := outputJSONWithPagination(items, pag); err != nil {
+			t.Errorf("outputJSONWithPagination: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	raw, err := os.ReadFile(stdoutFile.Name())
+	if err != nil {
+		t.Fatalf("read stdout file: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &m); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, raw)
+	}
+	if _, ok := m["pagination"]; !ok {
+		t.Fatalf("truncated page has no 'pagination' key; output: %s", raw)
+	}
+}
+
 func TestPaginationMetaFor(t *testing.T) {
 	if got := paginationMetaFor(false, 5); got != nil {
 		t.Errorf("hasMore=false: got %+v, want nil", got)
@@ -201,8 +196,6 @@ func TestPaginationMetaFor(t *testing.T) {
 }
 
 func TestOutputJSONWithPagination_EnvelopeNotTruncated(t *testing.T) {
-	t.Setenv("BD_JSON_ENVELOPE", "1")
-
 	items := []string{"a", "b"}
 	out := captureStdout(t, func() error {
 		return outputJSONWithPagination(items, nil)

@@ -435,18 +435,19 @@ func TestGatherReadyInputUsageErrorsRespectJSON(t *testing.T) {
 	}
 }
 
-// jsonErrorMessage pulls the message out of whichever error shape
-// buildJSONError produced - bare or BD_JSON_ENVELOPE-wrapped.
+// jsonErrorMessage pulls the message out of the envelope buildJSONError
+// produced: {"schema_version": N, "data": {"error": ...}}.
 func jsonErrorMessage(t *testing.T, stdout string) string {
 	t.Helper()
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatalf("stdout is not a JSON object: %v\n%s", err, stdout)
 	}
-	if data, ok := payload["data"].(map[string]any); ok {
-		payload = data
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("no \"data\" object in JSON error envelope:\n%s", stdout)
 	}
-	msg, ok := payload["error"].(string)
+	msg, ok := data["error"].(string)
 	if !ok {
 		t.Fatalf("no string \"error\" key in JSON error object:\n%s", stdout)
 	}

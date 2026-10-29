@@ -161,13 +161,24 @@ func requireExitOne(t *testing.T, err error) {
 	}
 }
 
+// decodeConcludePayload returns the "data" object of the conclude envelope and
+// checks the envelope's own schema_version.
 func decodeConcludePayload(t *testing.T, out string) map[string]interface{} {
 	t.Helper()
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+	var envelope struct {
+		SchemaVersion *int                   `json:"schema_version"`
+		Data          map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 		t.Fatalf("decode conclude JSON %q: %v", out, err)
 	}
-	return payload
+	if envelope.SchemaVersion == nil {
+		t.Fatalf("conclude JSON has no schema_version: %q", out)
+	}
+	if envelope.Data == nil {
+		t.Fatalf("conclude JSON has no data object: %q", out)
+	}
+	return envelope.Data
 }
 
 func requireConcludeKeys(t *testing.T, payload map[string]interface{}) {
@@ -177,7 +188,7 @@ func requireConcludeKeys(t *testing.T, payload map[string]interface{}) {
 		got = append(got, key)
 	}
 	sort.Strings(got)
-	want := []string{"blockers", "committed", "merging", "remaining", "schema_version"}
+	want := []string{"blockers", "committed", "merging", "remaining"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("conclude JSON keys = %v, want %v", got, want)
 	}

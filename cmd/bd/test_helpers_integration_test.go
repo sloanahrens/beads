@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -38,7 +37,7 @@ func createExecTestIssue(t *testing.T, tmpDir, title string) string {
 		t.Fatalf("No JSON in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal(out[jsonStart:], &issue); err != nil {
+	if err := unmarshalEnvelope(out[jsonStart:], &issue); err != nil {
 		t.Fatalf("parse create JSON: %v\n%s", err, out)
 	}
 	return issue["id"].(string)

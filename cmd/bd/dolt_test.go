@@ -1517,9 +1517,13 @@ func TestRunExternalDoltStatus_Unreachable(t *testing.T) {
 
 		out := captureStdout(t, func() error { runExternalDoltStatus(beadsDir, cfg); return nil })
 
-		var result map[string]any
-		if err := json.Unmarshal([]byte(out), &result); err != nil {
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 			t.Fatalf("expected valid JSON output, got error %v, raw: %s", err, out)
+		}
+		result, ok := envelope["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("no data object in JSON output: %s", out)
 		}
 
 		if result["mode"] != "external" {
@@ -1825,9 +1829,13 @@ func TestRenderLocalDoltStatus(t *testing.T) {
 			return nil
 		})
 
-		var result map[string]any
-		if err := json.Unmarshal([]byte(out), &result); err != nil {
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(out), &envelope); err != nil {
 			t.Fatalf("expected valid JSON, got error %v, raw: %s", err, out)
+		}
+		result, ok := envelope["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("no data object in JSON output: %s", out)
 		}
 
 		if result["running"] != true {

@@ -1481,6 +1481,18 @@ func TestRunSyncCommandNoRemoteExitsZero(t *testing.T) {
 	}
 }
 
+// decodeSyncOutcome decodes the sync outcome from its --json envelope's "data".
+func decodeSyncOutcome(t *testing.T, out string) syncOutcome {
+	t.Helper()
+	var envelope struct {
+		Data syncOutcome `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", out, err)
+	}
+	return envelope.Data
+}
+
 // TestRunSyncCommandNoRemoteJSON covers the JSON envelope for the no-remote
 // path specifically: status must be "no-remote", not the zero-value "ok".
 func TestRunSyncCommandNoRemoteJSON(t *testing.T) {
@@ -1489,10 +1501,7 @@ func TestRunSyncCommandNoRemoteJSON(t *testing.T) {
 	jsonOutput = true
 
 	out := captureStdout(t, func() error { return runSyncCommand(syncCmd, nil) })
-	var got syncOutcome
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", out, err)
-	}
+	got := decodeSyncOutcome(t, out)
 	if got.Status != syncStatusNoRemote {
 		t.Errorf("Status = %q, want %q", got.Status, syncStatusNoRemote)
 	}
@@ -1518,10 +1527,7 @@ func TestRunSyncCommandNoPushSetsPushSkipped(t *testing.T) {
 	if fake.pushCalls != 0 {
 		t.Errorf("Push() must not be called under no-push: true; called %d time(s)", fake.pushCalls)
 	}
-	var got syncOutcome
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", out, err)
-	}
+	got := decodeSyncOutcome(t, out)
 	if got.Status != syncStatusOK {
 		t.Errorf("Status = %q, want %q", got.Status, syncStatusOK)
 	}
@@ -1649,10 +1655,7 @@ func TestRunSyncCommandJSONEnvelopePerStatus(t *testing.T) {
 				_ = runSyncCommand(syncCmd, nil)
 				return nil // the command's own error is asserted elsewhere; capture must not fail on the expected non-nil ones
 			})
-			var got syncOutcome
-			if err := json.Unmarshal([]byte(out), &got); err != nil {
-				t.Fatalf("json.Unmarshal(%q): %v", out, err)
-			}
+			got := decodeSyncOutcome(t, out)
 			if got.Status != tt.wantStatus {
 				t.Errorf("Status = %q, want %q", got.Status, tt.wantStatus)
 			}
@@ -1742,10 +1745,7 @@ func TestRunSyncCommandAdoptsGitOriginOnDefaultRemote(t *testing.T) {
 	if adoptCalls != 1 {
 		t.Fatalf("adoption ran %d time(s), want exactly 1 on the default-remote path", adoptCalls)
 	}
-	var got syncOutcome
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", out, err)
-	}
+	got := decodeSyncOutcome(t, out)
 	if got.Status != syncStatusOK {
 		t.Errorf("Status = %q, want %q — adoption before the loop is what makes the pull work", got.Status, syncStatusOK)
 	}
@@ -1786,10 +1786,7 @@ func TestRunSyncCommandNoGitOriginStillExitsZero(t *testing.T) {
 	jsonOutput = true
 
 	out := captureStdout(t, func() error { return runSyncCommand(syncCmd, nil) })
-	var got syncOutcome
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", out, err)
-	}
+	got := decodeSyncOutcome(t, out)
 	if got.Status != syncStatusNoRemote {
 		t.Errorf("Status = %q, want %q", got.Status, syncStatusNoRemote)
 	}

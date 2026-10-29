@@ -20,7 +20,7 @@ import (
 // human decision instead of auto-running it.
 func handleRemoteMigrateGateJSON(e *schema.RemoteMigrateGateError) {
 	outer := buildJSONError(e.Error(), e.AgentDirective())
-	if m, ok := outer.(map[string]interface{}); ok {
+	if data, ok := envelopeData(outer); ok {
 		opts := make([]map[string]interface{}, 0, len(e.Options()))
 		for _, o := range e.Options() {
 			opts = append(opts, map[string]interface{}{
@@ -69,7 +69,7 @@ func handleRemoteMigrateGateJSON(e *schema.RemoteMigrateGateError) {
 				gate["fallback_reason"] = e.FallbackReason
 			}
 		}
-		m["remote_migrate_gate"] = gate
+		data["remote_migrate_gate"] = gate
 		if machineModeActive() {
 			recordMachineError(&cliError{Kind: kindRefused, Message: e.Error(),
 				Detail: map[string]any{"remote_migrate_gate": gate, "hint": e.AgentDirective()}})

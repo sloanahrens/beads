@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net"
 	"os"
 	"os/exec"
@@ -59,7 +58,7 @@ func TestE2E_AutoStartedRepoLocalServerPersistsAcrossCommands(t *testing.T) {
 	if jsonStart := strings.Index(createOut, "{"); jsonStart >= 0 {
 		createJSON = createOut[jsonStart:]
 	}
-	if err := json.Unmarshal([]byte(createJSON), &created); err != nil {
+	if err := unmarshalEnvelope([]byte(createJSON), &created); err != nil {
 		t.Fatalf("parse create json: %v\n%s", err, createOut)
 	}
 	issueID, _ := created["id"].(string)

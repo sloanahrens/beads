@@ -53,3 +53,22 @@ func TestJsonStderrError_StructuredOutput(t *testing.T) {
 		})
 	}
 }
+
+// envelopeData is how a caller adds fields next to "error" and "hint" in an
+// error envelope; when it reports false the caller drops its payload without a
+// word. buildJSONError is the only producer of that envelope, so this pins its
+// shape: if the "data" object ever moves, this fails instead of the gate and
+// schema-skew payloads silently going missing.
+func TestEnvelopeDataReadsTheErrorEnvelopeBuildJSONErrorMakes(t *testing.T) {
+	envelope := buildJSONError("boom", "try again")
+	data, ok := envelopeData(envelope)
+	if !ok {
+		t.Fatalf("envelopeData(buildJSONError(...)) = false for %#v; callers would drop their payload", envelope)
+	}
+	if data["error"] != "boom" || data["hint"] != "try again" {
+		t.Errorf("data = %#v, want error and hint next to where a caller's fields go", data)
+	}
+	if _, ok := envelopeData("not an envelope"); ok {
+		t.Error("envelopeData accepted a value that is not an envelope")
+	}
+}

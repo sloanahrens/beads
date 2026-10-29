@@ -390,10 +390,13 @@ func TestWhereCommand_UsesConfigPrefixFromSelectedDB(t *testing.T) {
 		return whereCmd.RunE(whereCmd, nil)
 	})
 
-	var result WhereResult
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
+	var envelope struct {
+		Data WhereResult `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 		t.Fatalf("json.Unmarshal(%q): %v", output, err)
 	}
+	result := envelope.Data
 
 	if !utils.PathsEqual(result.Path, beadsDir) {
 		t.Fatalf("Path = %q, want %q", result.Path, beadsDir)

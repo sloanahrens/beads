@@ -31,13 +31,15 @@ func TestBackupStatusSizeErrorRespectsOutputMode(t *testing.T) {
 		}
 
 		var response struct {
-			Error string `json:"error"`
+			Data struct {
+				Error string `json:"error"`
+			} `json:"data"`
 		}
 		if err := json.Unmarshal([]byte(stdout), &response); err != nil {
 			t.Fatalf("stdout is not a single valid JSON response: %v\nstdout: %s", err, stdout)
 		}
-		if !strings.Contains(response.Error, "measure database size") || !strings.Contains(response.Error, missingRoot) {
-			t.Errorf("error = %q, want database-size diagnostic containing %q", response.Error, missingRoot)
+		if !strings.Contains(response.Data.Error, "measure database size") || !strings.Contains(response.Data.Error, missingRoot) {
+			t.Errorf("data.error = %q, want database-size diagnostic containing %q", response.Data.Error, missingRoot)
 		}
 		if strings.Contains(stdout, "Usage:") {
 			t.Errorf("stdout contains usage noise: %s", stdout)
@@ -167,7 +169,6 @@ func prepareBackupStatusTest(t *testing.T) {
 		t.Fatalf("create workspace marker: %v", err)
 	}
 	t.Setenv("BEADS_DIR", beadsDir)
-	t.Setenv("BD_JSON_ENVELOPE", "0")
 	initConfigForTest(t)
 
 	oldJSONOutput := jsonOutput
