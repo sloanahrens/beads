@@ -9,23 +9,6 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
-// depTargetExpr resolves a dependency row's target id from the split physical
-// columns instead of the STORED generated `depends_on_id` column. Both
-// `dependencies` and `wisp_dependencies` define depends_on_id as
-// GENERATED ALWAYS AS (COALESCE(depends_on_issue_id, depends_on_wisp_id,
-// depends_on_external)). Count queries must filter on the base columns: inside
-// a count(*) (which projects no real columns) the pure-Go GMS analyzer can
-// prune the base columns the generated column derives from and then fail with
-// "column depends_on_id could not be found in any table in scope". The slice
-// path projects real columns, so it can use depends_on_id directly. This
-// matches issueops.DepTargetExpr on main.
-//
-// It is NOT used as a WHERE predicate here: a predicate over the COALESCE
-// expression cannot be indexed, so Dolt plans it as a full table scan. The
-// reverse counts below go through sqlbuild.DepTargetCountSQL, which decomposes
-// the same predicate into one indexed equality per typed target column.
-const depTargetExpr = "COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external)"
-
 // CountIssues returns the number of issues matching query and filter.
 // Filter.Limit and Filter.Offset are ignored; all other fields apply.
 // Wisps-merge semantics follow SearchIssues: SkipWisps=true counts the
@@ -86,6 +69,13 @@ func (s *DoltStore) CountDependents(ctx context.Context, issueID string) (int64,
 
 // reverseDependentsSQL counts the rows of table whose target is the bound id,
 // as three index seeks — one per typed target column — in a single statement.
+// The predicate must name the typed columns, never the STORED generated
+// `depends_on_id` (defined as their COALESCE): a count(*) projects no real
+// columns, so the pure-Go GMS analyzer can prune the base columns that column
+// derives from and then fail with "column depends_on_id could not be found in
+// any table in scope". The same expression is why the COALESCE form is not used
+// as a predicate anywhere here — it cannot be indexed (see
+// sqlbuild.DepTargetSelectSQL).
 func reverseDependentsSQL(table string) string {
 	return sqlbuild.DepTargetCountSQL(table, "%s = ?")
 }
@@ -147,13 +137,6 @@ func (s *DoltStore) CountEvents(ctx context.Context, issueID string, limit int) 
 // Counted as two separate queries summed in Go (see CountDependents for why a
 // single combined query is avoided).
 func (s *DoltStore) CountDependentsByStatus(ctx context.Context, issueID string, status types.Status) (int64, error) {
-	// Same decomposition as CountDependents: three indexed target equalities
-	// per table, each joined to its source row's status. Measured on Dolt, the
-	// branches drive from the target index into the issues/wisps primary key,
-	// where the COALESCE form scans the whole dependency table.
-	dependentsByStatusSQL := func(from, statusPred string) string {
-		return sqlbuild.DepTargetCountSQL(from, "d.%s = ? AND "+statusPred)
-	}
 	args := sqlbuild.DepTargetBranchArgs(issueID, string(status))
 	var n int64
 	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
@@ -172,4 +155,14 @@ func (s *DoltStore) CountDependentsByStatus(ctx context.Context, issueID string,
 		return nil
 	})
 	return n, err
+}
+
+// dependentsByStatusSQL counts the rows of one dependency table whose target is
+// the bound id and whose source row (joined in by from) satisfies statusPred.
+// Same decomposition as CountDependents: three indexed target equalities per
+// table, each joined to its source row's status. Measured on Dolt, the branches
+// drive from the target index into the issues/wisps primary key, where the
+// COALESCE form scans the whole dependency table.
+func dependentsByStatusSQL(from, statusPred string) string {
+	return sqlbuild.DepTargetCountSQL(from, "d.%s = ? AND "+statusPred)
 }

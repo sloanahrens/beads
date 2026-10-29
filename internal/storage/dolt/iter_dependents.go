@@ -46,29 +46,44 @@ type doltDependentsIter struct {
 // matches GetDependentsWithMetadata. See the package doc for why the join
 // target per edge table is unambiguous.
 func (s *DoltStore) IterDependentsWithMetadata(ctx context.Context, issueID string) (storage.Iter[types.IssueWithDependencyMetadata], error) {
-	q := fmt.Sprintf(`
-		SELECT %s, d.type
-		FROM issues i
-		JOIN dependencies d ON d.issue_id = i.id
-		%s
-		WHERE %s = ?
-		UNION ALL
-		SELECT %s, d.type
-		FROM wisps w
-		JOIN wisp_dependencies d ON d.issue_id = w.id
-		%s
-		WHERE %s = ?
-		ORDER BY created_at ASC
-	`, prefixedIssueColumns("i"), sqlbuild.LeaseJoin("i"), depTargetExprWithAlias("d"),
-		prefixedIssueColumns("w"), sqlbuild.LeaseJoin("w"), depTargetExprWithAlias("d"))
-	return s.iterIssuesWithDepType(ctx, q, issueID, issueID)
+	return s.iterIssuesWithDepType(ctx, dependentsIterSQL(), dependentsIterArgs(issueID)...)
 }
 
-func depTargetExprWithAlias(alias string) string {
-	if alias == "" {
-		return depTargetExpr
-	}
-	return fmt.Sprintf("COALESCE(%s.depends_on_issue_id, %s.depends_on_wisp_id, %s.depends_on_external)", alias, alias, alias)
+// dependentsIterSQL returns the streaming dependents query. Each dependency
+// table contributes one arm per typed target column — three bare equalities in
+// place of the COALESCE target predicate (sqlbuild.DepTargetSelectSQL) — because
+// a predicate over the COALESCE expression cannot be indexed, so Dolt plans it
+// as a full table scan where each bare equality seeks that column's own index.
+//
+// The decomposition relies on ck_dep_one_target / ck_wisp_dep_one_target, which
+// require exactly one typed target column to be non-NULL: an edge matches at
+// most one arm, so the stream is the row set the COALESCE predicate returned,
+// with no duplicates. Each table's arms share one projection, and the compound
+// keeps the ORDER BY the two-arm form had, so callers scan the same shape and
+// the same order.
+func dependentsIterSQL() string {
+	return fmt.Sprintf(`
+		%s
+		UNION ALL
+		%s
+		ORDER BY created_at ASC
+	`,
+		sqlbuild.DepTargetSelectSQL(
+			"issues i JOIN dependencies d ON d.issue_id = i.id "+sqlbuild.LeaseJoin("i"),
+			prefixedIssueColumns("i")+", d.type",
+			"d.%s = ?"),
+		sqlbuild.DepTargetSelectSQL(
+			"wisps w JOIN wisp_dependencies d ON d.issue_id = w.id "+sqlbuild.LeaseJoin("w"),
+			prefixedIssueColumns("w")+", d.type",
+			"d.%s = ?"))
+}
+
+// dependentsIterArgs binds the target id once per typed target column, in the
+// branch order dependentsIterSQL renders: three for `dependencies`, then three
+// for `wisp_dependencies`.
+func dependentsIterArgs(issueID string) []any {
+	return append(sqlbuild.DepTargetBranchArgs(issueID),
+		sqlbuild.DepTargetBranchArgs(issueID)...)
 }
 
 func (s *DoltStore) iterIssuesWithDepType(ctx context.Context, q string, args ...any) (storage.Iter[types.IssueWithDependencyMetadata], error) {
