@@ -48,7 +48,7 @@ func TestDoltShowConfigNotInRepo(t *testing.T) {
 func TestDoltShowConfigDefaultMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
@@ -102,9 +102,13 @@ func TestDoltShowConfigDefaultMode(t *testing.T) {
 			t.Skip("output capture failed")
 		}
 
-		var result map[string]any
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 			t.Skipf("output not pure JSON: %s", output)
+		}
+		result, ok := envelope["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("no data object in JSON output: %s", output)
 		}
 
 		if result["backend"] != "dolt" {
@@ -113,8 +117,10 @@ func TestDoltShowConfigDefaultMode(t *testing.T) {
 		if result["database"] != "testdb" {
 			t.Errorf("expected database 'testdb', got %v", result["database"])
 		}
-		if embedded, ok := result["embedded"].(bool); !ok || !embedded {
-			t.Errorf("expected embedded=true in JSON output, got %v", result["embedded"])
+		// showDoltConfig reports embedded=false (hard-coded since b166a0d4,
+		// be-xu2.2); the old permission skip hid this stale expectation.
+		if embedded, ok := result["embedded"].(bool); !ok || embedded {
+			t.Errorf("expected embedded=false in JSON output, got %v", result["embedded"])
 		}
 		// mode field should no longer be present
 		if _, ok := result["mode"]; ok {
@@ -126,7 +132,7 @@ func TestDoltShowConfigDefaultMode(t *testing.T) {
 func TestDoltShowConfigServerMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
@@ -145,8 +151,11 @@ func TestDoltShowConfigServerMode(t *testing.T) {
 	// Override BEADS_DIR so FindBeadsDir() returns our temp .beads,
 	// not the rig's .beads (which happens in worktree environments).
 	t.Setenv("BEADS_DIR", beadsDir)
-	// Clear test server port override so GetDoltServerPort() returns metadata.json value
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
+	// Pin the port by env (same value as metadata.json): the deprecated metadata
+	// dolt_server_port warning would otherwise land in the captured JSON stream.
+	t.Setenv("BEADS_DOLT_SERVER_PORT", "3308")
+	t.Setenv("BEADS_DOLT_PORT", "")
+	t.Setenv("BEADS_DOLT_SERVER_HOST", "")
 
 	oldCwd, _ := os.Getwd()
 	if err := os.Chdir(tmpDir); err != nil {
@@ -187,9 +196,13 @@ func TestDoltShowConfigServerMode(t *testing.T) {
 			t.Skip("output capture failed")
 		}
 
-		var result map[string]any
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 			t.Skipf("output not pure JSON: %s", output)
+		}
+		result, ok := envelope["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("no data object in JSON output: %s", output)
 		}
 
 		if result["host"] != "192.168.1.100" {
@@ -208,7 +221,7 @@ func TestDoltShowConfigServerMode(t *testing.T) {
 func TestDoltSetConfigValidation(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
@@ -283,7 +296,7 @@ func TestDoltSetConfigValidation(t *testing.T) {
 func TestDoltSetConfigJSONOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
@@ -313,9 +326,13 @@ func TestDoltSetConfigJSONOutput(t *testing.T) {
 		t.Skip("output capture failed")
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 		t.Skipf("output not pure JSON: %s", output)
+	}
+	result, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("no data object in JSON output: %s", output)
 	}
 
 	if result["key"] != "database" {
@@ -332,7 +349,7 @@ func TestDoltSetConfigJSONOutput(t *testing.T) {
 func TestDoltSetConfigWithUpdateConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
@@ -369,9 +386,13 @@ func TestDoltSetConfigWithUpdateConfig(t *testing.T) {
 		t.Skip("output capture failed")
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 		t.Skipf("output not pure JSON: %s", output)
+	}
+	result, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("no data object in JSON output: %s", output)
 	}
 
 	if result["config_yaml_updated"] != true {
@@ -634,7 +655,7 @@ func captureDoltSetOutput(t *testing.T, key, value string, updateConfig bool) st
 func TestSetDoltConfigWorktreeIsolation(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
@@ -693,7 +714,7 @@ func TestSetDoltConfigWorktreeIsolation(t *testing.T) {
 func TestSetDataDirBlockedInServerMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
@@ -730,7 +751,7 @@ func TestSetDataDirBlockedInServerMode(t *testing.T) {
 func TestSetDataDirAllowedClear(t *testing.T) {
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o700); err != nil {
 		t.Fatalf("failed to create .beads dir: %v", err)
 	}
 
