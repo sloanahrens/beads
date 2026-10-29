@@ -98,14 +98,15 @@ func copyDir(src, dst string) error {
 }
 
 // setupCLITestDB creates a fresh initialized bd database for CLI tests.
-// Uses a cached template directory to avoid running bd init for every test.
-// The template is created once via sync.Once and copied for each test.
+// The template directory is created once via sync.Once and copied for each test
+// to supply the .beads skeleton.
 //
 // In server mode the data lives on the shared Dolt server under the database
 // named in metadata.json, so a plain copy would point every test at the
 // template's database. Each copy therefore gets its own database: its
 // metadata.json names a database unique to the test, and bd init creates that
-// database. The database is dropped in cleanup.
+// database there, so each call pays for one bd init. The database is dropped
+// in cleanup.
 func setupCLITestDB(t *testing.T) string {
 	t.Helper()
 	if testDoltServerPort == 0 {
