@@ -21,7 +21,6 @@ package main
 // of its own, detached, and nothing here would ever stop it (be-gnt).
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,7 +85,7 @@ func runCreateDepsBDRaw(t *testing.T, bd, dir string, args ...string) (string, e
 func createDepsIssueTitles(t *testing.T, bd, dir string) map[string]bool {
 	t.Helper()
 	out := runCreateDepsBD(t, bd, dir, "list", "--json")
-	start := strings.Index(out, "[")
+	start := strings.Index(out, "{")
 	if start < 0 {
 		// An empty workspace may print a non-JSON "no issues" notice.
 		return map[string]bool{}
@@ -94,7 +93,7 @@ func createDepsIssueTitles(t *testing.T, bd, dir string) map[string]bool {
 	var issues []struct {
 		Title string `json:"title"`
 	}
-	if err := json.Unmarshal([]byte(out[start:]), &issues); err != nil {
+	if err := unmarshalEnvelope([]byte(out[start:]), &issues); err != nil {
 		t.Fatalf("parse bd list --json: %v\n%s", err, out)
 	}
 	titles := make(map[string]bool, len(issues))
@@ -115,7 +114,7 @@ func createDepsExtractID(t *testing.T, out string) string {
 	var issue struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(out[start:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[start:]), &issue); err != nil {
 		t.Fatalf("parse create --json output: %v\n%s", err, out)
 	}
 	if issue.ID == "" {

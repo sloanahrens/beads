@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -21,7 +20,7 @@ func TestShow_ExternalRef(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("failed to parse create output: %v, output: %s", err, out)
 	}
 	id := issue["id"].(string)
@@ -48,7 +47,7 @@ func TestShow_NoExternalRef(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("failed to parse create output: %v, output: %s", err, out)
 	}
 	id := issue["id"].(string)
@@ -72,7 +71,7 @@ func TestShow_IDFlag(t *testing.T) {
 		t.Fatalf("No JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("failed to parse create output: %v, output: %s", err, out)
 	}
 	id := issue["id"].(string)
@@ -129,7 +128,7 @@ func TestShow_NotFoundJSON(t *testing.T) {
 		t.Fatal("expected JSON error on stdout, got empty output")
 	}
 	var errResp map[string]interface{}
-	if jsonErr := json.Unmarshal([]byte(stdout), &errResp); jsonErr != nil {
+	if jsonErr := unmarshalEnvelope([]byte(stdout), &errResp); jsonErr != nil {
 		t.Fatalf("expected valid JSON error response on stdout, got parse error: %v\nStdout: %s", jsonErr, stdout)
 	}
 	if errField, _ := errResp["error"].(string); errField == "" {
@@ -179,7 +178,7 @@ func TestShow_DeletedIssueGetsSameHonestNotFoundMessage(t *testing.T) {
 		t.Fatalf("no JSON found in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal([]byte(out[jsonStart:]), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(out[jsonStart:]), &issue); err != nil {
 		t.Fatalf("failed to parse create output: %v, output: %s", err, out)
 	}
 	id := issue["id"].(string)
@@ -206,7 +205,7 @@ func TestShow_NotFoundJSONIncludesHint(t *testing.T) {
 		t.Fatal("expected error for nonexistent issue with --json, but command succeeded")
 	}
 	var errResp map[string]interface{}
-	if jsonErr := json.Unmarshal([]byte(stdout), &errResp); jsonErr != nil {
+	if jsonErr := unmarshalEnvelope([]byte(stdout), &errResp); jsonErr != nil {
 		t.Fatalf("expected valid JSON error response, got parse error: %v\nStdout: %s", jsonErr, stdout)
 	}
 	if errField, _ := errResp["error"].(string); errField != "no issues found matching the provided IDs" {

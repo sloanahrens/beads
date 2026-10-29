@@ -12,7 +12,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -144,7 +143,7 @@ func TestUpdateBlockedDuringMigrationFreeze(t *testing.T) {
 	var issue struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &issue); err != nil || issue.ID == "" {
+	if err := unmarshalEnvelope([]byte(stdout), &issue); err != nil || issue.ID == "" {
 		t.Fatalf("parsing create --json output: %v\n%s", err, stdout)
 	}
 
@@ -172,7 +171,7 @@ func TestCreateNotBlockedWithoutFreeze(t *testing.T) {
 	var issue struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(stdout), &issue); err != nil {
 		t.Fatalf("parsing create --json output: %v\n%s", err, stdout)
 	}
 	if issue.ID == "" {
@@ -218,7 +217,7 @@ func TestLabelAddBlockedDuringMigrationFreeze(t *testing.T) {
 	var issue struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &issue); err != nil || issue.ID == "" {
+	if err := unmarshalEnvelope([]byte(stdout), &issue); err != nil || issue.ID == "" {
 		t.Fatalf("parsing create --json output: %v\n%s", err, stdout)
 	}
 

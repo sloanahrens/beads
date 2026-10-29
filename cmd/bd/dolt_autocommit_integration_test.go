@@ -3,7 +3,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -45,10 +44,10 @@ func doltHeadCommit(t *testing.T, dir string, env []string) string {
 		t.Fatalf("bd vc status failed: %v\n%s", err, out)
 	}
 	var m map[string]any
-	if err := json.Unmarshal([]byte(out), &m); err != nil {
+	if err := unmarshalEnvelope([]byte(out), &m); err != nil {
 		// Some commands can emit warnings; try from first '{'
 		if idx := strings.Index(out, "{"); idx >= 0 {
-			if err2 := json.Unmarshal([]byte(out[idx:]), &m); err2 != nil {
+			if err2 := unmarshalEnvelope([]byte(out[idx:]), &m); err2 != nil {
 				t.Fatalf("failed to parse vc status JSON: %v\n%s", err2, out)
 			}
 		} else {
@@ -221,7 +220,7 @@ func TestDoltAutoCommit_Batch_DefersCommit(t *testing.T) {
 	var created struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(out[strings.Index(out, "{"):]), &created); err != nil || created.ID == "" {
+	if err := unmarshalEnvelope([]byte(out[strings.Index(out, "{"):]), &created); err != nil || created.ID == "" {
 		t.Fatalf("parse create JSON id: %v\n%s", err, out)
 	}
 	secondID := created.ID

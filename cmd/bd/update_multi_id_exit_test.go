@@ -21,7 +21,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -98,7 +97,7 @@ func createMultiIDUpdateIssue(t *testing.T, bd, dir, title string) string {
 	var issue struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &issue); err != nil {
+	if err := unmarshalEnvelope([]byte(stdout), &issue); err != nil {
 		t.Fatalf("parsing create --json output: %v\n%s", err, stdout)
 	}
 	if issue.ID == "" {
@@ -118,7 +117,7 @@ func showMultiIDUpdatePriority(t *testing.T, bd, dir, id string) int {
 		ID       string `json:"id"`
 		Priority int    `json:"priority"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &details); err != nil {
+	if err := unmarshalEnvelope([]byte(stdout), &details); err != nil {
 		t.Fatalf("parsing show --json output for %s: %v\n%s", id, err, stdout)
 	}
 	if len(details) != 1 || details[0].ID != id {
@@ -169,7 +168,7 @@ func TestMultiIDUpdatePartialFailureJSONReportsFailedIDs(t *testing.T) {
 		ID       string `json:"id"`
 		Priority int    `json:"priority"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &updated); err != nil {
+	if err := unmarshalEnvelope([]byte(stdout), &updated); err != nil {
 		t.Fatalf("stdout is not the array-of-issues success shape: %v\n%s", err, stdout)
 	}
 	gotIDs := map[string]bool{}
@@ -194,7 +193,7 @@ func TestMultiIDUpdatePartialFailureJSONReportsFailedIDs(t *testing.T) {
 			Error string `json:"error"`
 		} `json:"failed"`
 	}
-	if err := json.Unmarshal([]byte(last), &report); err != nil {
+	if err := unmarshalEnvelope([]byte(last), &report); err != nil {
 		t.Fatalf("last stderr line is not a JSON failure report: %v\nstderr:\n%s", err, stderr)
 	}
 	if report.Error == "" {
@@ -236,7 +235,7 @@ func TestMultiIDUpdateAllGoodPathUnchanged(t *testing.T) {
 		ID       string `json:"id"`
 		Priority int    `json:"priority"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &updated); err != nil {
+	if err := unmarshalEnvelope([]byte(stdout), &updated); err != nil {
 		t.Fatalf("stdout is not the array-of-issues success shape: %v\n%s", err, stdout)
 	}
 	if len(updated) != 2 {

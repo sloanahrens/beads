@@ -5,7 +5,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"testing"
@@ -57,7 +56,7 @@ func TestCLI_ReopenClearsDeferUntil(t *testing.T) {
 	}
 
 	var issues []map[string]interface{}
-	json.Unmarshal(out, &issues)
+	unmarshalEnvelope(out, &issues)
 	if len(issues) == 0 {
 		t.Fatalf("show returned no issues")
 	}

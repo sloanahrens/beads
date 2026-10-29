@@ -5,7 +5,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -72,7 +71,7 @@ func createExecTestIssueWithID(t *testing.T, tmpDir, title, id string) string {
 		t.Fatalf("No JSON in create output: %s", out)
 	}
 	var issue map[string]interface{}
-	if err := json.Unmarshal(out[jsonStart:], &issue); err != nil {
+	if err := unmarshalEnvelope(out[jsonStart:], &issue); err != nil {
 		t.Fatalf("parse create JSON: %v\n%s", err, out)
 	}
 	return issue["id"].(string)
@@ -106,7 +105,7 @@ func assertParentLists(t *testing.T, tmpDir, parentID, childID string, shouldApp
 	}
 
 	var issues []map[string]interface{}
-	if err := json.Unmarshal(out, &issues); err != nil {
+	if err := unmarshalEnvelope(out, &issues); err != nil {
 		// Might be empty output
 		if shouldAppear {
 			t.Fatalf("parse list JSON: %v\n%s", err, out)
