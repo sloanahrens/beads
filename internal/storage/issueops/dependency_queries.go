@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -230,10 +231,8 @@ func getDependentRecordsIntoFromTable(ctx context.Context, tx DBTX, depTable str
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-			`SELECT id, issue_id, %s AS depends_on_id, type, created_at, created_by, metadata, thread_id
-			 FROM %s WHERE %s ORDER BY %s`,
-			DepTargetExpr, depTable, depTargetIn("", strings.Join(placeholders, ",")), DepTargetExpr), args...)
+		rows, err := tx.QueryContext(ctx, reverseDependentsBatchSQL(depTable, strings.Join(placeholders, ",")),
+			sqlbuild.DepTargetBranchArgs(args...)...)
 		if err != nil {
 			return fmt.Errorf("get dependent records from %s: %w", depTable, err)
 		}
@@ -257,6 +256,26 @@ func getDependentRecordsIntoFromTable(ctx context.Context, tx DBTX, depTable str
 		}
 	}
 	return nil
+}
+
+// reverseDependentsBatchSQL is the batched reverse-dependents read: the rows
+// whose target is one of the ? placeholders in inClause. The target predicate is
+// the per-column UNION ALL of sqlbuild.DepTargetSelectSQL, so each branch seeks
+// its own typed target column. The outer SELECT list and ORDER BY still name the
+// target with DepTargetExpr; only the WHERE predicate moves into the branches.
+// inClause repeats in every branch, so the caller binds the ids with
+// sqlbuild.DepTargetBranchArgs, once per branch.
+//
+//nolint:gosec // G201: depTable is "dependencies" or "wisp_dependencies" (hardcoded by caller); inClause contains only ? placeholders.
+func reverseDependentsBatchSQL(depTable, inClause string) string {
+	return fmt.Sprintf(
+		`SELECT id, issue_id, %s AS depends_on_id, type, created_at, created_by, metadata, thread_id
+		 FROM (%s) AS dep ORDER BY %s`,
+		DepTargetExpr,
+		sqlbuild.DepTargetSelectSQL(depTable,
+			"id, issue_id, depends_on_issue_id, depends_on_wisp_id, depends_on_external, type, created_at, created_by, metadata, thread_id",
+			"%s IN ("+inClause+")"),
+		DepTargetExpr)
 }
 
 // Target-keyed dependents-read bounds. A raw read has no consumer to apply a
@@ -724,14 +743,8 @@ func queryBlocksInfo(
 
 		for _, depTable := range depTables {
 			// Query: "blocks" — deps where depends_on_id is in our set.
-			//nolint:gosec // G201: depTable is a caller-controlled constant.
-			blocksQuery := fmt.Sprintf(`
-				SELECT %s AS depends_on_id, d.issue_id, d.type
-				FROM %s d
-				WHERE %s AND d.type IN ('blocks', 'parent-child')
-			`, depTargetExpr("d"), depTable, depTargetIn("d", inClause))
-
-			rows, err := tx.QueryContext(ctx, blocksQuery, args...)
+			rows, err := tx.QueryContext(ctx, reverseBlocksInfoSQL(depTable, inClause),
+				sqlbuild.DepTargetBranchArgs(args...)...)
 			if err != nil {
 				if optionalBlockedTable(depTable) && isTableNotExistError(err) {
 					continue
@@ -760,6 +773,24 @@ func queryBlocksInfo(
 	}
 
 	return nil
+}
+
+// reverseBlocksInfoSQL is the inbound-blocking read for one dependency table: the
+// blocking and parent-child rows whose target is one of the ? placeholders in
+// inClause. As in reverseDependentsBatchSQL, the target predicate is the
+// per-column UNION ALL of sqlbuild.DepTargetSelectSQL and the projection keeps
+// its DepTargetExpr-style COALESCE. The caller binds the ids once per branch
+// with sqlbuild.DepTargetBranchArgs.
+//
+//nolint:gosec // G201: depTable is a caller-controlled constant; inClause contains only ? placeholders.
+func reverseBlocksInfoSQL(depTable, inClause string) string {
+	return fmt.Sprintf(
+		`SELECT %s AS depends_on_id, d.issue_id, d.type
+		 FROM (%s) d`,
+		depTargetExpr("d"),
+		sqlbuild.DepTargetSelectSQL(depTable,
+			"issue_id, type, depends_on_issue_id, depends_on_wisp_id, depends_on_external",
+			"%s IN ("+inClause+") AND type IN ('blocks', 'parent-child')"))
 }
 
 func loadStatusByIDInTx(ctx context.Context, tx DBTX, ids []string) (map[string]types.Status, error) {
