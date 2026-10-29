@@ -117,8 +117,10 @@ func TestDoltShowConfigDefaultMode(t *testing.T) {
 		if result["database"] != "testdb" {
 			t.Errorf("expected database 'testdb', got %v", result["database"])
 		}
-		if embedded, ok := result["embedded"].(bool); !ok || !embedded {
-			t.Errorf("expected embedded=true in JSON output, got %v", result["embedded"])
+		// showDoltConfig reports embedded=false (hard-coded since b166a0d4,
+		// be-xu2.2); the old permission skip hid this stale expectation.
+		if embedded, ok := result["embedded"].(bool); !ok || embedded {
+			t.Errorf("expected embedded=false in JSON output, got %v", result["embedded"])
 		}
 		// mode field should no longer be present
 		if _, ok := result["mode"]; ok {
@@ -149,8 +151,9 @@ func TestDoltShowConfigServerMode(t *testing.T) {
 	// Override BEADS_DIR so FindBeadsDir() returns our temp .beads,
 	// not the rig's .beads (which happens in worktree environments).
 	t.Setenv("BEADS_DIR", beadsDir)
-	// Clear test server port and host overrides so the metadata.json values win
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
+	// Pin the port by env (same value as metadata.json): the deprecated metadata
+	// dolt_server_port warning would otherwise land in the captured JSON stream.
+	t.Setenv("BEADS_DOLT_SERVER_PORT", "3308")
 	t.Setenv("BEADS_DOLT_PORT", "")
 	t.Setenv("BEADS_DOLT_SERVER_HOST", "")
 
