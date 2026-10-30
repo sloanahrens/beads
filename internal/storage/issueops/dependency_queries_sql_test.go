@@ -88,26 +88,42 @@ func TestReverseDependentsBlocksInfoSQL(t *testing.T) {
 	}
 }
 
-// predicateRegion returns the filters of an already whitespace-normalized
-// query: everything after its last WHERE, minus any trailing GROUP BY.
-func predicateRegion(normalized string) string {
-	const where = " WHERE "
-	at := strings.LastIndex(normalized, where)
-	if at < 0 {
-		return ""
+// TestReverseDependentsNewlyUnblockedByCloseSQL pins the close-unblocks
+// candidate read: one SELECT per typed target column, UNION ALL'd, each with a
+// bare equality on that column and the blocks type filter.
+func TestReverseDependentsNewlyUnblockedByCloseSQL(t *testing.T) {
+	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		t.Run(depTable, func(t *testing.T) {
+			got := normalizeSQLSpace(newlyUnblockedCandidateSQL(depTable))
+
+			branches := strings.Split(got, " UNION ALL ")
+			if len(branches) != len(typedTargetColumns) {
+				t.Fatalf("candidate read has %d branches, want one per typed target column (%d):\n%s",
+					len(branches), len(typedTargetColumns), got)
+			}
+			for i, col := range typedTargetColumns {
+				want := "SELECT issue_id FROM " + depTable + " WHERE " + col + " = ? AND type = 'blocks'"
+				if branches[i] != want {
+					t.Errorf("branch %d:\n got: %s\nwant: %s", i, branches[i], want)
+				}
+			}
+			// PLAN GUARD: Dolt plans the per-column OR of target predicates as a
+			// full table scan (be-1jdi), so the branches must never collapse back
+			// into one OR'd predicate.
+			if strings.Contains(got, " OR ") {
+				t.Errorf("candidate read ORs target predicates instead of UNION ALL branches:\n%s", got)
+			}
+			if strings.Contains(got, "COALESCE(") {
+				t.Errorf("candidate read predicates on the COALESCE target:\n%s", got)
+			}
+		})
 	}
-	region := normalized[at+len(where):]
-	if group := strings.LastIndex(region, " GROUP BY "); group >= 0 {
-		region = region[:group]
-	}
-	return region
 }
 
-// TestReverseDependentsNewlyUnblockedByCloseSQL drives the production
-// newly-unblocked read (the candidates a close can unblock) and pins its
-// predicate: one bare typed-column equality per target column, no COALESCE, with
-// the blocks type filter and the issue_id projection kept.
-func TestReverseDependentsNewlyUnblockedByCloseSQL(t *testing.T) {
+// TestReverseDependentsNewlyUnblockedByClose drives the production close read
+// and pins that it emits that per-column query and binds the closed id once per
+// branch.
+func TestReverseDependentsNewlyUnblockedByClose(t *testing.T) {
 	const closedID = "bd-closed"
 
 	tx, mock := newBindCheckedDB(t)
@@ -134,24 +150,9 @@ func TestReverseDependentsNewlyUnblockedByCloseSQL(t *testing.T) {
 
 	for i, depTable := range []string{"dependencies", "wisp_dependencies"} {
 		got := normalizeSQLSpace(rec.queries[i])
-
-		if !strings.HasPrefix(got, "SELECT issue_id FROM "+depTable+" WHERE ") {
-			t.Errorf("candidate projection changed:\n got: %s\nwant: SELECT issue_id FROM %s WHERE ...", got, depTable)
-		}
-		where := predicateRegion(got)
-		if where == "" {
-			t.Fatalf("%s candidate read has no WHERE clause:\n%s", depTable, got)
-		}
-		if strings.Contains(where, "COALESCE") {
-			t.Errorf("%s WHERE still predicates on the COALESCE target:\n%s", depTable, got)
-		}
-		for _, col := range typedTargetColumns {
-			if want := col + " = ?"; !strings.Contains(where, want) {
-				t.Errorf("%s WHERE does not seek the closed id by %q:\n%s", depTable, want, got)
-			}
-		}
-		if !strings.Contains(where, "type = 'blocks'") {
-			t.Errorf("%s WHERE dropped the blocks type filter:\n%s", depTable, got)
+		want := normalizeSQLSpace(newlyUnblockedCandidateSQL(depTable))
+		if got != want {
+			t.Errorf("%s candidate read:\n got: %s\nwant: %s", depTable, got, want)
 		}
 	}
 }

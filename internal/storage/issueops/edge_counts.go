@@ -204,6 +204,9 @@ func buildEdgeCountQuery(depTable, sourceTable string, batchSize int, request pu
 	// projection and GROUP BY keep spelling the target out as the COALESCE
 	// expression (see the note above: inside an aggregate the analyzer cannot
 	// resolve the STORED depends_on_id).
+	// The UNION ALL relies on ck_dep_one_target / ck_wisp_dep_one_target: each
+	// row has exactly one non-NULL target column, so it matches exactly one
+	// branch and cannot be counted twice.
 	anchorExpr := depTargetExpr("d")
 	targetScan := sqlbuild.DepTargetSelectSQL(depTable,
 		"issue_id, depends_on_issue_id, depends_on_wisp_id, depends_on_external, type",

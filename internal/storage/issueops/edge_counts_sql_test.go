@@ -143,11 +143,14 @@ func TestEdgeCountsInboundSQLSeeksTypedTargets(t *testing.T) {
 					t.Errorf("GROUP BY changed for %s:\n got: %s\nwant suffix: %s", plane.dependencies, got, wantGroupBy)
 				}
 
-				// Only the projection and the GROUP BY may resolve the target as
-				// a COALESCE; every WHERE seeks a bare typed column.
-				if n := strings.Count(got, "COALESCE("); n != 2 {
-					t.Errorf("%s has %d COALESCE occurrences, want 2 (projection and GROUP BY only):\n%s",
-						plane.dependencies, n, got)
+				// Property: the target is resolved as an expression in exactly the
+				// two pinned places (projection and GROUP BY); no filter or join
+				// key anywhere else may spell it as a COALESCE.
+				rest := strings.ReplaceAll(got, wantSelect, "")
+				rest = strings.ReplaceAll(rest, wantGroupBy, "")
+				if strings.Contains(rest, "COALESCE") {
+					t.Errorf("%s resolves the target as COALESCE outside the projection and GROUP BY:\n%s",
+						plane.dependencies, got)
 				}
 				if where := outerFilters(got); strings.Contains(where, "COALESCE") {
 					t.Errorf("%s WHERE still predicates on the COALESCE target:\n%s", plane.dependencies, got)
