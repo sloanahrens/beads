@@ -81,17 +81,14 @@ func TestBackupStatusOmitsUnsupportedDatabaseSize(t *testing.T) {
 		if stderr != "" {
 			t.Errorf("stderr = %q, want empty", stderr)
 		}
-		response := backupStatusJSONDocument(t, stdout)
-		if _, ok := response["data"]; ok {
-			t.Errorf("default --json output nests the report under data; the wrapper only nests it under BD_JSON_ENVELOPE=1: %s", stdout)
-		}
-		if _, ok := response["database_size"]; ok {
+		report := backupStatusEnvelopeReport(t, backupStatusJSONDocument(t, stdout), stdout)
+		if _, ok := report["database_size"]; ok {
 			t.Errorf("database_size should be omitted: %s", stdout)
 		}
-		if _, ok := response["backup"]; !ok {
+		if _, ok := report["backup"]; !ok {
 			t.Errorf("backup status missing backup field: %s", stdout)
 		}
-		if _, ok := response["dolt"]; !ok {
+		if _, ok := report["dolt"]; !ok {
 			t.Errorf("backup status missing dolt field: %s", stdout)
 		}
 	})
@@ -132,30 +129,9 @@ func TestBackupStatusIncludesAvailableDatabaseSize(t *testing.T) {
 		if stderr != "" {
 			t.Errorf("stderr = %q, want empty", stderr)
 		}
-		// Outside BD_JSON_ENVELOPE the wrapper flattens the report and puts
-		// schema_version at the top, so the fields sit beside it. Pinning that
-		// whole shape keeps the assertion honest: the hand-rolled marshal this
-		// branch replaced carried no schema_version at all.
-		document := backupStatusJSONDocument(t, stdout)
-		if _, ok := document["data"]; ok {
-			t.Errorf("default --json output nests the report under data; the wrapper only nests it under BD_JSON_ENVELOPE=1: %s", stdout)
-		}
-		assertDatabaseSizeBytes(t, document, 1536, stdout)
-	})
-
-	t.Run("json envelope", func(t *testing.T) {
-		t.Setenv("BD_JSON_ENVELOPE", "1")
-
-		cmd := newBackupStatusTestRoot(sizeDatabase)
-		cmd.SetArgs([]string{"backup", "status", "--json"})
-		stdout, stderr, err := executeBackupStatusCommand(t, cmd)
-		if err != nil {
-			t.Fatalf("backup status: %v", err)
-		}
-		if stderr != "" {
-			t.Errorf("stderr = %q, want empty", stderr)
-		}
-		// With the envelope on, the report sits in data and nowhere else.
+		// The report sits under data, beside the schema_version the wrapper
+		// stamps on every --json document. A hand-rolled marshal would carry
+		// neither, so the envelope check fails by name when it is bypassed.
 		document := backupStatusJSONDocument(t, stdout)
 		if _, ok := document["database_size"]; ok {
 			t.Errorf("database_size sits at the top level beside the envelope; it belongs under data: %s", stdout)
@@ -228,9 +204,9 @@ func TestBackupStatusJSONKeepsMachineModeShape(t *testing.T) {
 // backupStatusJSONDocument decodes one `backup status --json` document and
 // asserts the wrapper contract every --json command shares: a top-level
 // schema_version equal to JSONSchemaVersion. The hand-rolled marshal this
-// branch replaced carried none, so a regression fails here by name. The shape
-// of the report itself is left to the caller: the wrapper flattens it outside
-// BD_JSON_ENVELOPE and nests it under data when the envelope is on.
+// branch replaced carried none, so a regression fails here by name. The
+// report itself sits under data; the caller reads it through
+// backupStatusEnvelopeReport.
 func backupStatusJSONDocument(t *testing.T, stdout string) map[string]json.RawMessage {
 	t.Helper()
 
@@ -253,8 +229,7 @@ func backupStatusJSONDocument(t *testing.T, stdout string) map[string]json.RawMe
 }
 
 // backupStatusEnvelopeReport returns the "data" object of an envelope document
-// and fails when the output is not the nested envelope, so a caller that
-// expects BD_JSON_ENVELOPE=1 shape cannot silently accept the flat one.
+// and fails when the report is not nested under data.
 func backupStatusEnvelopeReport(t *testing.T, document map[string]json.RawMessage, stdout string) map[string]json.RawMessage {
 	t.Helper()
 
