@@ -6,7 +6,6 @@
 package protocol
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -29,9 +28,8 @@ func TestJSONContract_ListOutputIsValidJSON(t *testing.T) {
 // includes all required issue fields, including the relational counts that
 // stand in for the opt-in comment and dependent payloads.
 //
-// schema_version is deliberately NOT required here: show is an array-returning
-// command (see TestJSONContract_ShowOutputIsArray), and wrapWithSchemaVersion
-// only injects the field into object-shaped output.
+// The issue fields are checked on the elements of the envelope's data (see
+// TestJSONContract_ShowDataIsArray); schema_version belongs to the envelope.
 func TestJSONContract_ShowOutputHasRequiredFields(t *testing.T) {
 	t.Parallel()
 	w := newWorkspace(t)
@@ -186,15 +184,14 @@ func TestJSONContract_ShowCommentsOmittedFlag(t *testing.T) {
 	})
 }
 
-// TestJSONContract_ShowOutputIsArray pins the shape of bd show --json: a
-// top-level JSON array with one element per requested ID, NOT a schema_version
-// envelope. This is what the golden corpus commits (CATALOG.md: show =
-// "array-of-one") and what wrapWithSchemaVersion does with a slice — it returns
-// it bare, injecting schema_version only into object output.
+// TestJSONContract_ShowDataIsArray pins the shape of bd show --json: the
+// schema_version envelope whose data is a JSON array with one element per
+// requested ID. The elements are bare issues: schema_version lives on the
+// envelope, not on each item.
 //
 // The shape is load-bearing for every consumer that parses show --json, so a
 // change here is a breaking wire change, not a cleanup.
-func TestJSONContract_ShowOutputIsArray(t *testing.T) {
+func TestJSONContract_ShowDataIsArray(t *testing.T) {
 	t.Parallel()
 	w := newWorkspace(t)
 	id1 := w.create("Array shape one")
@@ -202,9 +199,10 @@ func TestJSONContract_ShowOutputIsArray(t *testing.T) {
 
 	out := w.run("show", id1, id2, "--json")
 
-	var arr []map[string]any
-	if err := json.Unmarshal([]byte(out), &arr); err != nil {
-		t.Fatalf("bd show --json is not a top-level JSON array: %v\nOutput:\n%s", err, out)
+	env, arr := parseEnvelope(t, out)
+	assertSchemaVersion(t, env, "bd show --json")
+	if _, ok := env["data"].([]any); !ok {
+		t.Fatalf("bd show --json data is not a JSON array: %T\nOutput:\n%s", env["data"], out)
 	}
 	if len(arr) != 2 {
 		t.Fatalf("bd show <id1> <id2> --json returned %d items, want 2\nOutput:\n%s", len(arr), out)
@@ -215,7 +213,7 @@ func TestJSONContract_ShowOutputIsArray(t *testing.T) {
 		id, _ := item["id"].(string)
 		gotIDs = append(gotIDs, id)
 		if _, ok := item["schema_version"]; ok {
-			t.Errorf("bd show --json item %s carries schema_version; array-returning commands do not", id)
+			t.Errorf("bd show --json item %s carries schema_version; only the envelope does", id)
 		}
 	}
 	requireStringSetEqual(t, gotIDs, []string{id1, id2}, "bd show <id1> <id2> --json ids")
@@ -228,9 +226,9 @@ func TestJSONContract_ReadyOutputIsValidJSON(t *testing.T) {
 	w := newWorkspace(t)
 
 	out := w.run("ready", "--json")
-	var arr []map[string]any
-	if err := json.Unmarshal([]byte(out), &arr); err != nil {
-		t.Fatalf("bd ready --json produced invalid JSON: %v\nOutput:\n%s", err, out)
+	env, _ := parseEnvelope(t, out)
+	if _, ok := env["data"].([]any); !ok {
+		t.Fatalf("bd ready --json data is not a JSON array: %T\nOutput:\n%s", env["data"], out)
 	}
 }
 
@@ -242,12 +240,13 @@ func TestJSONContract_CreateOutputHasID(t *testing.T) {
 
 	out := w.run("create", "Create contract test", "--description=test", "--json")
 
-	var issue map[string]any
-	if err := json.Unmarshal([]byte(out), &issue); err != nil {
-		t.Fatalf("bd create --json produced invalid JSON: %v\nOutput:\n%s", err, out)
+	env, items := parseEnvelope(t, out)
+	if len(items) != 1 {
+		t.Fatalf("bd create --json data has %d objects, want 1\nOutput:\n%s", len(items), out)
 	}
+	issue := items[0]
 
-	assertSchemaVersion(t, issue, "bd create --json")
+	assertSchemaVersion(t, env, "bd create --json")
 	if _, ok := issue["id"]; !ok {
 		t.Error("bd create --json output missing 'id' field")
 	}
@@ -268,29 +267,13 @@ func TestJSONContract_ErrorOutputIsValidJSON(t *testing.T) {
 		return // Empty is acceptable for errors
 	}
 
-	// Try to parse as JSON object
-	var errObj map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &errObj); err != nil {
-		// Try each line — error JSON may be mixed with other stderr output
-		for _, line := range strings.Split(trimmed, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var lineObj map[string]any
-			if json.Unmarshal([]byte(line), &lineObj) == nil {
-				if _, hasError := lineObj["error"]; hasError {
-					assertSchemaVersion(t, lineObj, "bd error JSON line")
-					return
-				}
-			}
-		}
-		t.Logf("Note: error output not fully JSON — this is acceptable for some error paths")
-	} else {
-		if _, hasError := errObj["error"]; hasError {
-			assertSchemaVersion(t, errObj, "bd show error --json")
-		}
+	// The error object sits under the envelope's data; jsonErrorFrom finds it
+	// among any other stderr lines and lifts schema_version from the envelope.
+	if errObj, ok := jsonErrorFrom(t, trimmed); ok {
+		assertSchemaVersion(t, errObj, "bd show error --json")
+		return
 	}
+	t.Logf("Note: error output not fully JSON — this is acceptable for some error paths")
 }
 
 // TestJSONContract_CloseOutputHasStatus verifies bd close --json returns
@@ -369,11 +352,12 @@ func TestJSONContract_PingOutputIsValidJSON(t *testing.T) {
 	w := newWorkspace(t)
 
 	out := w.run("ping", "--json")
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(out), &obj); err != nil {
-		t.Fatalf("bd ping --json produced invalid JSON: %v\nOutput:\n%s", err, out)
+	env, items := parseEnvelope(t, out)
+	if len(items) != 1 {
+		t.Fatalf("bd ping --json data has %d objects, want 1\nOutput:\n%s", len(items), out)
 	}
-	assertSchemaVersion(t, obj, "bd ping --json")
+	obj := items[0]
+	assertSchemaVersion(t, env, "bd ping --json")
 	if status, ok := obj["status"].(string); !ok || status != "ok" {
 		t.Errorf("bd ping --json status = %v, want ok", obj["status"])
 	}
@@ -383,9 +367,7 @@ func TestJSONContract_PingOutputIsValidJSON(t *testing.T) {
 }
 
 // TestJSONContract_SchemaVersionPresent verifies that schema_version is
-// present in object-returning --json commands (create, ping).
-// Array-returning commands (list, ready, show) do not include schema_version —
-// see TestJSONContract_ShowOutputIsArray.
+// present on the envelope of --json commands (create, ping).
 func TestJSONContract_SchemaVersionPresent(t *testing.T) {
 	t.Parallel()
 	w := newWorkspace(t)
@@ -401,12 +383,8 @@ func TestJSONContract_SchemaVersionPresent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out := w.run(tt.args...)
-			var obj map[string]any
-			if err := json.Unmarshal([]byte(out), &obj); err != nil {
-				t.Fatalf("bd %s produced invalid JSON: %v\nOutput:\n%s",
-					tt.name, err, out)
-			}
-			assertSchemaVersion(t, obj, "bd "+tt.name+" --json")
+			env, _ := parseEnvelope(t, out)
+			assertSchemaVersion(t, env, "bd "+tt.name+" --json")
 		})
 	}
 }

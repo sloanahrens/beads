@@ -583,32 +583,72 @@ func assertFieldPrefix(t *testing.T, issue map[string]any, key, prefix string) {
 	}
 }
 
-// parseJSONOutput handles schema-versioned envelopes, JSON arrays, and JSONL.
-//
-// Schema-versioned output wraps arrays as {"schema_version": N, "items": [...]}.
-// Object output injects schema_version as a top-level field.
+// parseEnvelope decodes bd --json stdout, which is always
+// {"schema_version": N, "data": ...}, and returns the whole envelope (for the
+// tests that check schema_version) and data as a list: an array stays an array,
+// an object becomes one element. It fails the test when output is not an
+// envelope.
+func parseEnvelope(t *testing.T, output string) (map[string]any, []map[string]any) {
+	t.Helper()
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
+		t.Fatalf("bd --json output is not a JSON object: %v\nOutput:\n%s", err, output)
+	}
+	data, ok := envelope["data"]
+	if !ok {
+		t.Fatalf("bd --json output has no \"data\" field:\n%s", output)
+	}
+	items, err := envelopeElements(data)
+	if err != nil {
+		t.Fatalf("bd --json output: %v\nOutput:\n%s", err, output)
+	}
+	return envelope, items
+}
+
+// envelopeElements returns data as a list of objects: an array of objects
+// yields its elements, an object yields itself, and null yields nothing. Any
+// other shape is an error, so a reader never mistakes a new shape for "no
+// results".
+func envelopeElements(data any) ([]map[string]any, error) {
+	switch v := data.(type) {
+	case nil:
+		return nil, nil
+	case []any:
+		result := make([]map[string]any, 0, len(v))
+		for i, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("data[%d] is %T, want an object", i, item)
+			}
+			result = append(result, m)
+		}
+		return result, nil
+	case map[string]any:
+		return []map[string]any{v}, nil
+	}
+	return nil, fmt.Errorf("data is %T, want an array of objects or an object", data)
+}
+
+// parseJSONOutput returns the objects in bd --json stdout. It unwraps the
+// {"schema_version": N, "data": ...} envelope; bare arrays and JSONL (bd export)
+// are still read for the tests that parse them.
 func parseJSONOutput(t *testing.T, output string) []map[string]any {
 	t.Helper()
 
-	// Try schema-versioned envelope first
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(output), &envelope); err == nil {
-		if items, ok := envelope["items"]; ok {
-			if arr, ok := items.([]any); ok {
-				var result []map[string]any
-				for _, item := range arr {
-					if m, ok := item.(map[string]any); ok {
-						result = append(result, m)
-					}
-				}
-				return result
+		if data, ok := envelope["data"]; ok {
+			items, err := envelopeElements(data)
+			if err != nil {
+				t.Fatalf("bd --json output: %v\nOutput:\n%s", err, output)
 			}
+			return items
 		}
-		// Single object (e.g. bd show --json, bd create --json)
+		// Single object without an envelope.
 		return []map[string]any{envelope}
 	}
 
-	// Try JSON array (legacy, pre-schema_version)
+	// Try a bare JSON array
 	var arr []map[string]any
 	if err := json.Unmarshal([]byte(output), &arr); err == nil {
 		return arr

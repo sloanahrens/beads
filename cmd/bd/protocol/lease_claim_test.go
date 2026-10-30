@@ -418,7 +418,7 @@ func TestProtocol_GrantingReplicaRoundTripsJSONL(t *testing.T) {
 // stderr name the skipped issue id too (warnReplica), so a raw
 // strings.Contains on the combined stream reads a correctly-declined reclaim
 // as a reclamation. Only the JSON payload on stdout is the machine truth;
-// decode exactly one JSON value starting at the first brace so audit lines on
+// decode exactly one JSON envelope value starting at the first brace so audit lines on
 // either side of it are ignored.
 func reclaimedIDs(t *testing.T, out string) []string {
 	t.Helper()
@@ -427,15 +427,17 @@ func reclaimedIDs(t *testing.T, out string) []string {
 		t.Fatalf("no JSON object in reclaim output:\n%s", out)
 	}
 	var payload struct {
-		Reclaimed []struct {
-			ID string `json:"id"`
-		} `json:"reclaimed"`
+		Data struct {
+			Reclaimed []struct {
+				ID string `json:"id"`
+			} `json:"reclaimed"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(strings.NewReader(out[start:])).Decode(&payload); err != nil {
 		t.Fatalf("parse reclaim JSON: %v\n%s", err, out)
 	}
-	ids := make([]string, 0, len(payload.Reclaimed))
-	for _, r := range payload.Reclaimed {
+	ids := make([]string, 0, len(payload.Data.Reclaimed))
+	for _, r := range payload.Data.Reclaimed {
 		ids = append(ids, r.ID)
 	}
 	return ids
