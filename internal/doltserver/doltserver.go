@@ -20,12 +20,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/servercfg"
@@ -796,12 +798,45 @@ var portSources = []portSource{
 			if err != nil || metaCfg == nil || metaCfg.DoltServerPort <= 0 {
 				return 0, false
 			}
-			fmt.Fprintf(os.Stderr, "Warning: dolt_server_port in metadata.json is deprecated (can cause cross-project data leakage).\n")
-			fmt.Fprintf(os.Stderr, "  The port file (.beads/dolt-server.port) is now the primary source.\n")
-			fmt.Fprintf(os.Stderr, "  Remove dolt_server_port from .beads/metadata.json to silence this warning.\n")
+			emitDeprecatedMetadataPortWarning(os.Stderr, quietDeprecationNotices.Load())
 			return metaCfg.DoltServerPort, true
 		},
 	},
+}
+
+// quietDeprecationNotices suppresses the human-facing deprecation notices this
+// package writes to stderr. It is set once per process by QuietDeprecationNotices
+// when the caller's output is machine-readable: the CLI merges stdout and stderr
+// into one JSON document for a `--json` consumer, and three lines of prose in
+// the middle of it make the document unparseable (be-g9x7).
+//
+// The switch is package state rather than a DefaultConfig parameter because the
+// sink is the process's own stderr: a caller passing a writer would have to
+// thread it through the portSources chain to every DefaultConfig call site, and
+// the notice is emitted deep inside a resolver that callers do not reach. The
+// one reader is the metadata.json arm of portSources; the one writer is the
+// setter below.
+var quietDeprecationNotices atomic.Bool
+
+// QuietDeprecationNotices sets whether this process suppresses deprecation
+// notices because its output is consumed by a machine. Text mode leaves it
+// false, so the notice keeps firing for every scripted, agent and daemon text
+// run exactly as before.
+func QuietDeprecationNotices(quiet bool) {
+	quietDeprecationNotices.Store(quiet)
+}
+
+// emitDeprecatedMetadataPortWarning writes the metadata.json dolt_server_port
+// deprecation notice to w unless quiet. Both inputs are parameters so the
+// notice can be tested against a buffer without redirecting the process's
+// stderr, and so the only package state involved is quietDeprecationNotices.
+func emitDeprecatedMetadataPortWarning(w io.Writer, quiet bool) {
+	if quiet {
+		return
+	}
+	fmt.Fprintf(w, "Warning: dolt_server_port in metadata.json is deprecated (can cause cross-project data leakage).\n")
+	fmt.Fprintf(w, "  The port file (.beads/dolt-server.port) is now the primary source.\n")
+	fmt.Fprintf(w, "  Remove dolt_server_port from .beads/metadata.json to silence this warning.\n")
 }
 
 // PortSourceLabels returns the operator-facing description of each step in
