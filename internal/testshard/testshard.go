@@ -2,8 +2,8 @@
 // integration suite past the CI alarm can run as several jobs that each stay
 // under it (be-wr0k).
 //
-// A shard is named "i/n" (index i of n, both counted from 0 for i and from 1
-// for n): the selected tests are those whose name hashes to i modulo n. There
+// A shard is named "i/n" (index i counts from 0, and n is at least 1): the
+// selected tests are those whose name hashes to i modulo n. There
 // is no committed manifest to go stale, so a test added later lands in exactly
 // one shard without anyone updating a list; the cost is that the split is
 // balanced by count only, not by wall time. A caller reads the whole assignment
@@ -88,7 +88,7 @@ func parseNonNegative(s string) (int, error) {
 
 // Selects reports whether the test called name belongs to shard index of
 // count. The assignment is a FNV-32a hash of the name modulo count, so it is
-// stable across processes and independent of the names handed to it.
+// stable across processes and depends on no state but the name itself.
 //
 // Out-of-range arguments select nothing rather than panicking on the modulo.
 func Selects(name string, index, count int) bool {
@@ -110,10 +110,10 @@ func hashName(name string) uint32 {
 // helpers, benchmarks and fuzz targets that are not selectable by -test.run.
 //
 // A name is a test when it starts with "Test" and the next character is not a
-// lower-case letter, which is the go tool's own rule (cmd/go and
-// go/doc/comment agree): "Testing" and "Testhelper" are helpers, "Test_V1" and
-// "TestMain" are not. TestMain is dropped anyway because the go tool runs it
-// unconditionally, whatever -test.run says, so counting it in a shard would
+// lower-case letter, which is the rule the go tool applies when it decides what
+// to run (testing.isTest): "Testing" and "Testhelper" are helpers, "Test_V1"
+// is a test. TestMain is the exception, dropped here because the go tool runs
+// it unconditionally, whatever -test.run says, so counting it in a shard would
 // claim a selection the shard does not make.
 //
 // The signature is not checked. A function that looks like a test but takes

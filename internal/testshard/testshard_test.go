@@ -78,6 +78,7 @@ func TestTestNames(t *testing.T) {
 
 import "testing"
 
+func Test(t *testing.T) {}
 func TestAlpha(t *testing.T) {}
 func TestBeta(t *testing.T) {}
 func Testlower(t *testing.T) {}
@@ -117,7 +118,8 @@ func TestInNonTestFile(t *testing.T) {}
 	if err != nil {
 		t.Fatalf("TestNames() error = %v, want nil", err)
 	}
-	want := []string{"TestAlpha", "TestBeta", "TestGamma"}
+	// A bare "Test" is run by the go tool too, so it is listed first.
+	want := []string{"Test", "TestAlpha", "TestBeta", "TestGamma"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("TestNames() = %v, want %v", names, want)
 	}
@@ -132,6 +134,13 @@ func TestTestNamesReportsUnparsableFile(t *testing.T) {
 	names, err := TestNames(dir)
 	if err == nil {
 		t.Fatalf("TestNames() = %v, want an error for an unparsable test file", names)
+	}
+}
+
+func TestTestNamesReportsUnreadableDir(t *testing.T) {
+	names, err := TestNames(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatalf("TestNames() = %v, want an error for a directory that is not there", names)
 	}
 }
 
