@@ -439,6 +439,40 @@ func isPortAvailable(host string, port int) bool {
 	return true
 }
 
+// portProbeTimeout bounds the liveness dial in portAcceptsConnections. A
+// refused connection on localhost returns at once; the timeout only matters
+// for a host that silently drops packets, and it is deliberately short
+// because the probe runs on the port-resolution path of ordinary commands.
+const portProbeTimeout = 250 * time.Millisecond
+
+// portAcceptsConnections reports whether a server accepts a TCP connection on
+// host:port.
+//
+// It is the liveness signal behind be-60t: bd's own port file is only credible
+// bookkeeping while the server it names is still there, and auto-start must
+// not spawn a second server next to a configured one that is already
+// listening.
+//
+// The probe connection is closed through DrainAndCloseProbe so a dolt server
+// sees a clean FIN instead of the RST that aborts its MySQL handshake (see
+// probe.go). No MySQL greeting is required: the caller only needs to know
+// that something is listening, and a server still booting its SQL engine
+// accepts TCP before it can greet.
+func portAcceptsConnections(host string, port int) bool {
+	if port <= 0 {
+		return false
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), portProbeTimeout)
+	if err != nil {
+		return false
+	}
+	DrainAndCloseProbe(conn)
+	return true
+}
+
 // reclaimPort ensures an explicit (user-configured) port is available for use.
 // Only called for explicit ports (env var, config.yaml, metadata.json).
 // If the port is busy:
@@ -839,6 +873,26 @@ func emitDeprecatedMetadataPortWarning(w io.Writer, quiet bool) {
 	fmt.Fprintf(w, "  Remove dolt_server_port from .beads/metadata.json to silence this warning.\n")
 }
 
+// liveAuthoritativePort returns the port and source of the first authoritative
+// configured source (see PortSource.IsAuthoritative) whose port accepts a
+// connection, in precedence order. It exists for the dead-port-file
+// reconciliation in DefaultConfig (be-60t): only a source the user (or config
+// on the user's behalf) asserted can displace bd's own bookkeeping, and only
+// while a server is actually listening there.
+func liveAuthoritativePort(beadsDir, host string) (int, PortSource, bool) {
+	for _, src := range portSources {
+		if !src.source.IsAuthoritative() {
+			continue
+		}
+		port, ok := src.resolve(beadsDir)
+		if !ok || !portAcceptsConnections(host, port) {
+			continue
+		}
+		return port, src.source, true
+	}
+	return 0, PortSourceUnset, false
+}
+
 // PortSourceLabels returns the operator-facing description of each step in
 // the port-resolution precedence chain, in priority order.
 func PortSourceLabels() []string {
@@ -856,6 +910,11 @@ func PortSourceLabels() []string {
 //
 // The port file (dolt-server.port) is written by Start() with the actual
 // listening port, so already-running-server connections use the right port.
+//
+// A port-file entry outranks the YAML sources (GH#2372), but only while the
+// server it names is listening. A dead entry is bookkeeping left over from a
+// server that is gone, and it yields to an authoritative configured port with
+// a live listener (be-60t); see the reconciliation after the walk.
 func DefaultConfig(beadsDir string) *Config {
 	// In shared mode, use the shared server directory for port resolution
 	sharedMode := false
@@ -878,6 +937,23 @@ func DefaultConfig(beadsDir string) *Config {
 			cfg.PortSource = src.source
 			cfg.PortSharedServer = sharedMode
 			break
+		}
+	}
+
+	// be-60t: the port file is bd's own bookkeeping, so it only outranks a
+	// user-configured port while the server it names is still listening.
+	// After a reboot Dolt comes back on the configured port while the port
+	// file still names the ephemeral port of the server that is gone;
+	// resolving that corpse made bd dial a dead port and then auto-start a
+	// second server in a data directory holding none of the workspace's
+	// databases. When the port file is dead and a configured source has a
+	// live listener, the live configured port wins. When no configured port
+	// is live, the port file keeps its place: with nothing to prefer, the
+	// entry is still the best guess, and auto-start is free to reuse it.
+	if cfg.PortSource == PortSourcePortFile && !portAcceptsConnections(cfg.Host, cfg.Port) {
+		if port, source, ok := liveAuthoritativePort(beadsDir, cfg.Host); ok {
+			cfg.Port = port
+			cfg.PortSource = source
 		}
 	}
 
@@ -1044,12 +1120,26 @@ func EnsureRunningDetailed(beadsDir string) (port int, startedByUs bool, err err
 		return state.Port, false, nil
 	}
 
+	// be-60t: a configured port with a live listener is a server this
+	// workspace did not start (there is no PID file we own) — a
+	// systemd-managed Dolt, the town's Dolt on the configured dolt.port, or
+	// a server started for another workspace. Starting one next to it
+	// either fails on the busy port or, when the port file named a corpse,
+	// writes a fresh server into a data directory holding none of the
+	// workspace's databases. Attach to the live listener instead, before the
+	// mode checks, so an external server that is up is attached rather than
+	// reported unreachable and its auto-start suppressed.
+	cfg := DefaultConfig(beadsDir)
+	if cfg.Port > 0 && portAcceptsConnections(cfg.Host, cfg.Port) {
+		_ = EnsurePortFile(serverDir, cfg.Port)
+		return cfg.Port, false, nil
+	}
+
 	// If the server mode is External (explicit port in metadata.json,
 	// shared server mode, etc.), do not start a per-project server —
 	// it would conflict with the external one.
 	mode := ResolveServerMode(beadsDir)
 	if mode == ServerModeExternal {
-		cfg := DefaultConfig(beadsDir)
 		if host, ok := externalNonLocalhostHost(beadsDir); ok {
 			// Configured for a non-localhost external server:
 			// "bd dolt start" is not the right advice (GH#3518).
@@ -1071,7 +1161,6 @@ func EnsureRunningDetailed(beadsDir string) (port int, startedByUs bool, err err
 	// config.yaml or env, never spawn a server even if the caller
 	// somehow reached this point (e.g. stale AutoStart=true in config).
 	if IsAutoStartDisabled() {
-		cfg := DefaultConfig(beadsDir)
 		if host, ok := externalNonLocalhostHost(beadsDir); ok {
 			return 0, false, fmt.Errorf("Configured Dolt server at %s:%d is unreachable, and auto-start "+
 				"is disabled (dolt.auto-start: false in config.yaml or BEADS_DOLT_AUTO_START=0).\n\n"+
