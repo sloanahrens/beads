@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -266,39 +267,79 @@ func runHashIDBD(t *testing.T, bdPath, dir string, env map[string]string, args .
 func createHashIDBDIssue(t *testing.T, bdPath, dir, title string) string {
 	t.Helper()
 	out := runHashIDBD(t, bdPath, dir, nil, "create", title, "-t", "task", "-p", "1", "--json")
-	start := strings.Index(out, "{")
-	if start == -1 {
-		t.Fatalf("bd create --json printed no JSON object: %s", out)
-	}
-	id := hashIDFromCreateReply(out[start:])
+	id := hashIDFromCreateReply(out)
 	if id == "" {
 		t.Fatalf("bd create --json returned no id: %s", out)
 	}
 	return id
 }
 
-// hashIDFromCreateReply returns the id in a bd create --json reply, or "" if
-// there is none. Older bd prints the id at the top level; the plain envelope
-// and the five-key contract document print it under "data". Input that is not
-// a JSON object gives "".
-func hashIDFromCreateReply(reply string) string {
-	var top struct {
-		ID   string          `json:"id"`
+// bdReplyPayload returns the payload of a bd --json reply, starting at the first
+// '{' or '[' so leading log text is skipped. Older bd prints the payload bare:
+// an object for create, a top-level array for list. The plain envelope and the
+// five-key contract document print the same payload under "data". A bare
+// object has no "data" key, so the whole object is the payload. Input with no
+// JSON, or with an envelope that does not parse, is an error.
+func bdReplyPayload(reply string) (json.RawMessage, error) {
+	start := strings.IndexAny(reply, "{[")
+	if start == -1 {
+		return nil, fmt.Errorf("reply has no JSON object or array")
+	}
+	reply = reply[start:]
+	if reply[0] == '[' {
+		return json.RawMessage(reply), nil
+	}
+	var envelope struct {
 		Data json.RawMessage `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(reply), &top); err != nil {
+	if err := json.Unmarshal([]byte(reply), &envelope); err != nil {
+		return nil, err
+	}
+	if envelope.Data == nil {
+		return json.RawMessage(reply), nil
+	}
+	return envelope.Data, nil
+}
+
+// hashIDFromCreateReply returns the id in a bd create --json reply, or "" if
+// there is none. The id is the "id" of the payload from bdReplyPayload. Input
+// that does not parse gives "".
+func hashIDFromCreateReply(reply string) string {
+	payload, err := bdReplyPayload(reply)
+	if err != nil {
 		return ""
 	}
-	if top.ID != "" {
-		return top.ID
-	}
-	var data struct {
+	var issue struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(top.Data, &data); err != nil {
+	if err := json.Unmarshal(payload, &issue); err != nil {
 		return ""
 	}
-	return data.ID
+	return issue.ID
+}
+
+// hashIDsFromListReply returns the ids in a bd list --json reply. The payload
+// from bdReplyPayload must be an array of issues; any other payload, or input
+// that does not parse, is an error.
+func hashIDsFromListReply(reply string) ([]string, error) {
+	payload, err := bdReplyPayload(reply)
+	if err != nil {
+		return nil, err
+	}
+	if payload[0] != '[' {
+		return nil, fmt.Errorf("reply payload is not an array of issues: %s", payload)
+	}
+	var issues []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(payload, &issues); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		ids = append(ids, issue.ID)
+	}
+	return ids, nil
 }
 
 // TestHashIDFromCreateReply covers each reply shape bd create --json has printed.
@@ -347,19 +388,92 @@ func TestHashIDFromCreateReply(t *testing.T) {
 func listHashIDBDIssues(t *testing.T, bdPath, dir string) []string {
 	t.Helper()
 	out := runHashIDBD(t, bdPath, dir, map[string]string{"BD_NO_AUTO_IMPORT": "1"}, "list", "--json")
-	start := strings.Index(out, "[")
-	if start == -1 {
-		t.Fatalf("bd list --json printed no JSON array: %s", out)
-	}
-	var issues []struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(out[start:]), &issues); err != nil {
+	ids, err := hashIDsFromListReply(out)
+	if err != nil {
 		t.Fatalf("parse bd list output: %v\nOutput: %s", err, out)
 	}
-	ids := make([]string, 0, len(issues))
-	for _, issue := range issues {
-		ids = append(ids, issue.ID)
-	}
 	return ids
+}
+
+// TestHashIDsFromListReply covers each reply shape bd list --json has printed.
+func TestHashIDsFromListReply(t *testing.T) {
+	tests := []struct {
+		name    string
+		reply   string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:  "top-level array of two objects",
+			reply: `[{"id":"test-abc"},{"id":"test-def"}]`,
+			want:  []string{"test-abc", "test-def"},
+		},
+		{
+			name:  "plain envelope holding two objects",
+			reply: `{"data":[{"id":"test-abc"},{"id":"test-def"}],"schema_version":1}`,
+			want:  []string{"test-abc", "test-def"},
+		},
+		{
+			name:  "five-key contract document holding one object",
+			reply: `{"schema_version":1,"ok":true,"data":[{"id":"test-k7q"}],"error":null,"warnings":[]}`,
+			want:  []string{"test-k7q"},
+		},
+		{
+			name:  "empty top-level array",
+			reply: `[]`,
+			want:  []string{},
+		},
+		{
+			name:  "empty envelope data array",
+			reply: `{"data":[],"schema_version":1}`,
+			want:  []string{},
+		},
+		{
+			name:  "leading log text before the envelope",
+			reply: "warning: schema is old\n{\"data\":[{\"id\":\"test-abc\"}],\"schema_version\":1}",
+			want:  []string{"test-abc"},
+		},
+		{
+			name:    "bare object is not a list",
+			reply:   `{"id":"test-abc"}`,
+			wantErr: true,
+		},
+		{
+			name:    "envelope data is an object, not an array",
+			reply:   `{"data":{"id":"test-abc"},"schema_version":1}`,
+			wantErr: true,
+		},
+		{
+			name:    "envelope data is null",
+			reply:   `{"data":null,"schema_version":1}`,
+			wantErr: true,
+		},
+		{
+			name:    "no JSON at all",
+			reply:   `bd: not found`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid JSON",
+			reply:   `{"data":[{"id":"test-x"}`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := hashIDsFromListReply(tt.reply)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("hashIDsFromListReply(%s) = %v; want an error", tt.reply, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("hashIDsFromListReply(%s) error: %v", tt.reply, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("hashIDsFromListReply(%s) = %v; want %v", tt.reply, got, tt.want)
+			}
+		})
+	}
 }
