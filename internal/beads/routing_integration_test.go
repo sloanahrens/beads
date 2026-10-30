@@ -144,7 +144,7 @@ func TestMultiRepoEndToEnd(t *testing.T) {
 	}
 
 	// Initialize database
-	store, err := dolt.New(context.Background(), &dolt.Config{Path: beadsDir})
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: beadsDir, CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}

@@ -170,7 +170,7 @@ func TestLibraryIntegration(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	ctx := context.Background()
-	store, err := dolt.New(ctx, &dolt.Config{Path: filepath.Dir(dbPath)})
+	store, err := dolt.New(ctx, &dolt.Config{Path: filepath.Dir(dbPath), CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("dolt.New failed: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestBatchCreateIssues(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	ctx := context.Background()
-	store, err := dolt.New(ctx, &dolt.Config{Path: filepath.Dir(dbPath)})
+	store, err := dolt.New(ctx, &dolt.Config{Path: filepath.Dir(dbPath), CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("dolt.New failed: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestRoundTripIssue(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	ctx := context.Background()
-	store, err := dolt.New(ctx, &dolt.Config{Path: filepath.Dir(dbPath)})
+	store, err := dolt.New(ctx, &dolt.Config{Path: filepath.Dir(dbPath), CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("dolt.New failed: %v", err)
 	}
