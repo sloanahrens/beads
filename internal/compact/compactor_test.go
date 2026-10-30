@@ -18,7 +18,7 @@ func setupTestStorage(t *testing.T) *dolt.DoltStore {
 	t.Helper()
 	testutil.RequireDoltContainer(t)
 
-	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir()})
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir(), CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}
