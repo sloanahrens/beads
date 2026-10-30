@@ -246,16 +246,77 @@ func createHashIDBDIssue(t *testing.T, bdPath, dir, title string) string {
 	if start == -1 {
 		t.Fatalf("bd create --json printed no JSON object: %s", out)
 	}
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(out[start:]), &created); err != nil {
-		t.Fatalf("parse bd create output: %v\nOutput: %s", err, out)
-	}
-	if created.ID == "" {
+	id := hashIDFromCreateReply(out[start:])
+	if id == "" {
 		t.Fatalf("bd create --json returned no id: %s", out)
 	}
-	return created.ID
+	return id
+}
+
+// hashIDFromCreateReply returns the id in a bd create --json reply, or "" if
+// there is none. Older bd prints the id at the top level; the plain envelope
+// and the five-key contract document print it under "data". Input that is not
+// a JSON object gives "".
+func hashIDFromCreateReply(reply string) string {
+	var top struct {
+		ID   string          `json:"id"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(reply), &top); err != nil {
+		return ""
+	}
+	if top.ID != "" {
+		return top.ID
+	}
+	var data struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(top.Data, &data); err != nil {
+		return ""
+	}
+	return data.ID
+}
+
+// TestHashIDFromCreateReply covers each reply shape bd create --json has printed.
+func TestHashIDFromCreateReply(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply string
+		want  string
+	}{
+		{
+			name:  "top-level id",
+			reply: `{"id":"test-abc","title":"Reimport me"}`,
+			want:  "test-abc",
+		},
+		{
+			name:  "plain envelope",
+			reply: `{"data":{"id":"test-3xu","title":"Reimport me"},"schema_version":1}`,
+			want:  "test-3xu",
+		},
+		{
+			name:  "five-key contract document",
+			reply: `{"schema_version":1,"ok":true,"data":{"id":"test-k7q"},"error":null,"warnings":[]}`,
+			want:  "test-k7q",
+		},
+		{
+			name:  "empty object",
+			reply: `{}`,
+			want:  "",
+		},
+		{
+			name:  "malformed JSON",
+			reply: `{"data":{"id":"test-x`,
+			want:  "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hashIDFromCreateReply(tt.reply); got != tt.want {
+				t.Errorf("hashIDFromCreateReply(%s) = %q; want %q", tt.reply, got, tt.want)
+			}
+		})
+	}
 }
 
 // listHashIDBDIssues returns the ids of the issues bd lists in dir.
