@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/steveyegge/beads/internal/types"
@@ -39,8 +40,13 @@ func TestValidateCheck_AllClean(t *testing.T) {
 			t.Errorf("%s: status = %q, want %q (message: %s)", cr.check.Name, cr.check.Status, statusOK, cr.check.Message)
 		}
 	}
-	if len(checks) != 4 {
-		t.Errorf("Expected 4 checks, got %d", len(checks))
+	var gotNames []string
+	for _, cr := range checks {
+		gotNames = append(gotNames, cr.check.Name)
+	}
+	wantNames := []string{"Cross-Table Duplicates", "Duplicate Issues", "Orphaned Dependencies", "Test Pollution", "Git Conflicts"}
+	if !slices.Equal(gotNames, wantNames) {
+		t.Errorf("validate checks = %q, want %q", gotNames, wantNames)
 	}
 }
 
