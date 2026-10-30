@@ -486,6 +486,50 @@ func TestReclaimPort_NonDoltError_IncludesDiagnostics_GH3516(t *testing.T) {
 	}
 }
 
+// TestReclaimPort_UnknownListener_IncludesDiagnostics_GH3516 pins the same
+// diagnostics on the branch reclaimPort takes when the listener cannot be
+// identified. On a host without lsof, ss or netstat every busy port lands here,
+// and the message used to stop at the raw discovery command — losing the
+// "YOUR own Dolt instance" escape hatch exactly where it helps most.
+//
+// The lookup is injected so the branch is reached on any host: a PID is never
+// faked, and the identified-process branch keeps its own real-listener test.
+func TestReclaimPort_UnknownListener_IncludesDiagnostics_GH3516(t *testing.T) {
+	dir := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	occupiedPort := ln.Addr().(*net.TCPAddr).Port
+
+	noPID := func(int) int { return 0 }
+	noWait := func(time.Duration) {}
+	adoptPID, err := reclaimPortWith("127.0.0.1", occupiedPort, dir, noPID, noWait)
+	if err == nil {
+		t.Fatal("reclaimPortWith should fail when the listener cannot be identified")
+	}
+	if adoptPID != 0 {
+		t.Errorf("expected adoptPID=0 on error, got %d", adoptPID)
+	}
+	msg := err.Error()
+
+	if !strings.Contains(msg, "cannot identify the process") {
+		t.Errorf("error message missing the unidentified-listener wording\nfull msg: %s", msg)
+	}
+	for _, want := range []string{
+		fmt.Sprintf(portConflictHint, occupiedPort),
+		"YOUR own Dolt instance",
+		"BEADS_DOLT_SERVER_HOST",
+		"BEADS_DOLT_SERVER_PORT",
+		"bd dolt status",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error message missing %q\nfull msg: %s", want, msg)
+		}
+	}
+}
+
 // TestPortConflictDiagnostics_GH3516 unit-tests the diagnostic helper
 // directly. Makes the contract robust to wording changes in the
 // surrounding error format string — future edits to the wrapper
