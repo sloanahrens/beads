@@ -166,12 +166,20 @@ func TestBuildEdgeCountQueryResolvesTheTargetWithoutTheGeneratedColumn(t *testin
 }
 
 func TestEdgeCountArgsBindInPlaceholderOrder(t *testing.T) {
+	// An inbound count seeks each typed target column, so the batch binds once
+	// per branch before the type filter and then the status.
 	args := edgeCountArgs([]string{"a", "b"}, publicops.EdgeCountRequest{
 		Direction: publicops.EdgeDirectionIn,
 		Types:     []types.DependencyType{types.DepBlocks},
 		Status:    string(types.StatusOpen),
 	})
-	want := []any{"a", "b", string(types.DepBlocks), string(types.StatusOpen)}
+	want := []any{
+		"a", "b", // depends_on_issue_id
+		"a", "b", // depends_on_wisp_id
+		"a", "b", // depends_on_external
+		string(types.DepBlocks),
+		string(types.StatusOpen),
+	}
 	if len(args) != len(want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}

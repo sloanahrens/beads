@@ -557,7 +557,7 @@ func GetDependencyCountsInTx(ctx context.Context, tx DBTX, issueIDs []string) (m
 				FROM %s
 				WHERE %s AND type = 'blocks'
 				GROUP BY %s
-			`, DepTargetExpr, depTable, depTargetIn("", inClause), DepTargetExpr), args...)
+			`, DepTargetExpr, depTable, depTargetIn(inClause), DepTargetExpr), args...)
 			if err != nil {
 				if optionalBlockedTable(depTable) && isTableNotExistError(err) {
 					continue
@@ -850,10 +850,17 @@ func loadStatusByIDInTx(ctx context.Context, tx DBTX, ids []string) (map[string]
 func GetNewlyUnblockedByCloseInTx(ctx context.Context, tx DBTX, closedIssueID string) ([]*types.Issue, error) {
 	candidateSet := make(map[string]bool)
 	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		// The candidate read is keyed by ONE fixed target and filtered by type,
+		// so the per-column OR (depTargetEqualsOr) is the right form: it binds
+		// the closed id once per typed target column, and the type filter rides
+		// the (type, target) composite index on each disjunct. A UNION ALL of
+		// three seeks buys nothing here that the OR does not (see the doc
+		// comment on depTargetEqualsOr).
+		//nolint:gosec // G201: depTable is hardcoded and depTargetEqualsOr holds only ? placeholders.
 		rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
 			SELECT issue_id FROM %s
 			WHERE %s AND type = 'blocks'
-		`, depTable, depTargetEquals("")), closedIssueID)
+		`, depTable, depTargetEqualsOr()), closedIssueID, closedIssueID, closedIssueID)
 		if err != nil {
 			if optionalBlockedTable(depTable) && isTableNotExistError(err) {
 				continue

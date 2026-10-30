@@ -72,8 +72,13 @@ func depTargetEqualsOr() string {
 	return "(depends_on_issue_id = ? OR depends_on_wisp_id = ? OR depends_on_external = ?)"
 }
 
-func depTargetIn(alias, placeholders string) string {
-	return depTargetExpr(alias) + " IN (" + placeholders + ")"
+// depTargetIn is the COALESCE target expression matched against an IN list of
+// ? placeholders. It takes no table alias because every remaining caller reads
+// the dependency row unaliased; a target-keyed read over an aliased row should
+// use the per-column form instead (see depTargetEqualsOr and
+// sqlbuild.DepTargetSelectSQL), which no alias-qualified COALESCE can be.
+func depTargetIn(placeholders string) string {
+	return depTargetExpr("") + " IN (" + placeholders + ")"
 }
 
 // IsExternalDepTarget reports whether a dependency target is one this database

@@ -88,6 +88,74 @@ func TestReverseDependentsBlocksInfoSQL(t *testing.T) {
 	}
 }
 
+// predicateRegion returns the filters of an already whitespace-normalized
+// query: everything after its last WHERE, minus any trailing GROUP BY.
+func predicateRegion(normalized string) string {
+	const where = " WHERE "
+	at := strings.LastIndex(normalized, where)
+	if at < 0 {
+		return ""
+	}
+	region := normalized[at+len(where):]
+	if group := strings.LastIndex(region, " GROUP BY "); group >= 0 {
+		region = region[:group]
+	}
+	return region
+}
+
+// TestReverseDependentsNewlyUnblockedByCloseSQL drives the production
+// newly-unblocked read (the candidates a close can unblock) and pins its
+// predicate: one bare typed-column equality per target column, no COALESCE, with
+// the blocks type filter and the issue_id projection kept.
+func TestReverseDependentsNewlyUnblockedByCloseSQL(t *testing.T) {
+	const closedID = "bd-closed"
+
+	tx, mock := newBindCheckedDB(t)
+	rec := &recordingDBTX{DBTX: tx}
+	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		mock.ExpectQuery(regexp.QuoteMeta("FROM "+depTable+" WHERE")).
+			WithArgs(closedID, closedID, closedID).
+			WillReturnRows(sqlmock.NewRows([]string{"issue_id"}))
+	}
+
+	unblocked, err := GetNewlyUnblockedByCloseInTx(context.Background(), rec, closedID)
+	if err != nil {
+		t.Fatalf("GetNewlyUnblockedByCloseInTx: %v", err)
+	}
+	if len(unblocked) != 0 {
+		t.Fatalf("unblocked = %d issues, want none when no dependency rows matched", len(unblocked))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+	if n := len(rec.queries); n != 2 {
+		t.Fatalf("ran %d candidate queries, want one per dependency table", n)
+	}
+
+	for i, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		got := normalizeSQLSpace(rec.queries[i])
+
+		if !strings.HasPrefix(got, "SELECT issue_id FROM "+depTable+" WHERE ") {
+			t.Errorf("candidate projection changed:\n got: %s\nwant: SELECT issue_id FROM %s WHERE ...", got, depTable)
+		}
+		where := predicateRegion(got)
+		if where == "" {
+			t.Fatalf("%s candidate read has no WHERE clause:\n%s", depTable, got)
+		}
+		if strings.Contains(where, "COALESCE") {
+			t.Errorf("%s WHERE still predicates on the COALESCE target:\n%s", depTable, got)
+		}
+		for _, col := range typedTargetColumns {
+			if want := col + " = ?"; !strings.Contains(where, want) {
+				t.Errorf("%s WHERE does not seek the closed id by %q:\n%s", depTable, want, got)
+			}
+		}
+		if !strings.Contains(where, "type = 'blocks'") {
+			t.Errorf("%s WHERE dropped the blocks type filter:\n%s", depTable, got)
+		}
+	}
+}
+
 // bindCheckedDBTX fails any query whose ? placeholder count differs from the
 // number of bind arguments it is given. The driver would reject that too, but
 // sqlmock only compares the arguments it is told to expect, so this count check

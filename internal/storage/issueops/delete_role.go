@@ -202,7 +202,7 @@ func ExternalDependentsBySourceInTx(ctx context.Context, tx DBTX, ids []string, 
 		for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
 			rows, err := tx.QueryContext(ctx,
 				fmt.Sprintf(`SELECT %s AS depends_on_id, issue_id FROM %s WHERE %s`,
-					DepTargetExpr, depTable, depTargetIn("", inClause)),
+					DepTargetExpr, depTable, depTargetIn(inClause)),
 				args...)
 			if err != nil {
 				if optionalBlockedTable(depTable) && isTableNotExistError(err) {
@@ -267,7 +267,7 @@ func deleteNeighborsInTx(ctx context.Context, tx DBTX, ids []string) ([]*types.I
 		for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
 			rows, err := tx.QueryContext(ctx,
 				fmt.Sprintf(`SELECT issue_id, %s AS depends_on_id FROM %s WHERE issue_id IN (%s) OR %s`,
-					DepTargetExpr, depTable, inClause, depTargetIn("", inClause)),
+					DepTargetExpr, depTable, inClause, depTargetIn(inClause)),
 				doubled...)
 			if err != nil {
 				if optionalBlockedTable(depTable) && isTableNotExistError(err) {

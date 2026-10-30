@@ -246,7 +246,7 @@ func DeleteResolvedSetInTx(ctx context.Context, tx *sql.Tx, set DeletionSet, dry
 
 		for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
 			rows, err := tx.QueryContext(ctx,
-				fmt.Sprintf(`SELECT issue_id FROM %s WHERE %s`, depTable, depTargetIn("", batchInClause)),
+				fmt.Sprintf(`SELECT issue_id FROM %s WHERE %s`, depTable, depTargetIn(batchInClause)),
 				batchArgs...)
 			if err != nil {
 				if optionalBlockedTable(depTable) && isTableNotExistError(err) {
@@ -426,7 +426,7 @@ func FindAllDependentsInTx(ctx context.Context, tx DBTX, ids []string) (map[stri
 		inClause, args := buildSQLInClause(batch)
 		for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
 			rows, err := tx.QueryContext(ctx,
-				fmt.Sprintf(`SELECT issue_id FROM %s WHERE %s`, depTable, depTargetIn("", inClause)),
+				fmt.Sprintf(`SELECT issue_id FROM %s WHERE %s`, depTable, depTargetIn(inClause)),
 				args...)
 			if err != nil {
 				if optionalBlockedTable(depTable) && isTableNotExistError(err) {
