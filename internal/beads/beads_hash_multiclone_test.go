@@ -41,6 +41,11 @@ func hasDoltTestPort() bool {
 	return os.Getenv("BEADS_DOLT_PORT") != ""
 }
 
+// allowNewDatabase is what bd init asks of scripts that run it against a shared
+// test server already serving other databases (store.go: REFUSED: bd init would
+// create a new database).
+var allowNewDatabase = map[string]string{"BD_ALLOW_NEW_DATABASE": "1"}
+
 func requireHashIDIntegration(t *testing.T) string {
 	t.Helper()
 	if !hasDoltTestPort() {
@@ -171,13 +176,13 @@ func setupClone(t *testing.T, tmpDir, remoteDir, name, bdPath string) string {
 	copyFile(t, bdPath, filepath.Join(cloneDir, filepath.Base(bdCmd)))
 
 	if name == "A" {
-		runCmd(t, cloneDir, bdCmd, "init", "--quiet", "--prefix", "test")
+		runCmdWithEnv(t, cloneDir, allowNewDatabase, bdCmd, "init", "--quiet", "--prefix", "test")
 		runCmd(t, cloneDir, "git", "add", ".beads")
 		runCmd(t, cloneDir, "git", "commit", "--no-verify", "-m", "Initialize beads")
 		runCmd(t, cloneDir, "git", "push", "origin", "master")
 	} else {
 		runCmd(t, cloneDir, "git", "pull", "origin", "master")
-		runCmd(t, cloneDir, bdCmd, "init", "--quiet", "--prefix", "test")
+		runCmdWithEnv(t, cloneDir, allowNewDatabase, bdCmd, "init", "--quiet", "--prefix", "test")
 	}
 
 	return cloneDir
