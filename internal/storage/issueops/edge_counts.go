@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 	publicops "github.com/steveyegge/beads/issueops"
 )
@@ -177,45 +178,96 @@ func tallyEdgesInTx(ctx context.Context, tx DBTX, anchors []string, request publ
 // GMS analyzer can prune the base columns it derives from and then fail with
 // "column depends_on_id could not be found in any table in scope"
 // (dolt/counts.go says so at depTargetExpr). Every other aggregate over these
-// tables in this package resolves the target the same way.
+// tables in this package resolves the target the same way. That is why the
+// inbound projection and GROUP BY keep the COALESCE spelling; only the WHERE
+// moves to the typed columns.
 func buildEdgeCountQuery(depTable, sourceTable string, batchSize int, request publicops.EdgeCountRequest) string {
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", batchSize), ",")
 
 	typeClause, _ := buildDepTypeClause(request.Types)
 	if typeClause != "" {
-		typeClause = " AND d." + typeClause
+		typeClause = "d." + typeClause
 	}
 
 	if request.Direction == publicops.EdgeDirectionOut {
 		//nolint:gosec // G201: table names are hardcoded literals and the IN clause holds only ? placeholders.
 		return fmt.Sprintf(
-			"SELECT d.issue_id AS anchor, COUNT(*) AS n FROM %s d WHERE d.issue_id IN (%s)%s GROUP BY d.issue_id",
-			depTable, placeholders, typeClause)
+			"SELECT d.issue_id AS anchor, COUNT(*) AS n FROM %s d WHERE %s GROUP BY d.issue_id",
+			depTable, conjunction("d.issue_id IN ("+placeholders+")", typeClause))
 	}
 
+	// The inbound anchor IS the dependency's target, so the batch predicate has
+	// to name the typed target columns. It is the per-column UNION ALL of
+	// sqlbuild.DepTargetSelectSQL — one index seek per typed target column —
+	// rather than depTargetExpr(...) IN (...), whose COALESCE wrapper no plan
+	// can seek. The derived row still projects the three typed columns, so the
+	// projection and GROUP BY keep spelling the target out as the COALESCE
+	// expression (see the note above: inside an aggregate the analyzer cannot
+	// resolve the STORED depends_on_id).
+	// The UNION ALL relies on ck_dep_one_target / ck_wisp_dep_one_target: each
+	// row has exactly one non-NULL target column, so it matches exactly one
+	// branch and cannot be counted twice.
 	anchorExpr := depTargetExpr("d")
-	if request.Status == "" {
-		//nolint:gosec // G201: table names are hardcoded literals and the IN clause holds only ? placeholders.
-		return fmt.Sprintf(
-			"SELECT %s AS anchor, COUNT(*) AS n FROM %s d WHERE %s%s GROUP BY %s",
-			anchorExpr, depTable, depTargetIn("d", placeholders), typeClause, anchorExpr)
+	targetScan := sqlbuild.DepTargetSelectSQL(depTable,
+		"issue_id, depends_on_issue_id, depends_on_wisp_id, depends_on_external, type",
+		"%s IN ("+placeholders+")")
+
+	statusNarrow := ""
+	join := ""
+	if request.Status != "" {
+		// A status narrows by the DEPENDENT's row, which lives on the same plane
+		// as the edge: `dependencies` sources are durable issues,
+		// `wisp_dependencies` sources are wisps. An edge whose source row is gone
+		// joins to nothing and drops out, which the leaf doc states.
+		join = fmt.Sprintf(" JOIN %s s ON s.id = d.issue_id", sourceTable)
+		statusNarrow = "s.status = ?"
 	}
-	// A status narrows by the DEPENDENT's row, which lives on the same plane as
-	// the edge: `dependencies` sources are durable issues, `wisp_dependencies`
-	// sources are wisps. An edge whose source row is gone joins to nothing and
-	// drops out, which the leaf doc states.
+
 	//nolint:gosec // G201: table names are hardcoded literals and the IN clause holds only ? placeholders.
 	return fmt.Sprintf(
-		"SELECT %s AS anchor, COUNT(*) AS n FROM %s d JOIN %s s ON s.id = d.issue_id WHERE %s%s AND s.status = ? GROUP BY %s",
-		anchorExpr, depTable, sourceTable, depTargetIn("d", placeholders), typeClause, anchorExpr)
+		"SELECT %s AS anchor, COUNT(*) AS n FROM (%s) d%s%s GROUP BY %s",
+		anchorExpr, targetScan, join,
+		whereClause(conjunction(typeClause, statusNarrow)), anchorExpr)
+}
+
+// conjunction joins the non-empty predicates with AND, ignoring the empty ones
+// a request leaves unset.
+func conjunction(predicates ...string) string {
+	kept := make([]string, 0, len(predicates))
+	for _, predicate := range predicates {
+		if predicate != "" {
+			kept = append(kept, predicate)
+		}
+	}
+	return strings.Join(kept, " AND ")
+}
+
+// whereClause turns a conjunction into a WHERE clause, or nothing at all when
+// the conjunction is empty.
+func whereClause(predicate string) string {
+	if predicate == "" {
+		return ""
+	}
+	return " WHERE " + predicate
 }
 
 // edgeCountArgs binds the batch's anchor ids, then the type filter, then the
-// status — the order buildEdgeCountQuery emits its placeholders in.
+// status — the order buildEdgeCountQuery emits its placeholders in. An inbound
+// count binds the batch once per typed target branch, because its target
+// predicate is that many seeks.
 func edgeCountArgs(batch []string, request publicops.EdgeCountRequest) []any {
-	args := make([]any, 0, len(batch)+len(request.Types)+1)
-	for _, id := range batch {
-		args = append(args, id)
+	perBranch := make([]any, len(batch))
+	for i, id := range batch {
+		perBranch[i] = id
+	}
+	args := make([]any, 0, len(batch)*len(sqlbuild.DepTargetColumns)+len(request.Types)+1)
+	if request.Direction == publicops.EdgeDirectionOut {
+		args = append(args, perBranch...)
+	} else {
+		// An inbound count's target predicate is one seek per typed target
+		// column (sqlbuild.DepTargetSelectSQL), so the batch binds once per
+		// branch, in DepTargetColumns order.
+		args = append(args, sqlbuild.DepTargetBranchArgs(perBranch...)...)
 	}
 	_, typeArgs := buildDepTypeClause(request.Types)
 	args = append(args, typeArgs...)

@@ -63,17 +63,19 @@ func depTargetEquals(alias string) string {
 // (go-mysql-server) the optimizer does not index-merge an OR of distinct columns,
 // so the un-ordered COUNT still scans, but the COALESCE form never had any index
 // path either; the type-filtered path seeks the (type, target) composite on both.
-// Use it for target-keyed reads of a single fixed target.
-//
-// Where a bare equality per column IS wanted, sqlbuild.DepTargetSelectSQL spells
-// the same three disjuncts as a UNION ALL, which gives each branch its own index
-// seek on both planners instead of one OR neither can merge.
+// Its existing callers keep it, but a NEW site must not adopt it: be-1jdi
+// measured Dolt planning the type-filtered form as a full table scan. Spell the
+// predicate as the per-column UNION ALL of sqlbuild.DepTargetSelectSQL instead,
+// which gives each branch its own index seek on both planners.
 func depTargetEqualsOr() string {
 	return "(depends_on_issue_id = ? OR depends_on_wisp_id = ? OR depends_on_external = ?)"
 }
 
-func depTargetIn(alias, placeholders string) string {
-	return depTargetExpr(alias) + " IN (" + placeholders + ")"
+// depTargetIn returns the COALESCE target expression matched against an IN list
+// of ? placeholders, for the unaliased reads that still use it (the delete and
+// cascade paths and GetDependencyCountsInTx).
+func depTargetIn(placeholders string) string {
+	return depTargetExpr("") + " IN (" + placeholders + ")"
 }
 
 // IsExternalDepTarget reports whether a dependency target is one this database

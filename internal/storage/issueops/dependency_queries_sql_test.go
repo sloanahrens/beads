@@ -88,6 +88,75 @@ func TestReverseDependentsBlocksInfoSQL(t *testing.T) {
 	}
 }
 
+// TestReverseDependentsNewlyUnblockedByCloseSQL pins the close-unblocks
+// candidate read: one SELECT per typed target column, UNION ALL'd, each with a
+// bare equality on that column and the blocks type filter.
+func TestReverseDependentsNewlyUnblockedByCloseSQL(t *testing.T) {
+	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		t.Run(depTable, func(t *testing.T) {
+			got := normalizeSQLSpace(newlyUnblockedCandidateSQL(depTable))
+
+			branches := strings.Split(got, " UNION ALL ")
+			if len(branches) != len(typedTargetColumns) {
+				t.Fatalf("candidate read has %d branches, want one per typed target column (%d):\n%s",
+					len(branches), len(typedTargetColumns), got)
+			}
+			for i, col := range typedTargetColumns {
+				want := "SELECT issue_id FROM " + depTable + " WHERE " + col + " = ? AND type = 'blocks'"
+				if branches[i] != want {
+					t.Errorf("branch %d:\n got: %s\nwant: %s", i, branches[i], want)
+				}
+			}
+			// PLAN GUARD: Dolt plans the per-column OR of target predicates as a
+			// full table scan (be-1jdi), so the branches must never collapse back
+			// into one OR'd predicate.
+			if strings.Contains(got, " OR ") {
+				t.Errorf("candidate read ORs target predicates instead of UNION ALL branches:\n%s", got)
+			}
+			if strings.Contains(got, "COALESCE(") {
+				t.Errorf("candidate read predicates on the COALESCE target:\n%s", got)
+			}
+		})
+	}
+}
+
+// TestReverseDependentsNewlyUnblockedByClose drives the production close read
+// and pins that it emits that per-column query and binds the closed id once per
+// branch.
+func TestReverseDependentsNewlyUnblockedByClose(t *testing.T) {
+	const closedID = "bd-closed"
+
+	tx, mock := newBindCheckedDB(t)
+	rec := &recordingDBTX{DBTX: tx}
+	for _, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		mock.ExpectQuery(regexp.QuoteMeta("FROM "+depTable+" WHERE")).
+			WithArgs(closedID, closedID, closedID).
+			WillReturnRows(sqlmock.NewRows([]string{"issue_id"}))
+	}
+
+	unblocked, err := GetNewlyUnblockedByCloseInTx(context.Background(), rec, closedID)
+	if err != nil {
+		t.Fatalf("GetNewlyUnblockedByCloseInTx: %v", err)
+	}
+	if len(unblocked) != 0 {
+		t.Fatalf("unblocked = %d issues, want none when no dependency rows matched", len(unblocked))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+	if n := len(rec.queries); n != 2 {
+		t.Fatalf("ran %d candidate queries, want one per dependency table", n)
+	}
+
+	for i, depTable := range []string{"dependencies", "wisp_dependencies"} {
+		got := normalizeSQLSpace(rec.queries[i])
+		want := normalizeSQLSpace(newlyUnblockedCandidateSQL(depTable))
+		if got != want {
+			t.Errorf("%s candidate read:\n got: %s\nwant: %s", depTable, got, want)
+		}
+	}
+}
+
 // bindCheckedDBTX fails any query whose ? placeholder count differs from the
 // number of bind arguments it is given. The driver would reject that too, but
 // sqlmock only compares the arguments it is told to expect, so this count check
