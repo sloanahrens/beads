@@ -23,6 +23,10 @@ func TestCreateCommandRejectsExtraPositionalArguments(t *testing.T) {
 }
 
 func TestCreateCommandAllowsOnePositionalArgument(t *testing.T) {
+	if err := resetCommandTreeFlags(rootCmd); err != nil {
+		t.Fatalf("reset command flags: %v", err)
+	}
+	t.Cleanup(func() { _ = resetCommandTreeFlags(rootCmd) })
 	if err := createCmd.Args(createCmd, []string{"title"}); err != nil {
 		t.Fatalf("expected create to accept a single title argument, got: %v", err)
 	}
