@@ -261,10 +261,6 @@ type Step struct {
 	// Close the gate issue (bd close bd-xxx.gate-stepid) to unblock.
 	Gate *Gate `json:"gate,omitempty"`
 
-	// Loop defines iteration for this step.
-	// When set, the step becomes a container that expands its body.
-	Loop *LoopSpec `json:"loop,omitempty"`
-
 	// OnComplete defines actions triggered when this step completes.
 	// Used for runtime expansion over step output (the for-each construct).
 	OnComplete *OnCompleteSpec `json:"on_complete,omitempty" toml:"on_complete,omitempty"`
@@ -277,7 +273,7 @@ type Step struct {
 	SourceFormula string `json:"-"` // Internal only, not serialized to JSON
 
 	// SourceLocation is the path within the source formula.
-	// Format: "steps[0]", "steps[2].children[1]", "advice[0].after", "loop.body[0]"
+	// Format: "steps[0]", "steps[2].children[1]", "advice[0].after"
 	SourceLocation string `json:"-"` // Internal only, not serialized to JSON
 }
 
@@ -304,38 +300,6 @@ type Gate struct {
 	// as an ad-hoc `bd gate create` gate. Ignored for non-GitHub gate
 	// types (human, timer, bead).
 	Repo string `json:"repo,omitempty" toml:"repo,omitempty"`
-}
-
-// LoopSpec defines iteration over a body of steps.
-// One of Count, Until, or Range must be specified.
-type LoopSpec struct {
-	// Count is the fixed number of iterations.
-	// When set, the loop body is expanded Count times.
-	Count int `json:"count,omitempty"`
-
-	// Until is a condition that ends the loop.
-	// Format matches condition evaluator syntax (e.g., "step.status == 'complete'").
-	Until string `json:"until,omitempty"`
-
-	// Max is the maximum iterations for conditional loops.
-	// Required when Until is set, to prevent unbounded loops.
-	Max int `json:"max,omitempty"`
-
-	// Range specifies a computed range for iteration.
-	// Format: "start..end" where start and end can be:
-	//   - Integers: "1..10"
-	//   - Expressions: "1..2^{disks}" (evaluated at cook time)
-	//   - Variables: "{start}..{count}" (substituted from Vars)
-	// Supports: + - * / ^ (power) and parentheses.
-	Range string `json:"range,omitempty"`
-
-	// Var is the variable name exposed to body steps.
-	// For Range loops, this is set to the current iteration value.
-	// Example: var: "move_num" with range: "1..7" exposes {move_num}=1,2,...,7
-	Var string `json:"var,omitempty"`
-
-	// Body contains the steps to repeat.
-	Body []*Step `json:"body"`
 }
 
 // OnCompleteSpec defines actions triggered when a step completes.

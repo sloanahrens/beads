@@ -23,8 +23,8 @@ structural reference, not proof that every declared runtime behavior is wired.
 
 Examples:
   bd formula schema                 # list every declared schema struct
-  bd formula schema loop            # show LoopSpec fields
-  bd formula primitives gate        # alias; shows Gate fields
+  bd formula schema gate            # show Gate fields
+  bd formula primitives step        # alias; shows Step fields
   bd formula schema --json          # machine-readable index
 
 Curated smoke-tested fixtures for wired primitives live in

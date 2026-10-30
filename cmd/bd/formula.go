@@ -40,7 +40,7 @@ Commands:
 
 Discovering primitives:
   bd formula schema                 # list every declared formula struct
-  bd formula schema loop            # show LoopSpec fields, types, and tags
+  bd formula schema gate            # show Gate fields, types, and tags
   bd formula primitives gate        # alias; same handler as 'schema'
   examples/formulas/primitives/     # curated, smoke-tested wired fixtures
   docs/workflows/formulas.md          # narrative reference`,
@@ -86,7 +86,7 @@ Displays:
   - Composition rules (extends, aspects, expansions)
   - Bond points for external composition
 
-To inspect the structure of an individual primitive (e.g. LoopSpec, Gate)
+To inspect the structure of an individual primitive (e.g. Gate, OnCompleteSpec)
 rather than a user-authored formula, use 'bd formula schema <primitive>'.
 
 Examples:

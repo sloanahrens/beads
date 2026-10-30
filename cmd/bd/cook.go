@@ -182,7 +182,7 @@ func loadAndResolveFormula(formulaPath string, searchPaths []string) (*formula.F
 		return nil, fmt.Errorf("resolving formula: %w", err)
 	}
 
-	// Apply control flow operators - loops, branches, gates
+	// Apply control flow operators - branches and gates
 	controlFlowSteps, err := formula.ApplyControlFlow(resolved.Steps, resolved.Compose)
 	if err != nil {
 		return nil, fmt.Errorf("applying control flow: %w", err)
@@ -792,7 +792,7 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 		}
 	}
 
-	// Apply control flow operators - loops, branches, gates
+	// Apply control flow operators - branches and gates
 	controlFlowSteps, err := formula.ApplyControlFlow(resolved.Steps, resolved.Compose)
 	if err != nil {
 		return nil, none, fmt.Errorf("applying control flow to %q: %w", formulaName, err)

@@ -31,9 +31,6 @@ func TestPrimitiveByName_SuffixStripFallback(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"loop", "LoopSpec"},
-		{"Loop", "LoopSpec"},
-		{"loop_spec", "LoopSpec"},
 		{"on_complete", "OnCompleteSpec"},
 		{"OnComplete", "OnCompleteSpec"},
 		{"branch", "BranchRule"},
@@ -68,7 +65,7 @@ func TestPrimitivesIndex_NonEmpty(t *testing.T) {
 		t.Fatal("Primitives is empty; did go generate run?")
 	}
 	// Spot-check a few that should always be present.
-	for _, name := range []string{"Formula", "Step", "LoopSpec", "OnCompleteSpec"} {
+	for _, name := range []string{"Formula", "Step", "Gate", "OnCompleteSpec"} {
 		if PrimitiveByName(name) == nil {
 			t.Errorf("expected %s in Primitives index", name)
 		}

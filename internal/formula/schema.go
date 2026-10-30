@@ -6,7 +6,7 @@ package formula
 // The slice Primitives in schema_gen.go is generated from types.go and serves
 // as the discoverability index surfaced by `bd formula schema`.
 type PrimitiveDoc struct {
-	// Name is the Go struct name (e.g. "Formula", "LoopSpec").
+	// Name is the Go struct name (e.g. "Formula", "Gate").
 	Name string `json:"name"`
 
 	// Doc is the struct's leading doc comment, trimmed.
@@ -46,8 +46,8 @@ type FieldDoc struct {
 // PrimitiveByName returns the PrimitiveDoc that matches name, or nil.
 // Matching is case-insensitive and ignores underscores/dashes; an exact
 // (normalized) match wins over a suffix-stripped match. So "gate" returns
-// Gate, "gaterule" returns GateRule, and "loop" or "on_complete" return
-// LoopSpec / OnCompleteSpec via the Spec/Rule suffix fallback.
+// Gate, "gaterule" returns GateRule, and "on_complete" returns
+// OnCompleteSpec via the Spec/Rule suffix fallback.
 func PrimitiveByName(name string) *PrimitiveDoc {
 	if name == "" {
 		return nil
