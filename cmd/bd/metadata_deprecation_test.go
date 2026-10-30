@@ -71,6 +71,9 @@ func runBDMerged(t *testing.T, binPath, dir string, args ...string) (string, err
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
+		// The child's safe-location check admits only its own temp root; the
+		// fixture sits under the parent's, so both must be the same.
+		"TMPDIR=" + os.TempDir(),
 		"BEADS_TEST_IGNORE_REPO_CONFIG=1",
 		"BEADS_DIR=",
 		"BEADS_DB=",
