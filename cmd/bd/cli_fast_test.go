@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/csv"
 	"encoding/hex"
 	"os"
 	"os/exec"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
@@ -179,6 +182,98 @@ func TestRunBDInProcessRestoresTheWorkspaceVariables(t *testing.T) {
 	}
 }
 
+// TestRunBDInProcessAllowErrorRestoresTheWorkspaceVariables is the check above
+// for the runner that does not fail on error. It goes red if the restore is
+// removed from runBDInProcessAllowError.
+func TestRunBDInProcessAllowErrorRestoresTheWorkspaceVariables(t *testing.T) {
+	t.Setenv("BEADS_DIR", "/restore/me/.beads")
+	t.Setenv("BEADS_DB", "/restore/me/db")
+	os.Unsetenv("BD_DB")
+
+	runBDInProcessAllowError(t, t.TempDir(), "version")
+
+	if got := os.Getenv("BEADS_DIR"); got != "/restore/me/.beads" {
+		t.Errorf("BEADS_DIR after the run = %q, want it restored", got)
+	}
+	if got := os.Getenv("BEADS_DB"); got != "/restore/me/db" {
+		t.Errorf("BEADS_DB after the run = %q, want it restored", got)
+	}
+	if v, ok := os.LookupEnv("BD_DB"); ok {
+		t.Errorf("BD_DB after the run = %q, want it still unset", v)
+	}
+}
+
+// TestRunBDInProcessClearsFlagsAfterTheRun checks that a run leaves no flag
+// armed for the next one: --json is set by this run and must read as unset
+// once runBDInProcess returns. It goes red if the flag reset after Execute is
+// removed.
+func TestRunBDInProcessClearsFlagsAfterTheRun(t *testing.T) {
+	runBDInProcess(t, t.TempDir(), "version", "--json")
+
+	flag := rootCmd.PersistentFlags().Lookup("json")
+	if flag == nil {
+		t.Fatal("rootCmd has no persistent --json flag")
+	}
+	if flag.Changed {
+		t.Errorf("--json still marked Changed after the run")
+	}
+	if got := flag.Value.String(); got != "false" {
+		t.Errorf("--json after the run = %q, want the default false", got)
+	}
+}
+
+// TestResetCommandFlagsRestoresDefaults checks that resetCommandTreeFlags puts
+// a string flag, a bool flag and string-slice flags back to their defaults,
+// clears Changed on each, and walks into subcommands. It goes red if the reset
+// stops restoring a flag, or if a slice flag is left holding the values set
+// before the reset.
+func TestResetCommandFlagsRestoresDefaults(t *testing.T) {
+	root := &cobra.Command{Use: "root"}
+	sub := &cobra.Command{Use: "sub"}
+	root.AddCommand(sub)
+	sub.Flags().String("title", "draft", "")
+	sub.Flags().Bool("force", false, "")
+	sub.Flags().StringSlice("label", nil, "")
+	sub.Flags().StringSlice("ids", []string{"one", "two"}, "")
+
+	for name, value := range map[string]string{"title": "final", "force": "true", "label": "x"} {
+		if err := sub.Flags().Set(name, value); err != nil {
+			t.Fatalf("Set(%s) = %v", name, err)
+		}
+	}
+	if err := sub.Flags().Set("ids", "three"); err != nil {
+		t.Fatalf("Set(ids) = %v", err)
+	}
+
+	if err := resetCommandTreeFlags(root); err != nil {
+		t.Fatalf("resetCommandTreeFlags() = %v", err)
+	}
+
+	if got := sub.Flags().Lookup("title").Value.String(); got != "draft" {
+		t.Errorf("title after reset = %q, want the default %q", got, "draft")
+	}
+	if got := sub.Flags().Lookup("force").Value.String(); got != "false" {
+		t.Errorf("force after reset = %q, want the default false", got)
+	}
+	if got := sub.Flags().Lookup("ids").Value.String(); got != "[one,two]" {
+		t.Errorf("ids after reset = %q, want the default [one,two]", got)
+	}
+	for _, name := range []string{"title", "force", "label", "ids"} {
+		if sub.Flags().Lookup(name).Changed {
+			t.Errorf("%s still marked Changed after reset", name)
+		}
+	}
+
+	// A slice flag that was set before the reset must take a new value alone,
+	// not append it to the old one.
+	if err := sub.Flags().Set("label", "y"); err != nil {
+		t.Fatalf("Set(label) = %v", err)
+	}
+	if got := sub.Flags().Lookup("label").Value.String(); got != "[y]" {
+		t.Errorf("label after reset and a new Set = %q, want [y]", got)
+	}
+}
+
 // initCLITestDatabase initializes dir as a bd workspace whose data lives in
 // dbName on the test Dolt server.
 //
@@ -335,6 +430,9 @@ func runBDInProcess(t *testing.T, dir string, args ...string) string {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Failed to chdir to %s: %v", dir, err)
 	}
+	// The git context is cached per process; an earlier run in another
+	// directory must not decide where this one's gate roots point.
+	git.ResetCaches()
 
 	// Capture stdout/stderr
 	rOut, wOut, _ := os.Pipe()
@@ -352,6 +450,9 @@ func runBDInProcess(t *testing.T, dir string, args ...string) string {
 
 	// Execute command
 	err := rootCmd.Execute()
+	if resetErr := resetCommandTreeFlags(rootCmd); resetErr != nil {
+		t.Errorf("resetting bd flags after the run: %v", resetErr)
+	}
 
 	// Close and clean up all global state to prevent contamination between tests
 	if store != nil {
@@ -573,6 +674,51 @@ func resetCommandFlag(t *testing.T, cmd *cobra.Command, name string) {
 	}
 	reset()
 	t.Cleanup(reset)
+}
+
+// resetCommandTreeFlags puts every flag in cmd's tree back to its default and
+// clears its Changed bit, so a value one in-process run set cannot reach the
+// next run. resetCommandFlag does the same for one flag.
+//
+// A slice flag is restored with Replace, since Set appends once a slice flag
+// has been set. Replace does not clear that state, so the next Set appends to
+// the default. Every slice flag in bd's commands defaults to empty, so there
+// the next Set matches a fresh flag. A slice flag with a non-empty default
+// would keep the default in front of later values.
+func resetCommandTreeFlags(cmd *cobra.Command) error {
+	var firstErr error
+	reset := func(flag *pflag.Flag) {
+		if slice, ok := flag.Value.(pflag.SliceValue); ok {
+			def, err := parseSliceDefault(flag.DefValue)
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+			_ = slice.Replace(def)
+		} else {
+			_ = flag.Value.Set(flag.DefValue)
+		}
+		flag.Changed = false
+	}
+	var walk func(*cobra.Command)
+	walk = func(c *cobra.Command) {
+		c.Flags().VisitAll(reset)
+		c.PersistentFlags().VisitAll(reset)
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(cmd)
+	return firstErr
+}
+
+// parseSliceDefault reads a slice flag's DefValue, which pflag writes as
+// "[a,b]", back into the values it stands for.
+func parseSliceDefault(defValue string) ([]string, error) {
+	inner := strings.TrimSuffix(strings.TrimPrefix(defValue, "["), "]")
+	if inner == "" {
+		return nil, nil
+	}
+	return csv.NewReader(strings.NewReader(inner)).Read()
 }
 
 // TestCLI_CreateAcceptanceSyncsDescriptionSection covers the create half of
@@ -1367,7 +1513,7 @@ func runBDExec(t *testing.T, dir string, args ...string) string {
 
 	cmd := exec.Command(testBD, args...)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = withoutWorkspaceEnv(os.Environ())
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1530,9 +1676,21 @@ func runBDInProcessAllowError(t *testing.T, dir string, args ...string) (string,
 	oldDir, _ := os.Getwd()
 	oldArgs := os.Args
 
+	// Same workspace-variable handling as runBDInProcess: rootCmd's pre-run
+	// sets BEADS_DIR and never restores it.
+	for _, key := range workspaceEnvVars {
+		if v, ok := os.LookupEnv(key); ok {
+			defer os.Setenv(key, v)
+		} else {
+			defer os.Unsetenv(key)
+		}
+		os.Unsetenv(key)
+	}
+
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Failed to chdir to %s: %v", dir, err)
 	}
+	git.ResetCaches()
 
 	rOut, wOut, _ := os.Pipe()
 	rErr, wErr, _ := os.Pipe()
@@ -1547,6 +1705,9 @@ func runBDInProcessAllowError(t *testing.T, dir string, args ...string) (string,
 	os.Args = append([]string{"bd"}, args...)
 
 	cmdErr := rootCmd.Execute()
+	if resetErr := resetCommandTreeFlags(rootCmd); resetErr != nil {
+		t.Errorf("resetting bd flags after the run: %v", resetErr)
+	}
 
 	if store != nil {
 		store.Close()
@@ -1709,7 +1870,7 @@ func TestCLI_CreateDryRun(t *testing.T) {
 		// Initialize the database first
 		initCmd := exec.Command(testBD, "init", "--prefix", "test", "--quiet")
 		initCmd.Dir = tmpDir
-		initCmd.Env = os.Environ()
+		initCmd.Env = withoutWorkspaceEnv(os.Environ())
 		if out, err := initCmd.CombinedOutput(); err != nil {
 			t.Fatalf("init failed: %v\n%s", err, out)
 		}
@@ -1721,7 +1882,7 @@ func TestCLI_CreateDryRun(t *testing.T) {
 		// Run create with --dry-run and --file (should error)
 		cmd := exec.Command(testBD, "create", "--file", mdFile, "--dry-run")
 		cmd.Dir = tmpDir
-		cmd.Env = os.Environ()
+		cmd.Env = withoutWorkspaceEnv(os.Environ())
 		out, err := cmd.CombinedOutput()
 
 		if err == nil {
@@ -2101,7 +2262,7 @@ func TestCLI_CreateRejectsFlagLikeTitles(t *testing.T) {
 			// Initialize the database
 			initCmd := exec.Command(testBD, "init", "--prefix", "test", "--quiet")
 			initCmd.Dir = tmpDir
-			initCmd.Env = os.Environ()
+			initCmd.Env = withoutWorkspaceEnv(os.Environ())
 			if out, err := initCmd.CombinedOutput(); err != nil {
 				t.Fatalf("init failed: %v\n%s", err, out)
 			}
@@ -2109,7 +2270,7 @@ func TestCLI_CreateRejectsFlagLikeTitles(t *testing.T) {
 			// Attempt to create with a flag-like positional title
 			cmd := exec.Command(testBD, "create", tc.title)
 			cmd.Dir = tmpDir
-			cmd.Env = os.Environ()
+			cmd.Env = withoutWorkspaceEnv(os.Environ())
 			out, err := cmd.CombinedOutput()
 
 			if err == nil {
