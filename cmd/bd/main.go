@@ -621,6 +621,24 @@ func prepareSelectedNoDBContext(beadsDir string) {
 	prepareSelectedCommandContext(beadsDir, true)
 }
 
+// syncDeprecationNoticeMode tells the doltserver package whether this process
+// writes machine-readable output, so a human-facing deprecation notice never
+// lands in a stream a JSON consumer parses (be-g9x7: the metadata.json
+// dolt_server_port warning followed stdout into a merged capture and made
+// `bd context --json` unparseable).
+//
+// Its one call site is refreshBoundCommandConfig, which every command's
+// pre-run reaches — the skip-store branch and both store-init branches — before
+// the command body runs. That is late enough to see the final jsonOutput (the
+// flag/config resolution above it, and this function's own rebind after a
+// context switch to a target workspace) and early enough that no port
+// resolution has happened: every DefaultConfig caller in cmd/bd is inside a
+// RunE, never in the pre-run or an init. Text mode (jsonOutput false) leaves
+// the notice on for every scripted, agent and daemon text run.
+func syncDeprecationNoticeMode() {
+	doltserver.QuietDeprecationNotices(jsonOutput)
+}
+
 // refreshBoundCommandConfig reapplies config-backed defaults after the command
 // context has been rebound to a resolved target beads directory. This keeps
 // explicit flags authoritative while letting rerouted/explicit-db commands use
@@ -636,6 +654,7 @@ func refreshBoundCommandConfig(cmd *cobra.Command) {
 	if !root.PersistentFlags().Changed("json") && !root.PersistentFlags().Changed("format") {
 		jsonOutput = jsonFromConfig(config.GetBool("json"))
 	}
+	syncDeprecationNoticeMode()
 	if !root.PersistentFlags().Changed("readonly") {
 		readonlyMode = config.GetBool("readonly")
 	}
