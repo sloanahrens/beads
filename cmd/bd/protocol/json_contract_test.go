@@ -29,7 +29,7 @@ func TestJSONContract_ListOutputIsValidJSON(t *testing.T) {
 // stand in for the opt-in comment and dependent payloads.
 //
 // The issue fields are checked on the elements of the envelope's data (see
-// TestJSONContract_ShowOutputIsArray); schema_version belongs to the envelope.
+// TestJSONContract_ShowDataIsArray); schema_version belongs to the envelope.
 func TestJSONContract_ShowOutputHasRequiredFields(t *testing.T) {
 	t.Parallel()
 	w := newWorkspace(t)
@@ -184,14 +184,14 @@ func TestJSONContract_ShowCommentsOmittedFlag(t *testing.T) {
 	})
 }
 
-// TestJSONContract_ShowOutputIsArray pins the shape of bd show --json: the
+// TestJSONContract_ShowDataIsArray pins the shape of bd show --json: the
 // schema_version envelope whose data is a JSON array with one element per
 // requested ID. The elements are bare issues: schema_version lives on the
 // envelope, not on each item.
 //
 // The shape is load-bearing for every consumer that parses show --json, so a
 // change here is a breaking wire change, not a cleanup.
-func TestJSONContract_ShowOutputIsArray(t *testing.T) {
+func TestJSONContract_ShowDataIsArray(t *testing.T) {
 	t.Parallel()
 	w := newWorkspace(t)
 	id1 := w.create("Array shape one")

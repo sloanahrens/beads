@@ -3,34 +3,52 @@ package protocol
 import "testing"
 
 // TestParseJSONOutputReadsTheEnvelope pins how the protocol tests read bd
-// --json stdout, {"schema_version": N, "data": ...}: an array under data yields
-// its elements, an object under data yields one element, and the envelope's
-// schema_version stays reachable for the tests that check it.
+// --json stdout, {"schema_version": N, "data": ...}: one row per shape of data.
 func TestParseJSONOutputReadsTheEnvelope(t *testing.T) {
 	t.Parallel()
 
-	t.Run("array under data yields its elements", func(t *testing.T) {
+	rows := []struct {
+		name    string
+		data    any
+		wantIDs []string
+		wantErr bool
+	}{
+		{"array of objects yields its elements", []any{map[string]any{"id": "a-1"}, map[string]any{"id": "a-2"}}, []string{"a-1", "a-2"}, false},
+		{"object yields one element", map[string]any{"id": "a-1"}, []string{"a-1"}, false},
+		{"empty array yields nothing", []any{}, nil, false},
+		{"null yields nothing", nil, nil, false},
+		{"array holding a non-object is an error", []any{map[string]any{"id": "a-1"}, "x"}, nil, true},
+		{"string is an error", "a-1", nil, true},
+		{"number is an error", float64(3), nil, true},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			items, err := envelopeElements(row.data)
+			if (err != nil) != row.wantErr {
+				t.Fatalf("envelopeElements(%v) error = %v, want error %v", row.data, err, row.wantErr)
+			}
+			var got []string
+			for _, it := range items {
+				id, _ := it["id"].(string)
+				got = append(got, id)
+			}
+			if len(got) != len(row.wantIDs) {
+				t.Fatalf("envelopeElements(%v) ids = %v, want %v", row.data, got, row.wantIDs)
+			}
+			for i := range got {
+				if got[i] != row.wantIDs[i] {
+					t.Fatalf("envelopeElements(%v) ids = %v, want %v", row.data, got, row.wantIDs)
+				}
+			}
+		})
+	}
+
+	t.Run("parseJSONOutput unwraps the envelope", func(t *testing.T) {
 		t.Parallel()
-		out := `{"schema_version":1,"data":[{"id":"a-1"},{"id":"a-2"}]}`
-		items := parseJSONOutput(t, out)
+		items := parseJSONOutput(t, `{"schema_version":1,"data":[{"id":"a-1"},{"id":"a-2"}]}`)
 		if len(items) != 2 || items[0]["id"] != "a-1" || items[1]["id"] != "a-2" {
-			t.Fatalf("parseJSONOutput(%s) = %v, want a-1 and a-2", out, items)
-		}
-	})
-
-	t.Run("object under data yields one element", func(t *testing.T) {
-		t.Parallel()
-		out := `{"schema_version":1,"data":{"id":"a-1","title":"t"}}`
-		items := parseJSONOutput(t, out)
-		if len(items) != 1 || items[0]["id"] != "a-1" || items[0]["title"] != "t" {
-			t.Fatalf("parseJSONOutput(%s) = %v, want one element a-1", out, items)
-		}
-	})
-
-	t.Run("empty array under data yields nothing", func(t *testing.T) {
-		t.Parallel()
-		if items := parseJSONOutput(t, `{"schema_version":1,"data":[]}`); len(items) != 0 {
-			t.Fatalf("parseJSONOutput of an empty data array = %v, want none", items)
+			t.Fatalf("parseJSONOutput = %v, want a-1 and a-2", items)
 		}
 	})
 

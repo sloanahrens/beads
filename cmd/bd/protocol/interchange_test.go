@@ -398,6 +398,7 @@ func TestProtocol_Interchange_EpochSanitize(t *testing.T) {
 		t.Fatalf("issue %s missing from export:\n%s", id, out)
 	}
 
+	// One JSONL export line, not --json stdout: no envelope around it.
 	var rec map[string]any
 	if err := json.Unmarshal([]byte(line), &rec); err != nil {
 		t.Fatalf("export line is not valid JSON: %v\n%s", err, line)

@@ -598,25 +598,35 @@ func parseEnvelope(t *testing.T, output string) (map[string]any, []map[string]an
 	if !ok {
 		t.Fatalf("bd --json output has no \"data\" field:\n%s", output)
 	}
-	return envelope, envelopeElements(data)
+	items, err := envelopeElements(data)
+	if err != nil {
+		t.Fatalf("bd --json output: %v\nOutput:\n%s", err, output)
+	}
+	return envelope, items
 }
 
-// envelopeElements returns data as a list of objects: an array yields its
-// object elements, an object yields itself, anything else yields nothing.
-func envelopeElements(data any) []map[string]any {
+// envelopeElements returns data as a list of objects: an array of objects
+// yields its elements, an object yields itself, and null yields nothing. Any
+// other shape is an error, so a reader never mistakes a new shape for "no
+// results".
+func envelopeElements(data any) ([]map[string]any, error) {
 	switch v := data.(type) {
+	case nil:
+		return nil, nil
 	case []any:
 		result := make([]map[string]any, 0, len(v))
-		for _, item := range v {
-			if m, ok := item.(map[string]any); ok {
-				result = append(result, m)
+		for i, item := range v {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("data[%d] is %T, want an object", i, item)
 			}
+			result = append(result, m)
 		}
-		return result
+		return result, nil
 	case map[string]any:
-		return []map[string]any{v}
+		return []map[string]any{v}, nil
 	}
-	return nil
+	return nil, fmt.Errorf("data is %T, want an array of objects or an object", data)
 }
 
 // parseJSONOutput returns the objects in bd --json stdout. It unwraps the
@@ -628,7 +638,11 @@ func parseJSONOutput(t *testing.T, output string) []map[string]any {
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(output), &envelope); err == nil {
 		if data, ok := envelope["data"]; ok {
-			return envelopeElements(data)
+			items, err := envelopeElements(data)
+			if err != nil {
+				t.Fatalf("bd --json output: %v\nOutput:\n%s", err, output)
+			}
+			return items
 		}
 		// Single object without an envelope.
 		return []map[string]any{envelope}
