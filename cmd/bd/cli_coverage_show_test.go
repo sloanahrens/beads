@@ -1,5 +1,13 @@
 //go:build cgo && e2e
 
+// No tier runs the e2e tag today (the Makefile, scripts/test.sh and
+// engdocs/TESTING.md do not name it). Run this file by hand with:
+//
+//	go test -tags 'cgo e2e gms_pure_go' ./cmd/bd -run '^TestCoverage_ShowUpdateClose$' -count=1
+//
+// The --json outputs are read with unmarshalEnvelope, the helper in
+// envelope_decode_integration_test.go.
+
 package main
 
 import (
@@ -159,7 +167,7 @@ func parseCreatedIssueID(t *testing.T, out string) string {
 
 	p := extractJSONPayload(out)
 	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(p), &m); err != nil {
+	if err := unmarshalEnvelope([]byte(p), &m); err != nil {
 		t.Fatalf("parse create JSON: %v\n%s", err, out)
 	}
 	id, _ := m["id"].(string)
@@ -187,10 +195,10 @@ func TestCoverage_ShowUpdateClose(t *testing.T) {
 	showPayload := extractJSONPayload(showOut)
 
 	var details []map[string]interface{}
-	if err := json.Unmarshal([]byte(showPayload), &details); err != nil {
+	if err := unmarshalEnvelope([]byte(showPayload), &details); err != nil {
 		// Some commands may emit a single object; fall back to object parse.
 		var single map[string]interface{}
-		if err2 := json.Unmarshal([]byte(showPayload), &single); err2 != nil {
+		if err2 := unmarshalEnvelope([]byte(showPayload), &single); err2 != nil {
 			t.Fatalf("parse show JSON: %v / %v\n%s", err, err2, showOut)
 		}
 		details = []map[string]interface{}{single}
@@ -232,7 +240,7 @@ func TestCoverage_ShowUpdateClose(t *testing.T) {
 	closeOut, _ := runBDForCoverage(t, dir, "close", id, "--reason", "Done", "--json")
 	closePayload := extractJSONPayload(closeOut)
 	var closed []map[string]interface{}
-	if err := json.Unmarshal([]byte(closePayload), &closed); err != nil {
+	if err := unmarshalEnvelope([]byte(closePayload), &closed); err != nil {
 		t.Fatalf("parse close JSON: %v\n%s", err, closeOut)
 	}
 	if len(closed) != 1 {
@@ -260,7 +268,7 @@ func TestCoverage_TemplateAndPinnedProtections(t *testing.T) {
 	forceOut, _ := runBDForCoverage(t, dir, "close", pinnedID, "--force", "--reason", "Done", "--json")
 	forcePayload := extractJSONPayload(forceOut)
 	var closed []map[string]interface{}
-	if err := json.Unmarshal([]byte(forcePayload), &closed); err != nil {
+	if err := unmarshalEnvelope([]byte(forcePayload), &closed); err != nil {
 		t.Fatalf("parse close JSON: %v\n%s", err, forceOut)
 	}
 	if len(closed) != 1 {
@@ -299,7 +307,7 @@ func TestCoverage_TemplateAndPinnedProtections(t *testing.T) {
 	showOut, _ := runBDForCoverage(t, dir, "show", template.ID, "--json")
 	showPayload := extractJSONPayload(showOut)
 	var showDetails []map[string]interface{}
-	if err := json.Unmarshal([]byte(showPayload), &showDetails); err != nil {
+	if err := unmarshalEnvelope([]byte(showPayload), &showDetails); err != nil {
 		t.Fatalf("parse show JSON: %v\n%s", err, showOut)
 	}
 	if len(showDetails) != 1 {
