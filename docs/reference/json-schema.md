@@ -3,84 +3,25 @@ title: JSON Output Schema Contract
 description: The stable JSON output contract for bd --json commands, covering the schema_version envelope, per-command fields, and consumer guidelines.
 ---
 
-Last reviewed: 2026-08-07
+Last reviewed: 2026-10-30
 
 Freshness source: `cmd/bd/output.go`, `cmd/bd/errors.go`, and
 `cmd/bd/protocol/json_contract_test.go`.
 
-All `bd` commands that support `--json` output can wrap their response in
-a uniform envelope by setting `BD_JSON_ENVELOPE=1`. This will become the
-default format in v2.0.
+Every `bd` command that supports `--json` answers with the same shape: a
+`schema_version` envelope with the command's payload under `data`. Object,
+array, scalar, and error results all nest the same way, so a consumer needs
+one decoder and one version check.
 
-## Migration Guide
-
-### Opt in to the envelope format
-
-```bash
-export BD_JSON_ENVELOPE=1
-```
-
-### Envelope format (BD_JSON_ENVELOPE=1, default in v2.0)
-
-Every `--json` command wraps output as:
+## The envelope
 
 ```json
-{"schema_version": 1, "data": <original-payload>}
+{"schema_version": 1, "data": <payload>}
 ```
 
-The original payload is untouched inside `.data` — no type corruption,
-no field injection. Works identically for objects, arrays, and maps.
-
-When a `--limit`-truncated listing runs in envelope mode (currently wired
-for `bd ready`), the envelope also carries a `pagination` key:
-
-```json
-{"schema_version": 1, "data": [...], "pagination": {"returned": 10, "total": 42, "truncated": true}}
-```
-
-`total` is omitted when unknown; the whole `pagination` key is absent when
-the result was not truncated. Legacy mode keeps the stderr text hint instead.
-
-### Updating consumers
-
-```bash
-# Before (legacy):
-bd list --json | jq '.[0].id'
-bd show beads-abc --json | jq '.[0].title'
-
-# After (envelope):
-bd list --json | jq '.data[0].id'
-bd show beads-abc --json | jq '.data[0].title'
-
-# Version check (object commands, e.g. create):
-bd create "Example" --json | jq '.schema_version'
-```
-
-### Timeline
-
-- **Current release**: Legacy format is default. Set `BD_JSON_ENVELOPE=1` to opt in.
-  A deprecation notice is printed to stderr when `--json` is used without the env
-  var — but only when stderr is a terminal, and at most once per invocation, so
-  scripts capturing stderr will not see it.
-- **v2.0**: Envelope becomes the default. `BD_JSON_ENVELOPE=0` available as
-  temporary escape hatch for one release cycle.
-
-## Schema Version
-
-Current version: **1**
-
-The `schema_version` field is an integer that increments when:
-- Fields are added, renamed, or removed
-- Output structure changes (e.g., nesting depth)
-- Field types change (e.g., string to integer)
-
-Additive changes (new optional fields) do NOT bump the version.
-
-## Output Formats
-
-### Envelope mode (BD_JSON_ENVELOPE=1)
-
-All commands emit a uniform envelope:
+The command's payload sits untouched under `.data` — no type corruption, no
+field injection. Object commands put an object there; list commands put an
+array.
 
 ```json
 {
@@ -93,8 +34,6 @@ All commands emit a uniform envelope:
 }
 ```
 
-Arrays are wrapped the same way:
-
 ```json
 {
   "schema_version": 1,
@@ -105,55 +44,45 @@ Arrays are wrapped the same way:
 }
 ```
 
-### Legacy mode (default, until v2.0)
+A `--limit` that truncates a listing (`bd ready`) adds a `pagination` key at
+the envelope level:
 
-### Object commands (create, ping, etc.)
+```json
+{"schema_version": 1, "data": [...], "pagination": {"returned": 10, "total": 42, "truncated": true}}
+```
 
-Commands that return a single result emit a JSON object with
-`schema_version` as a top-level field alongside the data:
+`total` is omitted when unknown, and the whole `pagination` key is absent
+when the result was not truncated.
+
+## Schema Version
+
+Current version: **1**
+
+The `schema_version` field is an integer that increments when:
+- Fields are added, renamed, or removed
+- Output structure changes (e.g., nesting depth)
+- Field types change (e.g., string to integer)
+
+Additive changes (new optional fields) do NOT bump the version.
+
+## Errors
+
+Errors with `--json` active use the same envelope, with the error object
+under `data`:
 
 ```json
 {
   "schema_version": 1,
-  "id": "beads-abc",
-  "title": "Example issue",
-  "status": "open",
-  "priority": 1,
-  "issue_type": "task",
-  "created_at": "2026-04-20T12:00:00Z"
-}
-```
-
-### List commands (list, ready, search, stale, show, close, update, etc.)
-
-Commands that return one or more issues emit a raw JSON array — including
-`show`, `close`, and `update`, which return one element per requested ID.
-Array output carries no top-level `schema_version` field:
-
-```json
-[
-  {"id": "beads-abc", "title": "First", ...},
-  {"id": "beads-def", "title": "Second", ...}
-]
-```
-
-### Error output
-
-Errors with `--json` active emit JSON — most error paths write it to stderr,
-though some command-result error paths emit the same shape to stdout:
-
-```json
-{
-  "schema_version": 1,
-  "error": "issue not found: beads-xyz",
-  "code": "not_found"
+  "data": {
+    "error": "issue not found: beads-xyz",
+    "code": "not_found"
+  }
 }
 ```
 
 `code` and `hint` (a remediation suggestion) are both optional — only
-`error` and `schema_version` are always present. In envelope mode
-(`BD_JSON_ENVELOPE=1`) the error payload moves inside the envelope:
-`{"schema_version": 1, "data": {"error": ..., "code": ..., "hint": ...}}`.
+`error` and `schema_version` are always present. Most error paths write the
+envelope to stderr, though some command-result paths write it to stdout.
 JSON-mode errors exit with code 1.
 
 ## Field Contracts by Command
@@ -179,8 +108,8 @@ Optional fields:
 
 Same schema as `bd list --json`. Items are filtered to unblocked issues only.
 Each item includes `dependency_count`, `dependent_count`, `comment_count`,
-and optional `parent` fields. In envelope mode a `--limit`-truncated result
-adds the envelope-level `pagination` key (see the envelope section above).
+and optional `parent` fields. A `--limit`-truncated result adds the
+envelope-level `pagination` key (see [The envelope](#the-envelope)).
 
 ### bd blocked --json
 
@@ -191,19 +120,16 @@ Each item includes all standard issue fields plus:
 
 ### bd backup status --json
 
-Emits the envelope `{"schema_version": N, "data": {...}}`; `data` holds the
-`backup`, `dolt` and (when the size is available) `database_size` objects.
-Before this change the same objects were the top-level document, so a consumer
-that read `.backup` or `.database_size` directly now reads `.data.backup` or
+`data` holds the `backup`, `dolt` and (when the size is available)
+`database_size` objects, so a consumer reads `.data.backup` or
 `.data.database_size`. In machine mode (`--machine`, `BD_MACHINE=1`) the bare
 object is unchanged.
 
 ### bd show --json
 
-Returns a top-level JSON array with one element per requested ID; items do
-not carry `schema_version` (this shape is pinned by a contract test — a
-change here is a breaking wire change). Same required fields as list
-items, plus:
+Returns an array in `.data` with one element per requested ID. Array elements
+are plain issue objects; the envelope carries the `schema_version`. Same
+required fields as list items, plus:
 - `description` (string)
 - `acceptance_criteria` (string)
 - `revision` (number): guarded-write optimistic-concurrency token; always
@@ -217,7 +143,7 @@ items, plus:
 
 ### `import --json`
 
-Returns a summary object when `--json` is active:
+Returns a summary object in `.data` when `--json` is active:
 - `source` (string): File path or "stdin"
 - `created` (number): Issues created
 - `updated` (number): Existing issues updated
@@ -256,11 +182,11 @@ as a read-side legacy alias.
 
 ## Consumer Guidelines
 
-1. **Check `schema_version`** on object output. If the version is
+1. **Check `schema_version`** on the envelope. If the version is
    higher than expected, log a warning but attempt to parse anyway
    (additive changes are backward-compatible).
 
-2. **For list commands**, parse the output as a JSON array directly.
+2. **For list commands**, read the array from `.data`.
 
 3. **Ignore unknown fields**. New fields may be added without bumping
    the schema version.

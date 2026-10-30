@@ -86,9 +86,8 @@ func (w *workspace) runEnvExpectError(extraEnv []string, args ...string) (string
 // object is located rather than assumed to be the whole output.
 //
 // It returns the first JSON object in the output that carries an "error" key,
-// unwrapping the BD_JSON_ENVELOPE form ({schema_version, data:{...}}) so callers
-// see one shape either way. The second return reports whether an object was
-// found.
+// unwrapping the envelope ({schema_version, data:{...}}) so callers see the
+// error object itself. The second return reports whether an object was found.
 func jsonErrorFrom(t *testing.T, out string) (map[string]any, bool) {
 	t.Helper()
 	for i, r := range out {
@@ -103,7 +102,7 @@ func jsonErrorFrom(t *testing.T, out string) (map[string]any, bool) {
 		if _, ok := obj["error"]; ok {
 			return obj, true
 		}
-		// BD_JSON_ENVELOPE=1 nests the error under "data".
+		// The envelope nests the error under "data".
 		if data, ok := obj["data"].(map[string]any); ok {
 			if _, ok := data["error"]; ok {
 				// Lift schema_version from the envelope so the caller can

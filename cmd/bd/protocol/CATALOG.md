@@ -14,10 +14,10 @@ so a `bd` release can never silently change a wire shape the consumer parses.
   (timestamps → `<TS>`, object arrays stable-sorted, keys sorted, 2-space
   indent), and the provenance **manifest**.
 - `corpus_test.go` — `TestCorpusGolden` runs the plan against a live `bd`
-  (built from source, Dolt-backed) in both flat and `BD_JSON_ENVELOPE=1`
-  variants, canonicalizes, and **byte-compares** against the committed corpus.
-  A diff is a hard failure (`make corpus-regen` to update); a Dolt-boot failure
-  is an infra skip, never a silent pass.
+  (built from source, Dolt-backed) in the one `--json` shape bd emits — the
+  `schema_version` envelope — canonicalizes, and **byte-compares** against the
+  committed corpus. A diff is a hard failure (`make corpus-regen` to update); a
+  Dolt-boot failure is an infra skip, never a silent pass.
 - `canonicalize_test.go` — unit tests for the canonicalizer plus
   `TestCorpusDoubleRunByteIdentical`, the determinism backstop that generates
   the corpus twice and asserts byte-identity.
@@ -29,8 +29,8 @@ pinned-decoder migration off.
 
 ## Coverage
 
-| Blob (flat + envelope) | bd command | Contract domain |
-| ---------------------- | ---------- | --------------- |
+| Blob | bd command | Contract domain |
+| ---- | ---------- | --------------- |
 | `create_root`, `create_dep`, `create_closed`, `create_deleted` | `bd create … --json` | json-output-shapes (object) |
 | `show` | `bd show <id> --json` | json-output-shapes (array-of-one), dependency shape |
 | `update` | `bd update … --json` | json-output-shapes (mutation array), label add + metadata coercion (`phase` → string) |
@@ -43,7 +43,7 @@ pinned-decoder migration off.
 | `delete` | `bd delete --force … --json` | delete confirmation shape |
 | `count` | `bd count --json` | json-output-shapes (scalar) |
 | `version` | `bd version --json` | version-compat, the `schema_version` canary |
-| `error` | `bd show <missing> --json` | exit-codes-and-errors (`{error, schema_version}`) |
+| `error` | `bd show <missing> --json` | exit-codes-and-errors (`{schema_version, data:{error,…}}`) |
 
 ## Known gaps (tracked, not silent)
 
