@@ -165,18 +165,16 @@ func TestBackupStatusIncludesAvailableDatabaseSize(t *testing.T) {
 // TestBackupStatusJSONKeepsMachineModeShape pins what this command does NOT
 // change: in machine mode the bare report is what callers already get, and its
 // shape belongs to the machine envelope's own bead, not to the schema-wrapper
-// migration of the stdio path. Machine mode is a package-level flag that main()
-// decides from the arguments, so the package's own withMachineMode seam forces
-// it here.
+// migration of the stdio path. The command takes machine mode as a parameter,
+// so this test passes true instead of writing the package-level flag.
 func TestBackupStatusJSONKeepsMachineModeShape(t *testing.T) {
 	prepareBackupStatusTest(t)
-	withMachineMode(t, true)
 
 	sizeDatabase := func(context.Context) (int64, bool, error) {
 		return 1536, true, nil
 	}
 
-	cmd := newBackupStatusTestRoot(sizeDatabase)
+	cmd := newBackupStatusTestRootInMode(sizeDatabase, true)
 	cmd.SetArgs([]string{"backup", "status", "--json"})
 	stdout, stderr, err := executeBackupStatusCommand(t, cmd)
 	if err != nil {
@@ -285,10 +283,14 @@ func prepareBackupStatusTest(t *testing.T) {
 }
 
 func newBackupStatusTestRoot(sizeDatabase backupSizeFunc) *cobra.Command {
+	return newBackupStatusTestRootInMode(sizeDatabase, false)
+}
+
+func newBackupStatusTestRootInMode(sizeDatabase backupSizeFunc, machine bool) *cobra.Command {
 	root := &cobra.Command{Use: "bd"}
 	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "output JSON")
 	backup := &cobra.Command{Use: "backup"}
-	backup.AddCommand(newBackupStatusCommand(sizeDatabase))
+	backup.AddCommand(newBackupStatusCommand(sizeDatabase, func() bool { return machine }))
 	root.AddCommand(backup)
 	return root
 }

@@ -46,9 +46,12 @@ Auto-backup default:
 
 type backupSizeFunc func(context.Context) (bytes int64, available bool, err error)
 
-var backupStatusCmd = newBackupStatusCommand(doltBackupSize)
+var backupStatusCmd = newBackupStatusCommand(doltBackupSize, machineModeActive)
 
-func newBackupStatusCommand(sizeDatabase backupSizeFunc) *cobra.Command {
+// newBackupStatusCommand builds the status command. machine reports whether the
+// process runs in machine mode; it is a parameter so a test steers it without
+// writing the package-level machineMode.
+func newBackupStatusCommand(sizeDatabase backupSizeFunc, machine func() bool) *cobra.Command {
 	return &cobra.Command{
 		Use:           "status",
 		Short:         "Show last backup status",
@@ -89,7 +92,7 @@ func newBackupStatusCommand(sizeDatabase backupSizeFunc) *cobra.Command {
 				// mode keeps the bare object it has always printed; its shape
 				// belongs to the machine envelope (cmd/bd/envelope.go).
 				var out interface{} = result
-				if !machineModeActive() {
+				if !machine() {
 					out = wrapWithSchemaVersion(result)
 				}
 				data, err := json.MarshalIndent(out, "", "  ")

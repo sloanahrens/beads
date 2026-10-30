@@ -189,6 +189,15 @@ Each item includes all standard issue fields plus:
 - `blocked_by_count` (number): Number of blocking dependencies
 - `blocked_by` (string[]): IDs of blocking issues
 
+### bd backup status --json
+
+Emits the envelope `{"schema_version": N, "data": {...}}`; `data` holds the
+`backup`, `dolt` and (when the size is available) `database_size` objects.
+Before this change the same objects were the top-level document, so a consumer
+that read `.backup` or `.database_size` directly now reads `.data.backup` or
+`.data.database_size`. In machine mode (`--machine`, `BD_MACHINE=1`) the bare
+object is unchanged.
+
 ### bd show --json
 
 Returns a top-level JSON array with one element per requested ID; items do
