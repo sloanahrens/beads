@@ -7,14 +7,80 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/config"
+	"github.com/steveyegge/beads/internal/configfile"
 )
+
+// clearAmbientDoltEnv neutralizes every environment variable DefaultConfig
+// reads, so a test's result cannot depend on the shell it runs under. A host
+// that exports BEADS_DOLT_SERVER_HOST makes DefaultConfig take the
+// external-server path, and the legacy BEADS_DOLT_PORT then overrides the
+// shared-server port fallback (3307 instead of 3308) — be-8y8b.
+func clearAmbientDoltEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"BEADS_DOLT_SERVER_HOST",
+		"BEADS_DOLT_SERVER_PORT",
+		"BEADS_DOLT_PORT",
+		"BEADS_DOLT_SHARED_SERVER",
+		"BEADS_DOLT_SERVER_MODE",
+		"BEADS_SHARED_SERVER_DIR",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+// TestClearAmbientDoltEnv proves the guard the DefaultConfig tests start from:
+// a host exporting a remote Dolt server (BEADS_DOLT_SERVER_HOST with the
+// legacy BEADS_DOLT_PORT, as the control-plane sandbox does) must not change
+// what DefaultConfig resolves once the ambient environment is cleared. Without
+// the host clear, DefaultConfig takes the external-server path instead of an
+// owned, unconfigured config.
+func TestClearAmbientDoltEnv(t *testing.T) {
+	t.Setenv("BEADS_DOLT_SERVER_HOST", "control-plane.openshell.svc.cluster.local")
+	t.Setenv("BEADS_DOLT_PORT", "4400")
+	t.Setenv("BEADS_DOLT_SERVER_PORT", "4400")
+	t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
+	t.Setenv("BEADS_SHARED_SERVER_DIR", t.TempDir())
+
+	clearAmbientDoltEnv(t)
+
+	cfg := DefaultConfig(t.TempDir())
+	if cfg.Mode != ServerModeOwned {
+		t.Fatalf("ambient host leaked: Mode = %v, want owned", cfg.Mode)
+	}
+	if cfg.Port != 0 || cfg.PortSource != PortSourceUnset {
+		t.Fatalf("ambient port leaked: port=%d source=%q, want 0/%q", cfg.Port, cfg.PortSource, PortSourceUnset)
+	}
+	if cfg.PortSharedServer {
+		t.Fatalf("ambient shared-server env leaked: PortSharedServer = true, want false")
+	}
+
+	// A host persisted in the repo's own metadata.json (not an env var) still
+	// selects the external path, where the legacy BEADS_DOLT_PORT would
+	// otherwise override the documented 3307 default.
+	extDir := t.TempDir()
+	data, err := json.Marshal(map[string]any{"dolt_server_host": "dolt.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extDir, "metadata.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	extCfg := DefaultConfig(extDir)
+	if extCfg.Mode != ServerModeExternal {
+		t.Fatalf("metadata.json host: Mode = %v, want external", extCfg.Mode)
+	}
+	if extCfg.Port != configfile.DefaultDoltServerPort || extCfg.PortSource != PortSourceExternalHostDefault {
+		t.Fatalf("ambient legacy port leaked: port=%d source=%q, want %d/%q",
+			extCfg.Port, extCfg.PortSource, configfile.DefaultDoltServerPort, PortSourceExternalHostDefault)
+	}
+}
 
 // Asserts the precedence chain against DefaultConfig itself by layering each
 // source on top of the previous ones: env > port file > Dolt server
 // config.yaml > Beads config.yaml > metadata.json (GH#4511).
 func TestDefaultConfigPrecedenceChain(t *testing.T) {
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
+	clearAmbientDoltEnv(t)
 
 	beadsDir := t.TempDir()
 
@@ -79,8 +145,7 @@ func TestDefaultConfigPrecedenceChain(t *testing.T) {
 // port-file bookkeeping) or not (a source where the user, or config on the
 // user's behalf, explicitly asserted the port).
 func TestDefaultConfigPortSource(t *testing.T) {
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
+	clearAmbientDoltEnv(t)
 
 	beadsDir := t.TempDir()
 
@@ -161,8 +226,7 @@ func TestDefaultConfigPortSource(t *testing.T) {
 // up a repo-local server distinct from the shared one, regardless of
 // PortSource.IsAuthoritative().
 func TestDefaultConfigPortSharedServer(t *testing.T) {
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
+	clearAmbientDoltEnv(t)
 
 	// Per-project mode: never shared, regardless of source.
 	beadsDir := t.TempDir()

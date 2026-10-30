@@ -7,8 +7,7 @@ import (
 )
 
 func TestDefaultConfigReadsConfigYamlPort(t *testing.T) {
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
+	clearAmbientDoltEnv(t)
 	beadsDir := t.TempDir()
 	root := filepath.Join(beadsDir, "dolt")
 	if err := os.MkdirAll(root, 0o755); err != nil {

@@ -13,10 +13,11 @@ import (
 // disables the BEADS_DOLT_SERVER_PORT override and turns a benign auto-start
 // port change into a hard failure (GH#4052).
 func TestDefaultConfig_NonzeroPortAlwaysHasSource(t *testing.T) {
-	// Neutralize ambient port env: a leaked BEADS_DOLT_SERVER_PORT from the
-	// surrounding shell would resolve via PortSourceEnv and mask the gap.
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
-	t.Setenv("BEADS_DOLT_PORT", "")
+	// Neutralize the ambient Dolt env: a leaked BEADS_DOLT_SERVER_PORT from
+	// the surrounding shell would resolve via PortSourceEnv and mask the gap,
+	// and a leaked BEADS_DOLT_SERVER_HOST would flip DefaultConfig into
+	// external mode where the external-host port default supplies a source.
+	clearAmbientDoltEnv(t)
 	t.Setenv("HOME", t.TempDir())
 
 	for _, tc := range []struct {

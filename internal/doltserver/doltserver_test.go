@@ -266,10 +266,11 @@ func TestIsRunningCorruptPIDRemovesPortFile(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
+	clearAmbientDoltEnv(t)
+
 	t.Run("standalone_returns_zero_port", func(t *testing.T) {
 		// Clear env vars to test pure standalone behavior
 		t.Setenv("GT_ROOT", "")
-		t.Setenv("BEADS_DOLT_SERVER_PORT", "")
 
 		freshDir := t.TempDir()
 		cfg := DefaultConfig(freshDir)
@@ -832,6 +833,9 @@ func TestStopNotRunningWithCleanupError(t *testing.T) {
 }
 
 func TestKillStaleServersPreservesOtherRepoServers(t *testing.T) {
+	// A shared-server ambient env would move pidPath() out of the test's dir,
+	// so the canonical PID would look absent and nothing would be killed.
+	clearAmbientDoltEnv(t)
 	t.Setenv("BEADS_DOLT_AUTO_START", "") // ensure auto-start guard doesn't short-circuit
 	dir := t.TempDir()
 	canonicalPID := 111
@@ -1120,8 +1124,8 @@ func TestDefaultConfigReturnsZeroForStandalone(t *testing.T) {
 	// DefaultConfig must return port 0 for standalone mode (no configured
 	// port source). Start() will allocate an ephemeral port from the OS,
 	// giving each project a unique port without hash collisions (GH#2098).
+	clearAmbientDoltEnv(t)
 	t.Setenv("GT_ROOT", "")
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
 
 	dir := t.TempDir()
 	cfg := DefaultConfig(dir)
@@ -1133,6 +1137,7 @@ func TestDefaultConfigReturnsZeroForStandalone(t *testing.T) {
 
 func TestDefaultConfigEnvVarOverridesEphemeral(t *testing.T) {
 	// Explicit env var should always take precedence over ephemeral.
+	clearAmbientDoltEnv(t)
 	t.Setenv("BEADS_DOLT_SERVER_PORT", "15000")
 	dir := t.TempDir()
 	cfg := DefaultConfig(dir)
@@ -1143,8 +1148,8 @@ func TestDefaultConfigEnvVarOverridesEphemeral(t *testing.T) {
 
 func TestDefaultConfigPortFileTakesPrecedence(t *testing.T) {
 	// Port file (written by Start) should take precedence over ephemeral.
+	clearAmbientDoltEnv(t)
 	t.Setenv("GT_ROOT", "")
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
 
 	dir := t.TempDir()
 	if err := writePortFile(dir, 14567); err != nil {
@@ -1492,8 +1497,8 @@ func TestResolveServerDir_SharedMode(t *testing.T) {
 }
 
 func TestDefaultConfig_SharedModeFixedPort(t *testing.T) {
+	clearAmbientDoltEnv(t)
 	t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
 	dir := t.TempDir()
 	cfg := DefaultConfig(dir)
 	if cfg.Port != DefaultSharedServerPort {
@@ -1502,6 +1507,7 @@ func TestDefaultConfig_SharedModeFixedPort(t *testing.T) {
 }
 
 func TestDefaultConfig_SharedModeGeneralPortOverrides(t *testing.T) {
+	clearAmbientDoltEnv(t)
 	t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
 	t.Setenv("BEADS_DOLT_SERVER_PORT", "5000")
 	t.Setenv("GT_ROOT", "")
@@ -1520,8 +1526,8 @@ func TestDefaultSharedServerPort_DiffersFromDefault(t *testing.T) {
 }
 
 func TestDefaultConfig_SharedModeBeadsDir(t *testing.T) {
+	clearAmbientDoltEnv(t)
 	t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
 	cfg := DefaultConfig("/some/project/.beads")
 	home, _ := os.UserHomeDir()
 	expected := filepath.Join(home, ".beads", "shared-server")
@@ -1533,8 +1539,7 @@ func TestDefaultConfig_SharedModeBeadsDir(t *testing.T) {
 // --- ServerMode tests ---
 
 func TestResolveServerMode_Default(t *testing.T) {
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
-	t.Setenv("BEADS_DOLT_SERVER_MODE", "")
+	clearAmbientDoltEnv(t)
 	config.ResetForTesting()
 
 	dir := t.TempDir()
@@ -1579,9 +1584,7 @@ func TestResolveServerMode_HostInferredExternal(t *testing.T) {
 	// GH#3545: a non-localhost host with no explicit mode or port means
 	// the server lives on another machine — bd cannot own its lifecycle,
 	// so "bd dolt start" must not launch a repo-local server against it.
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
-	t.Setenv("BEADS_DOLT_SERVER_MODE", "")
-	t.Setenv("BEADS_DOLT_SERVER_HOST", "")
+	clearAmbientDoltEnv(t)
 	config.ResetForTesting()
 
 	dir := t.TempDir()
@@ -1705,8 +1708,7 @@ func TestResolveServerMode_ServerModeEnv(t *testing.T) {
 }
 
 func TestResolveServerMode_EmbeddedMode(t *testing.T) {
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
-	t.Setenv("BEADS_DOLT_SERVER_MODE", "")
+	clearAmbientDoltEnv(t)
 	config.ResetForTesting()
 
 	dir := t.TempDir()
@@ -1742,9 +1744,7 @@ func TestServerMode_String(t *testing.T) {
 }
 
 func TestDefaultConfig_IncludesMode(t *testing.T) {
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
-	t.Setenv("BEADS_DOLT_SERVER_MODE", "")
-	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
+	clearAmbientDoltEnv(t)
 	config.ResetForTesting()
 
 	dir := t.TempDir()
@@ -1827,8 +1827,7 @@ func TestResolveServerMode_EmbeddedHonoredWithoutServerEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("BEADS_DOLT_SERVER_MODE", "")
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
+	clearAmbientDoltEnv(t)
 	config.ResetForTesting()
 
 	got := ResolveServerMode(beadsDir)
