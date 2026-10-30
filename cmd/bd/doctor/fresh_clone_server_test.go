@@ -113,6 +113,11 @@ func TestCheckFreshCloneDB_ServerUnreachable(t *testing.T) {
 }
 
 func TestCheckFreshClone_ServerModeUnreachable(t *testing.T) {
+	// TestMain points both port variables at the shared test container, and
+	// they outrank the metadata port; clear them so port 1 is the server this test reaches.
+	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
+	t.Setenv("BEADS_DOLT_PORT", "")
+
 	// GH#35 + bd-tzo9: When metadata.json declares dolt_mode=server but the
 	// server is unreachable, CheckFreshClone must:
 	//   1. Resolve credentials by the resolved runtime port (bd-tzo9), not
