@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -32,16 +31,11 @@ func TestProtocol_WaitsForAppearsInBlocked(t *testing.T) {
 
 	// Verify gate DOES appear in bd blocked
 	blockedOut := w.run("blocked", "--json")
-	var blocked []struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(blockedOut), &blocked); err != nil {
-		t.Fatalf("failed to parse bd blocked --json: %v\noutput: %s", err, blockedOut)
-	}
+	_, blocked := parseEnvelope(t, blockedOut)
 
 	found := false
 	for _, b := range blocked {
-		if b.ID == gate {
+		if b["id"] == gate {
 			found = true
 			break
 		}
