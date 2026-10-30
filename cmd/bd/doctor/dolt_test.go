@@ -12,6 +12,11 @@ import (
 // (bd-yqpwy)
 
 func TestRunDoltHealthChecks_DoltBackendNoServer(t *testing.T) {
+	// TestMain points both port variables at the shared test container, and
+	// they outrank the metadata port; clear them so this test sees no server.
+	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
+	t.Setenv("BEADS_DOLT_PORT", "")
+
 	// GH#2722: In owned/embedded mode (non-external), when no server is
 	// running, server-dependent checks should be skipped gracefully (StatusOK)
 	// instead of reporting false errors. The embedded SharedStore checks
