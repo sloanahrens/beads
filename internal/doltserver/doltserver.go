@@ -448,20 +448,32 @@ func isPortAvailable(host string, port int) bool {
 // Returns (0, nil) when the port is free for a new server.
 // Returns (0, err) when the port can't be used.
 func reclaimPort(host string, port int, beadsDir string) (adoptPID int, err error) {
+	return reclaimPortWith(host, port, beadsDir, findPIDOnPort, time.Sleep)
+}
+
+// reclaimPortWith is reclaimPort with the listener lookup and the busy-port
+// retry wait injected. The branch a caller takes depends on whether the
+// listener can be identified, and that in turn depends on the host having a
+// listener-discovery tool (lsof, ss, netstat); injecting the lookup lets a test
+// pin every branch's message on whatever host it runs on.
+func reclaimPortWith(host string, port int, beadsDir string, findPID func(int) int, wait func(time.Duration)) (adoptPID int, err error) {
 	if isPortAvailable(host, port) {
 		return 0, nil // port is free
 	}
 
 	// Port is busy — find out what's using it
-	pid := findPIDOnPort(port)
+	pid := findPID(port)
 	if pid == 0 {
 		// Can't identify the process; port may be in TIME_WAIT or transient use.
 		// Wait briefly and retry.
-		time.Sleep(2 * time.Second)
+		wait(2 * time.Second)
 		if isPortAvailable(host, port) {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("port %d is busy but cannot identify the process.\n\nCheck with: %s", port, fmt.Sprintf(portConflictHint, port))
+		// The operator-actionable diagnostics apply here too: not knowing which
+		// process holds the port is exactly when the "it may be your own Dolt in
+		// a container" hint and the BEADS_DOLT_SERVER_* escape hatch matter most.
+		return 0, fmt.Errorf("port %d is busy but cannot identify the process.\n\n%s", port, portConflictDiagnostics(port))
 	}
 
 	// Check if it's a dolt sql-server process
