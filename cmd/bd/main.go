@@ -229,17 +229,7 @@ func effectiveRootStorePolicy(cmdName string, strictReadonly bool) rootStorePoli
 // runsPostCommandMaintenance reports whether PersistentPostRunE should run the
 // post-command maintenance net — Dolt auto-commit, the tip-metadata commit,
 // auto-backup, auto-export and auto-push.
-//
-// `bd serve` is excluded, and not as an optimization. Those steps are per-
-// COMMAND bookkeeping, and a server is not a command: it is a process that ran
-// for hours and committed each mutation inside its own transaction as it
-// happened. Running them when the operator finally sends SIGTERM would push and
-// export on the way out of a signal handler — the worst possible moment — and
-// attribute a whole process lifetime of requests to the shutdown.
 func runsPostCommandMaintenance(cmdName string, strictReadonly bool) bool {
-	if cmdName == serveCmdName {
-		return false
-	}
 	return effectiveRootStorePolicy(cmdName, strictReadonly).runMaintenance
 }
 
