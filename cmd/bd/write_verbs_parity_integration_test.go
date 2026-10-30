@@ -27,13 +27,11 @@ func decodeEnvelopeData(t *testing.T, envelope map[string]any) map[string]any {
 // envelope.
 func decodeJSONEnvelopeArray(t *testing.T, stdout string) []map[string]any {
 	t.Helper()
-	var envelope struct {
-		Data []map[string]any `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+	var data []map[string]any
+	if err := unmarshalEnvelope([]byte(stdout), &data); err != nil {
 		t.Fatalf("stdout is not a --json envelope of an array: %v\nstdout:\n%s", err, stdout)
 	}
-	return envelope.Data
+	return data
 }
 
 // TestParityCreateJSONShape pins `bd create --json`: a SINGLE pretty-printed

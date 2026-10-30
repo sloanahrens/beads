@@ -81,17 +81,14 @@ func TestBackupStatusOmitsUnsupportedDatabaseSize(t *testing.T) {
 		if stderr != "" {
 			t.Errorf("stderr = %q, want empty", stderr)
 		}
-		var response map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(stdout), &response); err != nil {
-			t.Fatalf("stdout is not valid JSON: %v\nstdout: %s", err, stdout)
-		}
-		if _, ok := response["database_size"]; ok {
+		report := backupStatusEnvelopeReport(t, backupStatusJSONDocument(t, stdout), stdout)
+		if _, ok := report["database_size"]; ok {
 			t.Errorf("database_size should be omitted: %s", stdout)
 		}
-		if _, ok := response["backup"]; !ok {
+		if _, ok := report["backup"]; !ok {
 			t.Errorf("backup status missing backup field: %s", stdout)
 		}
-		if _, ok := response["dolt"]; !ok {
+		if _, ok := report["dolt"]; !ok {
 			t.Errorf("backup status missing dolt field: %s", stdout)
 		}
 	})
@@ -132,16 +129,20 @@ func TestBackupStatusIncludesAvailableDatabaseSize(t *testing.T) {
 		if stderr != "" {
 			t.Errorf("stderr = %q, want empty", stderr)
 		}
-		var response struct {
-			DatabaseSize struct {
-				Bytes int64 `json:"bytes"`
-			} `json:"database_size"`
+		// The report sits under data, beside the schema_version the wrapper
+		// stamps on every --json document. A hand-rolled marshal would carry
+		// neither, so the envelope check fails by name when it is bypassed.
+		document := backupStatusJSONDocument(t, stdout)
+		if _, ok := document["database_size"]; ok {
+			t.Errorf("database_size sits at the top level beside the envelope; it belongs under data: %s", stdout)
 		}
-		if err := json.Unmarshal([]byte(stdout), &response); err != nil {
-			t.Fatalf("stdout is not valid JSON: %v\nstdout: %s", err, stdout)
+		report := backupStatusEnvelopeReport(t, document, stdout)
+		assertDatabaseSizeBytes(t, report, 1536, stdout)
+		if _, ok := report["backup"]; !ok {
+			t.Errorf("envelope data lost the backup field: %s", stdout)
 		}
-		if response.DatabaseSize.Bytes != 1536 {
-			t.Errorf("database_size.bytes = %d, want 1536", response.DatabaseSize.Bytes)
+		if _, ok := report["dolt"]; !ok {
+			t.Errorf("envelope data lost the dolt field: %s", stdout)
 		}
 	})
 
@@ -159,6 +160,107 @@ func TestBackupStatusIncludesAvailableDatabaseSize(t *testing.T) {
 			t.Errorf("available database size missing: %s", stdout)
 		}
 	})
+}
+
+// TestBackupStatusJSONKeepsMachineModeShape pins what this command does NOT
+// change: in machine mode the bare report is what callers already get, and its
+// shape belongs to the machine envelope's own bead, not to the schema-wrapper
+// migration of the stdio path. The command takes machine mode as a parameter,
+// so this test passes true instead of writing the package-level flag.
+func TestBackupStatusJSONKeepsMachineModeShape(t *testing.T) {
+	prepareBackupStatusTest(t)
+
+	sizeDatabase := func(context.Context) (int64, bool, error) {
+		return 1536, true, nil
+	}
+
+	cmd := newBackupStatusTestRootInMode(sizeDatabase, true)
+	cmd.SetArgs([]string{"backup", "status", "--json"})
+	stdout, stderr, err := executeBackupStatusCommand(t, cmd)
+	if err != nil {
+		t.Fatalf("backup status: %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\nstdout: %s", err, stdout)
+	}
+	if _, ok := response["schema_version"]; ok {
+		t.Errorf("machine mode gained a schema_version on the stdio path; BD_MACHINE output must not change here: %s", stdout)
+	}
+	if _, ok := response["backup"]; !ok {
+		t.Errorf("machine mode report lost its backup field: %s", stdout)
+	}
+	if _, ok := response["database_size"]; !ok {
+		t.Errorf("machine mode report lost its database_size field: %s", stdout)
+	}
+}
+
+// backupStatusJSONDocument decodes one `backup status --json` document and
+// asserts the wrapper contract every --json command shares: a top-level
+// schema_version equal to JSONSchemaVersion. The hand-rolled marshal this
+// branch replaced carried none, so a regression fails here by name. The
+// report itself sits under data; the caller reads it through
+// backupStatusEnvelopeReport.
+func backupStatusJSONDocument(t *testing.T, stdout string) map[string]json.RawMessage {
+	t.Helper()
+
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &document); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\nstdout: %s", err, stdout)
+	}
+	rawVersion, ok := document["schema_version"]
+	if !ok {
+		t.Fatalf("backup status --json carries no schema_version; it bypasses the schema wrapper: %s", stdout)
+	}
+	var version int
+	if err := json.Unmarshal(rawVersion, &version); err != nil {
+		t.Fatalf("schema_version is not a number: %v\nstdout: %s", err, stdout)
+	}
+	if version != JSONSchemaVersion {
+		t.Errorf("schema_version = %d, want %d", version, JSONSchemaVersion)
+	}
+	return document
+}
+
+// backupStatusEnvelopeReport returns the "data" object of an envelope document
+// and fails when the report is not nested under data.
+func backupStatusEnvelopeReport(t *testing.T, document map[string]json.RawMessage, stdout string) map[string]json.RawMessage {
+	t.Helper()
+
+	rawData, ok := document["data"]
+	if !ok {
+		t.Fatalf("envelope output has no data object: %s", stdout)
+	}
+	var report map[string]json.RawMessage
+	if err := json.Unmarshal(rawData, &report); err != nil {
+		t.Fatalf("envelope data is not an object: %v\nstdout: %s", err, stdout)
+	}
+	return report
+}
+
+// assertDatabaseSizeBytes asserts the report's database_size.bytes, failing
+// when the field is missing so a dropped database_size is reported by name
+// rather than as a zero.
+func assertDatabaseSizeBytes(t *testing.T, report map[string]json.RawMessage, want int64, stdout string) {
+	t.Helper()
+
+	raw, ok := report["database_size"]
+	if !ok {
+		t.Fatalf("database_size missing from the JSON report: %s", stdout)
+	}
+	var size struct {
+		Bytes int64 `json:"bytes"`
+	}
+	if err := json.Unmarshal(raw, &size); err != nil {
+		t.Fatalf("database_size is not an object: %v\nstdout: %s", err, stdout)
+	}
+	if size.Bytes != want {
+		t.Errorf("database_size.bytes = %d, want %d", size.Bytes, want)
+	}
 }
 
 func prepareBackupStatusTest(t *testing.T) {
@@ -181,10 +283,14 @@ func prepareBackupStatusTest(t *testing.T) {
 }
 
 func newBackupStatusTestRoot(sizeDatabase backupSizeFunc) *cobra.Command {
+	return newBackupStatusTestRootInMode(sizeDatabase, false)
+}
+
+func newBackupStatusTestRootInMode(sizeDatabase backupSizeFunc, machine bool) *cobra.Command {
 	root := &cobra.Command{Use: "bd"}
 	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "output JSON")
 	backup := &cobra.Command{Use: "backup"}
-	backup.AddCommand(newBackupStatusCommand(sizeDatabase))
+	backup.AddCommand(newBackupStatusCommand(sizeDatabase, func() bool { return machine }))
 	root.AddCommand(backup)
 	return root
 }
