@@ -14,7 +14,7 @@ import (
 
 func TestLargeDolt(t *testing.T) {
 	testutil.RequireDoltContainer(t)
-	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir()})
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir(), CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestXLargeDolt(t *testing.T) {
 	}
 	testutil.RequireDoltContainer(t)
 
-	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir()})
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir(), CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestLargeFromJSONL(t *testing.T) {
 	}
 	testutil.RequireDoltContainer(t)
 
-	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir()})
+	store, err := dolt.New(context.Background(), &dolt.Config{Path: t.TempDir(), CreateIfMissing: true})
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
