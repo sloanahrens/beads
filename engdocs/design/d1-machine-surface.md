@@ -134,7 +134,9 @@ shorthand, type, default, persistent}]}], error_kinds: {kind: exit}}`.
 
 ## Not in this change
 
-- Legacy `--json` shapes and `BD_JSON_ENVELOPE=1` behavior are unchanged.
+- Legacy `--json` shapes were not removed here; they were removed later in
+  be-xu2.5, so the `schema_version` envelope is now the only `--json` shape
+  outside machine mode.
 - The proxied-server twins of close/defer/undefer follow the same batch rule
   and carry typed per-id kinds.
 - `os.Exit` calls inside commands other than CheckReadonly and

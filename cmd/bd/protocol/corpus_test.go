@@ -19,13 +19,18 @@ var updateCorpus = flag.Bool("corpus.update", false, "regenerate the committed g
 
 const corpusGeneratedBy = "cmd/bd/protocol TestCorpusGolden"
 
+// corpusMode names the one --json shape bd emits: the schema_version envelope.
+// It remains a named mode because the corpus layout and manifest keys are
+// "<mode>/<name>" for consumers that vendor the tree.
+const corpusMode = "envelope"
+
 type captureResult struct {
 	stdout   []byte
 	exitCode int
 	execErr  error
 }
 
-type captureRunner func(envelope bool, capture Capture) captureResult
+type captureRunner func(capture Capture) captureResult
 
 // newLiveCaptureRunner adapts one fresh subprocess workspace to captureRunner.
 // The corpus PLAN is stateful, so a runner owns exactly one workspace and a
@@ -33,14 +38,10 @@ type captureRunner func(envelope bool, capture Capture) captureResult
 func newLiveCaptureRunner(t *testing.T) captureRunner {
 	t.Helper()
 	w := newWorkspace(t)
-	return func(envelope bool, c Capture) captureResult {
-		env := w.env()
-		if envelope {
-			env = append(env, "BD_JSON_ENVELOPE=1")
-		}
+	return func(c Capture) captureResult {
 		cmd := exec.Command(w.bd, c.Args...)
 		cmd.Dir = w.dir
-		cmd.Env = env
+		cmd.Env = w.env()
 		var stdout bytes.Buffer
 		cmd.Stdout = &stdout // stdout only: bd writes human error banners to stderr
 		runErr := cmd.Run()
@@ -58,31 +59,33 @@ func newLiveCaptureRunner(t *testing.T) captureRunner {
 	}
 }
 
-// generateCorpus runs the exact corpus PLAN through runner for one envelope
-// mode and returns name -> canonicalized blob bytes.
-func generateCorpus(envelope bool, runner captureRunner) (map[string][]byte, error) {
+// generateCorpus runs the exact corpus PLAN through runner and returns
+// name -> canonicalized blob bytes.
+func generateCorpus(runner captureRunner) (map[string][]byte, error) {
 	out := make(map[string][]byte)
 	for _, c := range CorpusPlan() {
-		result := runner(envelope, c)
+		result := runner(c)
 		if err := checkCaptureExit(c.Name, result); err != nil {
-			return nil, fmt.Errorf("capture %q (envelope=%v): %w", c.Name, envelope, err)
+			return nil, fmt.Errorf("capture %q: %w", c.Name, err)
 		}
 
 		canon, err := CanonicalizeJSON(result.stdout)
 		if err != nil {
-			return nil, fmt.Errorf("canonicalize %s (envelope=%v): %w\nraw stdout:\n%s", c.Name, envelope, err, result.stdout)
+			return nil, fmt.Errorf("canonicalize %s: %w\nraw stdout:\n%s", c.Name, err, result.stdout)
 		}
-		if c.Name != errorCaptureName && isErrorEnvelope(canon, envelope) {
-			return nil, fmt.Errorf("capture %q (envelope=%v) produced an error envelope, not real output:\n%s\n(check the bd command in CorpusPlan)", c.Name, envelope, canon)
+		if c.Name != errorCaptureName && isErrorEnvelope(canon) {
+			return nil, fmt.Errorf("capture %q produced an error envelope, not real output:\n%s\n(check the bd command in CorpusPlan)", c.Name, canon)
 		}
 		out[c.Name] = canon
 	}
 	return out, nil
 }
 
-// isErrorEnvelope reports whether a canonicalized blob is bd's {error, ...}
-// shape (flat) or {data:{error,...}} / {error,...} under the v2 envelope.
-func isErrorEnvelope(blob []byte, envelope bool) bool {
+// isErrorEnvelope reports whether a canonicalized blob is bd's error shape,
+// {schema_version, data:{error,...}}. A top-level "error" also counts, so a
+// regression that drops the envelope cannot slip through the guard as real
+// command output.
+func isErrorEnvelope(blob []byte) bool {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(blob, &top); err != nil {
 		return false // arrays (list/ready) are never error envelopes
@@ -90,13 +93,11 @@ func isErrorEnvelope(blob []byte, envelope bool) bool {
 	if _, ok := top["error"]; ok {
 		return true
 	}
-	if envelope {
-		if data, ok := top["data"]; ok {
-			var inner map[string]json.RawMessage
-			if json.Unmarshal(data, &inner) == nil {
-				_, ok := inner["error"]
-				return ok
-			}
+	if data, ok := top["data"]; ok {
+		var inner map[string]json.RawMessage
+		if json.Unmarshal(data, &inner) == nil {
+			_, ok := inner["error"]
+			return ok
 		}
 	}
 	return false
@@ -164,26 +165,15 @@ func TestCheckCaptureExit(t *testing.T) {
 func TestCorpusGolden(t *testing.T) {
 	requireDoltStore(t, "corpus golden test")
 
-	modes := []struct {
-		name     string
-		envelope bool
-	}{
-		{"flat", false},
-		{"envelope", true},
+	runner := newLiveCaptureRunner(t)
+	generated, err := generateCorpus(runner)
+	if err != nil {
+		t.Fatalf("generate corpus: %v", err)
 	}
-
-	blobs := make(map[string]map[string][]byte, len(modes))
-	for _, m := range modes {
-		runner := newLiveCaptureRunner(t)
-		generated, err := generateCorpus(m.envelope, runner)
-		if err != nil {
-			t.Fatalf("generate %s corpus: %v", m.name, err)
-		}
-		blobs[m.name] = generated
-	}
+	blobs := map[string]map[string][]byte{corpusMode: generated}
 
 	dir := filepath.Join("testdata", "corpus")
-	schemaVersion := schemaVersionFromBlobs(t, blobs)
+	schemaVersion := schemaVersionFromBlobs(t, generated)
 	manifest := NewManifest(schemaVersion, corpusGeneratedBy, CorpusPlan(), blobs)
 	manifestBytes, err := MarshalManifest(manifest)
 	if err != nil {
@@ -196,16 +186,14 @@ func TestCorpusGolden(t *testing.T) {
 		return
 	}
 
-	for _, m := range modes {
-		for name, got := range blobs[m.name] {
-			path := filepath.Join(dir, m.name, name+".json")
-			want, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read committed %s: %v\nrun `make corpus-regen` to (re)generate the corpus", path, err)
-			}
-			if !bytes.Equal(got, want) {
-				t.Fatalf("corpus drift in %s/%s.json\n--- committed ---\n%s\n--- live bd ---\n%s\nrun `make corpus-regen` and review the diff before committing", m.name, name, want, got)
-			}
+	for name, got := range generated {
+		path := filepath.Join(dir, corpusMode, name+".json")
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read committed %s: %v\nrun `make corpus-regen` to (re)generate the corpus", path, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("corpus drift in %s/%s.json\n--- committed ---\n%s\n--- live bd ---\n%s\nrun `make corpus-regen` and review the diff before committing", corpusMode, name, want, got)
 		}
 	}
 
@@ -284,14 +272,14 @@ func writeCorpus(t *testing.T, dir string, blobs map[string]map[string][]byte, m
 	}
 }
 
-// schemaVersionFromBlobs reads the schema_version every bd --json object carries
-// (flat mode) so the manifest records the same canary the wire uses. A bump in
-// bd's JSONSchemaVersion changes every blob, which the diff guard then catches.
-func schemaVersionFromBlobs(t *testing.T, blobs map[string]map[string][]byte) int {
+// schemaVersionFromBlobs reads the envelope schema_version from the version
+// blob so the manifest records the same canary the wire uses. A bump in bd's
+// JSONSchemaVersion changes every blob, which the diff guard then catches.
+func schemaVersionFromBlobs(t *testing.T, blobs map[string][]byte) int {
 	t.Helper()
-	raw, ok := blobs["flat"]["version"]
+	raw, ok := blobs["version"]
 	if !ok {
-		t.Fatal("corpus missing flat/version blob")
+		t.Fatal("corpus missing version blob")
 	}
 	var v struct {
 		SchemaVersion int `json:"schema_version"`

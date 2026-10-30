@@ -48,9 +48,9 @@ const (
 // errorCaptureName is the single PLAN capture that deliberately targets a
 // missing issue, so it is the one capture expected to exit non-zero. It pins the
 // exit-codes-and-errors half of the contract — a non-zero exit plus the
-// {error, schema_version} stdout envelope (see CATALOG.md) — while every other
-// capture must exit 0. The generator special-cases this name in both the
-// exit-status check and the error-envelope guard.
+// {"schema_version": N, "data": {"error": …}} stdout envelope (see CATALOG.md)
+// — while every other capture must exit 0. The generator special-cases this name
+// in both the exit-status check and the error-envelope guard.
 const errorCaptureName = "error"
 
 // CorpusPlan returns the ordered, deterministic list of captures. The order
@@ -142,9 +142,10 @@ func CorpusPlan() []Capture {
 			Name: "version",
 			Args: []string{"version", "--json"},
 		},
-		// The error capture pins the {error, schema_version} envelope bd emits on
-		// stdout for a missing issue — a downstream consumer's isBdNotFound classifier depends on
-		// it — plus the non-zero exit status bd returns (see checkCaptureExit).
+		// The error capture pins the {"schema_version": N, "data": {"error": …}}
+		// envelope bd emits on stdout for a missing issue — a downstream
+		// consumer's isBdNotFound classifier depends on it — plus the non-zero
+		// exit status bd returns (see checkCaptureExit).
 		{
 			Name: errorCaptureName,
 			Args: []string{"show", "nonexistent-xyz-corpus", "--json"},
@@ -398,10 +399,11 @@ type Manifest struct {
 }
 
 // NewManifest builds a Manifest from the captured (mode → name → bytes)
-// corpus. The blob key is "<mode>/<name>" (e.g. "flat/show",
-// "envelope/show") and cmd is the joined bd argument vector for that
-// capture. bytes are the already-canonicalized blob contents; the SHA is
-// computed over them so the manifest validates exactly what's on disk.
+// corpus. The blob key is "<mode>/<name>" (e.g. "envelope/show"); the mode
+// names the one --json shape the corpus pins. cmd is the joined bd argument
+// vector for that capture. bytes are the already-canonicalized blob contents;
+// the SHA is computed over them so the manifest validates exactly what's on
+// disk.
 func NewManifest(schemaVersion int, generatedBy string, plan []Capture, blobs map[string]map[string][]byte) Manifest {
 	cmdByName := make(map[string]string, len(plan))
 	for _, c := range plan {
