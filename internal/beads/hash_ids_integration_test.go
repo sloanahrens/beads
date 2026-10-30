@@ -40,25 +40,23 @@ var hashIDTestTime = time.Date(2026, time.October, 30, 9, 0, 0, 0, time.UTC)
 // create a new database).
 var allowNewDatabase = map[string]string{"BD_ALLOW_NEW_DATABASE": "1"}
 
-// getBDPath returns the test bd binary path
-func getBDPath() string {
-	if testBDBinary := os.Getenv("BEADS_TEST_BD_BINARY"); testBDBinary != "" {
-		return testBDBinary
-	}
-	// Fallback for non-TestMain runs
-	return "./bd"
-}
-
 func hasDoltTestPort() bool {
 	return os.Getenv("BEADS_DOLT_PORT") != ""
 }
 
+// requireHashIDIntegration gates the tests that run the bd binary. BEADS_DOLT_PORT
+// alone does not enable them: gt exports that variable to every session, so the
+// tests need the test container (TestMain builds BEADS_TEST_BD_BINARY only when
+// the container is up). Without the binary they skip; they never fall back to a
+// ./bd in the package directory.
 func requireHashIDIntegration(t *testing.T) string {
 	t.Helper()
-	if !hasDoltTestPort() {
-		t.Skip("skipping: Dolt test container not available")
+	testutil.RequireDoltContainer(t)
+	testBDBinary := os.Getenv("BEADS_TEST_BD_BINARY")
+	if testBDBinary == "" {
+		t.Skip("skipping: BEADS_TEST_BD_BINARY not set (test bd binary not built)")
 	}
-	bdPath, err := filepath.Abs(getBDPath())
+	bdPath, err := filepath.Abs(testBDBinary)
 	if err != nil {
 		t.Fatalf("resolve bd binary path: %v", err)
 	}
@@ -226,15 +224,18 @@ func TestHashIDs_ReimportOfIdenticalContentIsADedupe(t *testing.T) {
 // hashIDDatabaseName returns the Dolt database name for a workspace at dir. Both
 // workspaces of the re-import test use the prefix "test", which bd init turns
 // into the same database name, so each directory gets its own name instead.
-// It hashes the path the way openHashIDStore's database names do.
+// It hashes the path the way openHashIDStore's database names do, with the
+// testdb_ prefix that bd dolt clean-databases drops (staleDatabasePrefixes in
+// cmd/bd/dolt.go).
 func hashIDDatabaseName(dir string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(dir)) // hash.Hash.Write never returns an error
-	return fmt.Sprintf("hashids_%x", h.Sum64())
+	return fmt.Sprintf("testdb_%x", h.Sum64())
 }
 
 // TestHashIDDatabaseName checks that two workspace directories get two database
-// names, and that one directory always gets the same name.
+// names, that one directory always gets the same name, and that the name carries
+// the testdb_ prefix the stale-database cleanup drops.
 func TestHashIDDatabaseName(t *testing.T) {
 	source := hashIDDatabaseName("/work/source")
 	target := hashIDDatabaseName("/work/target")
@@ -243,6 +244,11 @@ func TestHashIDDatabaseName(t *testing.T) {
 	}
 	if again := hashIDDatabaseName("/work/source"); again != source {
 		t.Errorf("same directory gave database name %q then %q; want one name", source, again)
+	}
+	for _, name := range []string{source, target} {
+		if !strings.HasPrefix(name, "testdb_") {
+			t.Errorf("database name %q lacks the testdb_ prefix; bd dolt clean-databases would not drop it", name)
+		}
 	}
 }
 
