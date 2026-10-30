@@ -256,6 +256,11 @@ func resolveProxiedServerUOWTopology(beadsDir, databaseOverride string, posture 
 // call on the same workspace.
 const serverModeSocketProbeTimeout = 500 * time.Millisecond
 
+// providerCloseTimeout bounds the close of a provider a caller built itself. It
+// is not a drain budget: whatever was running on the provider has already
+// drained by the time the close is issued.
+const providerCloseTimeout = 10 * time.Second
+
 type socketTransportResolver func(socket, host string, port int, timeout time.Duration) string
 
 // errServeGatewayCredential refuses a workspace that authenticates to Dolt with
