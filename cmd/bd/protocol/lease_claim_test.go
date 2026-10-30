@@ -82,7 +82,8 @@ func TestProtocol_ClaimIsUnassignedOnly(t *testing.T) {
 
 // TestProtocol_ReadyClaimEmptyFrontIsSuccess pins clause L3.4 (and §E1): when
 // nothing is claimable, `bd ready --claim --json` MUST exit 0 with an explicit
-// empty JSON array. Queue-drained is the steady state of a worker fleet, not an
+// empty JSON array (the envelope's data, {"schema_version": N, "data": []}).
+// Queue-drained is the steady state of a worker fleet, not an
 // error — a nonzero exit here would make every idle worker look like a failure.
 func TestProtocol_ReadyClaimEmptyFrontIsSuccess(t *testing.T) {
 	t.Parallel()
@@ -93,9 +94,7 @@ func TestProtocol_ReadyClaimEmptyFrontIsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("L3.4: bd ready --claim --json on an empty tracker exited nonzero: %v\n%s", err, out)
 	}
-	if trimmed := strings.TrimSpace(out); trimmed != "[]" {
-		t.Errorf("L3.4: empty front printed %q, want the explicit empty array []", trimmed)
-	}
+	requireEmptyFront(t, out, "empty front")
 
 	// (b) Drained: the one issue is claimed, so the next claim comes up empty.
 	only := w.create("--title", "The only work", "--type", "task")
@@ -106,8 +105,18 @@ func TestProtocol_ReadyClaimEmptyFrontIsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("L3.4: bd ready --claim --json on a drained queue exited nonzero: %v\n%s", err, out)
 	}
-	if trimmed := strings.TrimSpace(out); trimmed != "[]" {
-		t.Errorf("L3.4: drained queue printed %q, want []", trimmed)
+	requireEmptyFront(t, out, "drained queue")
+}
+
+// requireEmptyFront asserts out is the --json envelope whose data is an
+// explicit empty array: not null, not absent, not a list with items.
+func requireEmptyFront(t *testing.T, out, what string) {
+	t.Helper()
+	env, items := parseEnvelope(t, out)
+	assertSchemaVersion(t, env, "L3.4 "+what)
+	data, ok := env["data"].([]any)
+	if !ok || len(data) != 0 || len(items) != 0 {
+		t.Errorf("L3.4: %s printed data %v, want the explicit empty array []\n%s", what, env["data"], out)
 	}
 }
 
