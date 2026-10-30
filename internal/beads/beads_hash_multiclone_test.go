@@ -260,8 +260,7 @@ func runCmd(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
-		out, _ := cmd.CombinedOutput()
+	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Command failed: %s %v\nError: %v\nOutput: %s", name, args, err, string(out))
 	}
 }
