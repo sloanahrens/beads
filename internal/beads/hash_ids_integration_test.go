@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -205,7 +206,7 @@ func TestHashIDs_ReimportOfIdenticalContentIsADedupe(t *testing.T) {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatalf("create workspace %s: %v", dir, err)
 		}
-		runHashIDBD(t, bdPath, dir, allowNewDatabase, "init", "--quiet", "--prefix", "test")
+		runHashIDBD(t, bdPath, dir, allowNewDatabase, "init", "--quiet", "--prefix", "test", "--database", hashIDDatabaseName(dir))
 	}
 
 	id := createHashIDBDIssue(t, bdPath, source, "Reimport me")
@@ -218,6 +219,29 @@ func TestHashIDs_ReimportOfIdenticalContentIsADedupe(t *testing.T) {
 		if len(ids) != 1 || ids[0] != id {
 			t.Fatalf("after import %d: want exactly one issue %q, got %v", i, id, ids)
 		}
+	}
+}
+
+// hashIDDatabaseName returns the Dolt database name for a workspace at dir. Both
+// workspaces of the re-import test use the prefix "test", which bd init turns
+// into the same database name, so each directory gets its own name instead.
+// It hashes the path the way openHashIDStore's database names do.
+func hashIDDatabaseName(dir string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(dir)) // hash.Hash.Write never returns an error
+	return fmt.Sprintf("hashids_%x", h.Sum64())
+}
+
+// TestHashIDDatabaseName checks that two workspace directories get two database
+// names, and that one directory always gets the same name.
+func TestHashIDDatabaseName(t *testing.T) {
+	source := hashIDDatabaseName("/work/source")
+	target := hashIDDatabaseName("/work/target")
+	if source == target {
+		t.Errorf("two directories share database name %q; want distinct names", source)
+	}
+	if again := hashIDDatabaseName("/work/source"); again != source {
+		t.Errorf("same directory gave database name %q then %q; want one name", source, again)
 	}
 }
 
