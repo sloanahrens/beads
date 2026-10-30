@@ -465,7 +465,7 @@ func portAcceptsConnections(host string, port int) bool {
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), portProbeTimeout)
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), portProbeTimeout) //nolint:gosec // G704: host is bd's own configured server and port is resolved from local bookkeeping, not request input
 	if err != nil {
 		return false
 	}
