@@ -630,11 +630,5 @@ func setSourceInfoRecursive(steps []*Step, formulaName, pathPrefix string) {
 			childPath := fmt.Sprintf("%s[%d].children", pathPrefix, i)
 			setSourceInfoRecursive(step.Children, formulaName, childPath)
 		}
-
-		// Handle loop body steps
-		if step.Loop != nil && len(step.Loop.Body) > 0 {
-			bodyPath := fmt.Sprintf("%s[%d].loop.body", pathPrefix, i)
-			setSourceInfoRecursive(step.Loop.Body, formulaName, bodyPath)
-		}
 	}
 }

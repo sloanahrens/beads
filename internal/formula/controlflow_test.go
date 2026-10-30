@@ -5,151 +5,6 @@ import (
 	"testing"
 )
 
-func TestApplyLoops_FixedCount(t *testing.T) {
-	// Create a step with a fixed-count loop
-	steps := []*Step{
-		{
-			ID:    "process",
-			Title: "Process items",
-			Loop: &LoopSpec{
-				Count: 3,
-				Body: []*Step{
-					{ID: "fetch", Title: "Fetch item"},
-					{ID: "transform", Title: "Transform item", Needs: []string{"fetch"}},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have 6 steps (3 iterations * 2 steps each)
-	if len(result) != 6 {
-		t.Errorf("Expected 6 steps, got %d", len(result))
-	}
-
-	// Check step IDs
-	expectedIDs := []string{
-		"process.iter1.fetch",
-		"process.iter1.transform",
-		"process.iter2.fetch",
-		"process.iter2.transform",
-		"process.iter3.fetch",
-		"process.iter3.transform",
-	}
-
-	for i, expected := range expectedIDs {
-		if i >= len(result) {
-			t.Errorf("Missing step %d: %s", i, expected)
-			continue
-		}
-		if result[i].ID != expected {
-			t.Errorf("Step %d: expected ID %s, got %s", i, expected, result[i].ID)
-		}
-	}
-
-	// Check that inner dependencies are preserved (within same iteration)
-	transform1 := result[1]
-	if len(transform1.Needs) != 1 || transform1.Needs[0] != "process.iter1.fetch" {
-		t.Errorf("transform1 should need process.iter1.fetch, got %v", transform1.Needs)
-	}
-
-	// Check that iterations are chained (iter2 depends on iter1)
-	fetch2 := result[2]
-	if len(fetch2.Needs) != 1 || fetch2.Needs[0] != "process.iter1.transform" {
-		t.Errorf("iter2.fetch should need iter1.transform, got %v", fetch2.Needs)
-	}
-}
-
-func TestApplyLoops_Conditional(t *testing.T) {
-	steps := []*Step{
-		{
-			ID:    "retry",
-			Title: "Retry operation",
-			Loop: &LoopSpec{
-				Until: "step.status == 'complete'",
-				Max:   5,
-				Body: []*Step{
-					{ID: "attempt", Title: "Attempt operation"},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Conditional loops expand once (runtime re-executes)
-	if len(result) != 1 {
-		t.Errorf("Expected 1 step for conditional loop, got %d", len(result))
-	}
-
-	// Should have loop metadata label with JSON format
-	step := result[0]
-	hasLoopLabel := false
-	for _, label := range step.Labels {
-		// Label format: loop:{"max":5,"until":"step.status == 'complete'"}
-		if len(label) > 5 && label[:5] == "loop:" {
-			hasLoopLabel = true
-			// Verify it contains the expected values
-			if !strings.Contains(label, `"until"`) || !strings.Contains(label, `"max"`) {
-				t.Errorf("Loop label missing expected fields: %s", label)
-			}
-		}
-	}
-
-	if !hasLoopLabel {
-		t.Error("Missing loop metadata label")
-	}
-}
-
-func TestApplyLoops_Validation(t *testing.T) {
-	tests := []struct {
-		name    string
-		loop    *LoopSpec
-		wantErr string
-	}{
-		{
-			name:    "empty body",
-			loop:    &LoopSpec{Count: 3, Body: nil},
-			wantErr: "body is required",
-		},
-		{
-			name:    "both count and until",
-			loop:    &LoopSpec{Count: 3, Until: "cond", Max: 5, Body: []*Step{{ID: "a", Title: "A"}}},
-			wantErr: "cannot have both count and until",
-		},
-		{
-			name:    "neither count nor until",
-			loop:    &LoopSpec{Body: []*Step{{ID: "a", Title: "A"}}},
-			wantErr: "either count or until is required",
-		},
-		{
-			name:    "until without max",
-			loop:    &LoopSpec{Until: "cond", Body: []*Step{{ID: "a", Title: "A"}}},
-			wantErr: "max is required when until is set",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			steps := []*Step{{ID: "test", Title: "Test", Loop: tt.loop}}
-			_, err := ApplyLoops(steps)
-			if err == nil {
-				t.Error("Expected error, got nil")
-			} else if tt.wantErr != "" && err.Error() != "" {
-				// Just check that an error was returned
-				// The exact message format may vary
-			}
-		})
-	}
-}
-
 func TestApplyBranches(t *testing.T) {
 	steps := []*Step{
 		{ID: "setup", Title: "Setup"},
@@ -330,16 +185,8 @@ func TestApplyControlFlow_Integration(t *testing.T) {
 	// Test the combined ApplyControlFlow function
 	steps := []*Step{
 		{ID: "setup", Title: "Setup"},
-		{
-			ID:    "process",
-			Title: "Process items",
-			Loop: &LoopSpec{
-				Count: 2,
-				Body: []*Step{
-					{ID: "item", Title: "Process item"},
-				},
-			},
-		},
+		{ID: "test", Title: "Run tests"},
+		{ID: "lint", Title: "Run linter"},
 		{ID: "cleanup", Title: "Cleanup"},
 	}
 
@@ -347,7 +194,7 @@ func TestApplyControlFlow_Integration(t *testing.T) {
 		Branch: []*BranchRule{
 			{
 				From:  "setup",
-				Steps: []string{"process.iter1.item", "process.iter2.item"},
+				Steps: []string{"test", "lint"},
 				Join:  "cleanup",
 			},
 		},
@@ -364,12 +211,83 @@ func TestApplyControlFlow_Integration(t *testing.T) {
 		t.Fatalf("ApplyControlFlow failed: %v", err)
 	}
 
-	// Should have: setup, process.iter1.item, process.iter2.item, cleanup
+	// Should have: setup, test, lint, cleanup
 	if len(result) != 4 {
 		t.Errorf("Expected 4 steps, got %d", len(result))
 	}
 
-	// Verify cleanup has gate label
+	stepMap := make(map[string]*Step)
+	for _, s := range result {
+		stepMap[s.ID] = s
+	}
+
+	// Both applications must be present in one pass: branch needs plus gate label.
+	for _, branchStep := range []string{"test", "lint"} {
+		if !containsString(stepMap[branchStep].Needs, "setup") {
+			t.Errorf("%s should need setup, got %v", branchStep, stepMap[branchStep].Needs)
+		}
+	}
+	if !containsString(stepMap["cleanup"].Needs, "test") || !containsString(stepMap["cleanup"].Needs, "lint") {
+		t.Errorf("cleanup should need test and lint, got %v", stepMap["cleanup"].Needs)
+	}
+
+	hasGate := false
+	for _, label := range stepMap["cleanup"].Labels {
+		// Label format: gate:{"condition":"steps.complete >= 2"}
+		if len(label) > 5 && label[:5] == "gate:" && strings.Contains(label, "steps.complete") {
+			hasGate = true
+			break
+		}
+	}
+	if !hasGate {
+		t.Errorf("cleanup should have gate label, got %v", stepMap["cleanup"].Labels)
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// TestApplyControlFlow_Immutability pins that the combined pass copies the
+// input steps before wiring branches and gates onto them.
+func TestApplyControlFlow_Immutability(t *testing.T) {
+	steps := []*Step{
+		{ID: "setup", Title: "Setup"},
+		{ID: "test", Title: "Run tests"},
+		{ID: "cleanup", Title: "Cleanup"},
+	}
+
+	compose := &ComposeRules{
+		Branch: []*BranchRule{
+			{From: "setup", Steps: []string{"test"}, Join: "cleanup"},
+		},
+		Gate: []*GateRule{
+			{Before: "cleanup", Condition: "test.status == 'complete'"},
+		},
+	}
+
+	result, err := ApplyControlFlow(steps, compose)
+	if err != nil {
+		t.Fatalf("ApplyControlFlow failed: %v", err)
+	}
+
+	for _, step := range steps {
+		if len(step.Needs) != 0 {
+			t.Errorf("Original step %q was mutated: Needs = %v (expected nil)", step.ID, step.Needs)
+		}
+		if len(step.Labels) != 0 {
+			t.Errorf("Original step %q was mutated: Labels = %v (expected nil)", step.ID, step.Labels)
+		}
+	}
+
+	// The returned slice must carry the wiring, so a pass that mutated the
+	// input in place would still satisfy the assertions above only if it also
+	// returned the input; check the result explicitly.
 	var cleanup *Step
 	for _, s := range result {
 		if s.ID == "cleanup" {
@@ -377,358 +295,14 @@ func TestApplyControlFlow_Integration(t *testing.T) {
 			break
 		}
 	}
-
 	if cleanup == nil {
-		t.Fatal("cleanup step not found")
+		t.Fatal("cleanup step not found in result")
 	}
-
-	hasGate := false
-	for _, label := range cleanup.Labels {
-		// Label format: gate:{"condition":"steps.complete >= 2"}
-		if len(label) > 5 && label[:5] == "gate:" && strings.Contains(label, "steps.complete") {
-			hasGate = true
-			break
-		}
+	if !containsString(cleanup.Needs, "test") {
+		t.Errorf("result cleanup should need test, got %v", cleanup.Needs)
 	}
-
-	if !hasGate {
-		t.Errorf("cleanup should have gate label, got %v", cleanup.Labels)
-	}
-}
-
-func TestApplyLoops_NoLoops(t *testing.T) {
-	// Test with steps that have no loops
-	steps := []*Step{
-		{ID: "a", Title: "A"},
-		{ID: "b", Title: "B", Needs: []string{"a"}},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	if len(result) != 2 {
-		t.Errorf("Expected 2 steps, got %d", len(result))
-	}
-
-	// Dependencies should be preserved
-	if len(result[1].Needs) != 1 || result[1].Needs[0] != "a" {
-		t.Errorf("Dependencies not preserved: %v", result[1].Needs)
-	}
-}
-
-func TestApplyLoops_ExternalDependencies(t *testing.T) {
-	// Test that dependencies on steps OUTSIDE the loop are preserved as-is
-	steps := []*Step{
-		{ID: "setup", Title: "Setup"},
-		{
-			ID:    "process",
-			Title: "Process items",
-			Loop: &LoopSpec{
-				Count: 2,
-				Body: []*Step{
-					{ID: "work", Title: "Do work", Needs: []string{"setup"}}, // External dep
-					{ID: "save", Title: "Save", Needs: []string{"work"}},     // Internal dep
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have: setup, process.iter1.work, process.iter1.save, process.iter2.work, process.iter2.save
-	if len(result) != 5 {
-		t.Errorf("Expected 5 steps, got %d", len(result))
-	}
-
-	// Find iter1.work - should have external dep on "setup" (not "process.iter1.setup")
-	var work1 *Step
-	for _, s := range result {
-		if s.ID == "process.iter1.work" {
-			work1 = s
-			break
-		}
-	}
-
-	if work1 == nil {
-		t.Fatal("process.iter1.work not found")
-	}
-
-	// External dependency should be preserved as-is
-	if len(work1.Needs) != 1 || work1.Needs[0] != "setup" {
-		t.Errorf("External dependency should be 'setup', got %v", work1.Needs)
-	}
-
-	// Find iter1.save - should have internal dep on "process.iter1.work"
-	var save1 *Step
-	for _, s := range result {
-		if s.ID == "process.iter1.save" {
-			save1 = s
-			break
-		}
-	}
-
-	if save1 == nil {
-		t.Fatal("process.iter1.save not found")
-	}
-
-	// Internal dependency should be prefixed
-	if len(save1.Needs) != 1 || save1.Needs[0] != "process.iter1.work" {
-		t.Errorf("Internal dependency should be 'process.iter1.work', got %v", save1.Needs)
-	}
-}
-
-func TestApplyLoops_NestedChildren(t *testing.T) {
-	// Test that children are preserved when recursing
-	steps := []*Step{
-		{
-			ID:    "parent",
-			Title: "Parent",
-			Children: []*Step{
-				{ID: "child", Title: "Child"},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	if len(result) != 1 {
-		t.Fatalf("Expected 1 step, got %d", len(result))
-	}
-
-	if len(result[0].Children) != 1 {
-		t.Errorf("Expected 1 child, got %d", len(result[0].Children))
-	}
-}
-
-// gt-zn35j: Tests for nested loop support
-
-func TestApplyLoops_NestedLoops(t *testing.T) {
-	// Create a loop containing another loop
-	steps := []*Step{
-		{
-			ID:    "outer",
-			Title: "Outer loop",
-			Loop: &LoopSpec{
-				Count: 2,
-				Body: []*Step{
-					{
-						ID:    "inner",
-						Title: "Inner loop",
-						Loop: &LoopSpec{
-							Count: 2,
-							Body: []*Step{
-								{ID: "work", Title: "Do work"},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have 4 steps total (2 outer * 2 inner)
-	if len(result) != 4 {
-		t.Errorf("Expected 4 steps, got %d", len(result))
-		for i, s := range result {
-			t.Logf("  Step %d: %s", i, s.ID)
-		}
-	}
-
-	// Check step IDs follow nested pattern
-	expectedIDs := []string{
-		"outer.iter1.inner.iter1.work",
-		"outer.iter1.inner.iter2.work",
-		"outer.iter2.inner.iter1.work",
-		"outer.iter2.inner.iter2.work",
-	}
-
-	for i, expected := range expectedIDs {
-		if i >= len(result) {
-			t.Errorf("Missing step %d: %s", i, expected)
-			continue
-		}
-		if result[i].ID != expected {
-			t.Errorf("Step %d: expected ID %s, got %s", i, expected, result[i].ID)
-		}
-	}
-}
-
-func TestApplyLoops_NestedLoopsWithDependencies(t *testing.T) {
-	// Nested loops with dependencies between inner steps
-	steps := []*Step{
-		{
-			ID:    "outer",
-			Title: "Outer loop",
-			Loop: &LoopSpec{
-				Count: 2,
-				Body: []*Step{
-					{
-						ID:    "inner",
-						Title: "Inner loop",
-						Loop: &LoopSpec{
-							Count: 2,
-							Body: []*Step{
-								{ID: "fetch", Title: "Fetch data"},
-								{ID: "process", Title: "Process data", Needs: []string{"fetch"}},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have 8 steps (2 outer * 2 inner * 2 body steps)
-	if len(result) != 8 {
-		t.Errorf("Expected 8 steps, got %d", len(result))
-	}
-
-	// Check that inner dependencies are correctly prefixed
-	// Find outer.iter1.inner.iter1.process - should depend on outer.iter1.inner.iter1.fetch
-	var process1 *Step
-	for _, s := range result {
-		if s.ID == "outer.iter1.inner.iter1.process" {
-			process1 = s
-			break
-		}
-	}
-
-	if process1 == nil {
-		t.Fatal("outer.iter1.inner.iter1.process not found")
-	}
-
-	if len(process1.Needs) != 1 || process1.Needs[0] != "outer.iter1.inner.iter1.fetch" {
-		t.Errorf("process should need outer.iter1.inner.iter1.fetch, got %v", process1.Needs)
-	}
-}
-
-func TestApplyLoops_ThreeLevelNesting(t *testing.T) {
-	// Three levels of nesting
-	steps := []*Step{
-		{
-			ID: "l1",
-			Loop: &LoopSpec{
-				Count: 2,
-				Body: []*Step{
-					{
-						ID: "l2",
-						Loop: &LoopSpec{
-							Count: 2,
-							Body: []*Step{
-								{
-									ID: "l3",
-									Loop: &LoopSpec{
-										Count: 2,
-										Body: []*Step{
-											{ID: "leaf", Title: "Leaf step"},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have 8 steps (2 * 2 * 2)
-	if len(result) != 8 {
-		t.Errorf("Expected 8 steps, got %d", len(result))
-	}
-
-	// Check first and last step IDs
-	if result[0].ID != "l1.iter1.l2.iter1.l3.iter1.leaf" {
-		t.Errorf("First step ID wrong: %s", result[0].ID)
-	}
-	if result[7].ID != "l1.iter2.l2.iter2.l3.iter2.leaf" {
-		t.Errorf("Last step ID wrong: %s", result[7].ID)
-	}
-}
-
-func TestApplyLoops_NestedLoopsOuterChaining(t *testing.T) {
-	// Verify that outer iterations are chained AFTER nested loop expansion.
-	// outer.iter2's first step should depend on outer.iter1's LAST step.
-	steps := []*Step{
-		{
-			ID:    "outer",
-			Title: "Outer loop",
-			Loop: &LoopSpec{
-				Count: 2,
-				Body: []*Step{
-					{
-						ID:    "inner",
-						Title: "Inner loop",
-						Loop: &LoopSpec{
-							Count: 2,
-							Body: []*Step{
-								{ID: "work", Title: "Do work"},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have 4 steps
-	if len(result) != 4 {
-		t.Fatalf("Expected 4 steps, got %d", len(result))
-	}
-
-	// Expected order:
-	// 0: outer.iter1.inner.iter1.work
-	// 1: outer.iter1.inner.iter2.work (depends on above via inner chaining)
-	// 2: outer.iter2.inner.iter1.work (should depend on step 1 via outer chaining!)
-	// 3: outer.iter2.inner.iter2.work (depends on above via inner chaining)
-
-	// Verify outer chaining: step 2 should depend on step 1
-	step2 := result[2]
-	if step2.ID != "outer.iter2.inner.iter1.work" {
-		t.Fatalf("Step 2 ID wrong: %s", step2.ID)
-	}
-
-	// This is the key assertion: outer.iter2's first step must depend on
-	// outer.iter1's last step (outer.iter1.inner.iter2.work)
-	expectedDep := "outer.iter1.inner.iter2.work"
-	found := false
-	for _, need := range step2.Needs {
-		if need == expectedDep {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("outer.iter2 first step should depend on outer.iter1 last step.\n"+
-			"Expected Needs to contain %q, got %v", expectedDep, step2.Needs)
+	if len(cleanup.Labels) == 0 {
+		t.Error("result cleanup should have a gate label")
 	}
 }
 
@@ -820,161 +394,5 @@ func TestApplyGates_Immutability(t *testing.T) {
 	}
 	if !hasGate {
 		t.Errorf("Result deploy step should have gate label, got %v", deployResult.Labels)
-	}
-}
-
-// TestApplyLoops_Range tests computed range expansion (gt-8tmz.27).
-func TestApplyLoops_Range(t *testing.T) {
-	// Create a step with a range loop
-	steps := []*Step{
-		{
-			ID:    "moves",
-			Title: "Tower moves",
-			Loop: &LoopSpec{
-				Range: "1..3",
-				Var:   "move_num",
-				Body: []*Step{
-					{ID: "move", Title: "Move {move_num}"},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have 3 steps (range 1..3 = 3 iterations)
-	if len(result) != 3 {
-		t.Errorf("Expected 3 steps, got %d", len(result))
-	}
-
-	// Check step IDs and titles
-	expectedIDs := []string{
-		"moves.iter1.move",
-		"moves.iter2.move",
-		"moves.iter3.move",
-	}
-	expectedTitles := []string{
-		"Move 1",
-		"Move 2",
-		"Move 3",
-	}
-
-	for i, expected := range expectedIDs {
-		if i >= len(result) {
-			t.Errorf("Missing step %d: %s", i, expected)
-			continue
-		}
-		if result[i].ID != expected {
-			t.Errorf("Step %d: expected ID %s, got %s", i, expected, result[i].ID)
-		}
-		if result[i].Title != expectedTitles[i] {
-			t.Errorf("Step %d: expected Title %q, got %q", i, expectedTitles[i], result[i].Title)
-		}
-	}
-}
-
-// TestApplyLoops_RangeComputed tests computed range with expressions.
-func TestApplyLoops_RangeComputed(t *testing.T) {
-	// Create a step with a computed range loop (like Towers of Hanoi)
-	steps := []*Step{
-		{
-			ID:    "hanoi",
-			Title: "Hanoi moves",
-			Loop: &LoopSpec{
-				Range: "1..2^3-1", // 1..7 (2^3-1 moves for 3 disks)
-				Var:   "step_num",
-				Body: []*Step{
-					{ID: "step", Title: "Step {step_num}"},
-				},
-			},
-		},
-	}
-
-	result, err := ApplyLoops(steps)
-	if err != nil {
-		t.Fatalf("ApplyLoops failed: %v", err)
-	}
-
-	// Should have 7 steps (2^3-1 = 7)
-	if len(result) != 7 {
-		t.Errorf("Expected 7 steps, got %d", len(result))
-	}
-
-	// Check first and last step
-	if len(result) >= 1 {
-		if result[0].Title != "Step 1" {
-			t.Errorf("First step title: expected 'Step 1', got %q", result[0].Title)
-		}
-	}
-	if len(result) >= 7 {
-		if result[6].Title != "Step 7" {
-			t.Errorf("Last step title: expected 'Step 7', got %q", result[6].Title)
-		}
-	}
-}
-
-// TestValidateLoopSpec_Range tests validation of range loops.
-func TestValidateLoopSpec_Range(t *testing.T) {
-	tests := []struct {
-		name    string
-		loop    *LoopSpec
-		wantErr bool
-	}{
-		{
-			name: "valid range",
-			loop: &LoopSpec{
-				Range: "1..10",
-				Body:  []*Step{{ID: "step"}},
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid computed range",
-			loop: &LoopSpec{
-				Range: "1..2^3",
-				Var:   "n",
-				Body:  []*Step{{ID: "step"}},
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid - both count and range",
-			loop: &LoopSpec{
-				Count: 5,
-				Range: "1..10",
-				Body:  []*Step{{ID: "step"}},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid - both until and range",
-			loop: &LoopSpec{
-				Until: "step.status == 'complete'",
-				Max:   10,
-				Range: "1..10",
-				Body:  []*Step{{ID: "step"}},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid range syntax",
-			loop: &LoopSpec{
-				Range: "invalid",
-				Body:  []*Step{{ID: "step"}},
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateLoopSpec(tt.loop, "test")
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateLoopSpec() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
 	}
 }

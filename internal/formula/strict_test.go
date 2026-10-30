@@ -104,6 +104,42 @@ gate = { type = "conditional", condition = "no_response_1" }
 	}
 }
 
+// TestDecodeTOMLStrict_LoopKeyIsUnknown pins the engine cut (be-2gw.6): the
+// `loop` step key is gone from Step, so a formula that still authors one is a
+// cook error rather than a silently dropped body.
+func TestDecodeTOMLStrict_LoopKeyIsUnknown(t *testing.T) {
+	src := `formula = "mol-loop"
+version = 1
+
+[[steps]]
+id = "process"
+title = "Process items"
+
+[steps.loop]
+count = 3
+
+[[steps.loop.body]]
+id = "work"
+title = "Do unit of work"
+`
+	_, problems, err := DecodeTOMLStrict([]byte(src))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, p := range problems {
+		if p.Key == "steps.loop" {
+			if p.Kind != ProblemUnknownKey {
+				t.Errorf("steps.loop kind = %q, want %q", p.Kind, ProblemUnknownKey)
+			}
+			if p.Line != 8 {
+				t.Errorf("steps.loop line = %d, want 8", p.Line)
+			}
+			return
+		}
+	}
+	t.Fatalf("no unknown-key problem for steps.loop; got %+v", problems)
+}
+
 func TestDecodeTOMLStrict_RepeatedKeyEachOccurrence(t *testing.T) {
 	src := `formula = "mol-rep"
 version = 1

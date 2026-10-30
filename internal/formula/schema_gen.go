@@ -460,60 +460,6 @@ Formats: "label:security", "type:bug", "priority:0-1".`,
 		},
 	},
 	{
-		Name: "LoopSpec",
-		Doc: `LoopSpec defines iteration over a body of steps.
-One of Count, Until, or Range must be specified.`,
-		Fields: []FieldDoc{
-			{
-				Name:     "Count",
-				Type:     "int",
-				JSONName: "count",
-				Doc: `Count is the fixed number of iterations.
-When set, the loop body is expanded Count times.`,
-			},
-			{
-				Name:     "Until",
-				Type:     "string",
-				JSONName: "until",
-				Doc: `Until is a condition that ends the loop.
-Format matches condition evaluator syntax (e.g., "step.status == 'complete'").`,
-			},
-			{
-				Name:     "Max",
-				Type:     "int",
-				JSONName: "max",
-				Doc: `Max is the maximum iterations for conditional loops.
-Required when Until is set, to prevent unbounded loops.`,
-			},
-			{
-				Name:     "Range",
-				Type:     "string",
-				JSONName: "range",
-				Doc: `Range specifies a computed range for iteration.
-Format: "start..end" where start and end can be:
-  - Integers: "1..10"
-  - Expressions: "1..2^{disks}" (evaluated at cook time)
-  - Variables: "{start}..{count}" (substituted from Vars)
-Supports: + - * / ^ (power) and parentheses.`,
-			},
-			{
-				Name:     "Var",
-				Type:     "string",
-				JSONName: "var",
-				Doc: `Var is the variable name exposed to body steps.
-For Range loops, this is set to the current iteration value.
-Example: var: "move_num" with range: "1..7" exposes {move_num}=1,2,...,7`,
-			},
-			{
-				Name:     "Body",
-				Type:     "[]*Step",
-				JSONName: "body",
-				Required: true,
-				Doc:      `Body contains the steps to repeat.`,
-			},
-		},
-	},
-	{
 		Name: "MapRule",
 		Doc:  `MapRule applies an expansion template to all matching steps.`,
 		Fields: []FieldDoc{
@@ -749,13 +695,6 @@ Evaluated at cook/pour time via FilterStepsByCondition.`,
 				Doc: `Gate defines an async wait condition for this step.
 When set, bd cook creates a gate issue that blocks this step.
 Close the gate issue (bd close bd-xxx.gate-stepid) to unblock.`,
-			},
-			{
-				Name:     "Loop",
-				Type:     "*LoopSpec",
-				JSONName: "loop",
-				Doc: `Loop defines iteration for this step.
-When set, the step becomes a container that expands its body.`,
 			},
 			{
 				Name:     "OnComplete",

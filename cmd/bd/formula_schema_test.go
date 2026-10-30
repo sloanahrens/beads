@@ -55,12 +55,12 @@ func TestFormulaSchemaShow_RendersFields(t *testing.T) {
 	defer func() { jsonOutput = prevJSON }()
 
 	out := captureStdout(t, func() error {
-		return runFormulaSchemaShow("loop")
+		return runFormulaSchemaShow("step")
 	})
 
-	for _, want := range []string{"LoopSpec", "count", "until", "max", "range", "var", "body", "[]*Step"} {
+	for _, want := range []string{"Step", "children", "needs", "gate", "[]*Step"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("loop output missing %q\nfull output:\n%s", want, out)
+			t.Errorf("step output missing %q\nfull output:\n%s", want, out)
 		}
 	}
 }
@@ -103,7 +103,7 @@ func TestFormulaSchemaShow_JSON(t *testing.T) {
 	defer func() { jsonOutput = prevJSON }()
 
 	out := captureStdout(t, func() error {
-		return runFormulaSchemaShow("loop")
+		return runFormulaSchemaShow("step")
 	})
 
 	// Single-primitive output is the envelope's "data" object. Decode into a
@@ -116,8 +116,8 @@ func TestFormulaSchemaShow_JSON(t *testing.T) {
 	if got == nil {
 		t.Fatalf("no data object in JSON output: %s", out)
 	}
-	if got["name"] != "LoopSpec" {
-		t.Errorf("name = %v, want LoopSpec", got["name"])
+	if got["name"] != "Step" {
+		t.Errorf("name = %v, want Step", got["name"])
 	}
 	fields, ok := got["fields"].([]interface{})
 	if !ok || len(fields) == 0 {

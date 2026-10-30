@@ -26,30 +26,6 @@ func TestFormulaPrimitiveExamples(t *testing.T) {
 		assert func(t *testing.T, sg *TemplateSubgraph)
 	}{
 		{
-			name: "loop-count",
-			assert: func(t *testing.T, sg *TemplateSubgraph) {
-				for _, want := range []string{
-					"loop-count.process.iter1.work",
-					"loop-count.process.iter2.work",
-					"loop-count.process.iter3.work",
-				} {
-					if !hasIssueID(sg, want) {
-						t.Errorf("missing issue %q; have %v", want, allIssueIDs(sg))
-					}
-				}
-			},
-		},
-		{
-			name: "loop-range",
-			assert: func(t *testing.T, sg *TemplateSubgraph) {
-				for _, want := range []string{"Move 1", "Move 2", "Move 3"} {
-					if !hasIssueTitle(sg, want) {
-						t.Errorf("missing title %q; have %v", want, allIssueTitles(sg))
-					}
-				}
-			},
-		},
-		{
 			name: "children-epic",
 			assert: func(t *testing.T, sg *TemplateSubgraph) {
 				// Children get the parent step's ID prefixed to their own.
@@ -174,15 +150,6 @@ func hasIssueID(sg *TemplateSubgraph, id string) bool {
 	return false
 }
 
-func hasIssueTitle(sg *TemplateSubgraph, title string) bool {
-	for _, i := range sg.Issues {
-		if i.Title == title {
-			return true
-		}
-	}
-	return false
-}
-
 func hasBlockingDep(sg *TemplateSubgraph, from, to string) bool {
 	for _, d := range sg.Dependencies {
 		if d.IssueID == from && d.DependsOnID == to && d.Type == "blocks" {
@@ -215,14 +182,6 @@ func allIssueIDs(sg *TemplateSubgraph) []string {
 	out := make([]string, 0, len(sg.Issues))
 	for _, i := range sg.Issues {
 		out = append(out, i.ID)
-	}
-	return out
-}
-
-func allIssueTitles(sg *TemplateSubgraph) []string {
-	out := make([]string, 0, len(sg.Issues))
-	for _, i := range sg.Issues {
-		out = append(out, i.Title)
 	}
 	return out
 }

@@ -8,8 +8,6 @@ and exercises exactly one primitive.
 
 | Fixture                       | Primitive          | One-line behavior |
 |-------------------------------|--------------------|-------------------|
-| `loop-count.formula.toml`     | `LoopSpec.count`   | Body expanded N times into `.iterN.<id>` step IDs. |
-| `loop-range.formula.toml`     | `LoopSpec.range`   | Body expanded over a numeric range; `loop.var` substitutes into title/description. |
 | `children-epic.formula.toml`  | `Step.children`    | Nested steps form an epic with sibling `needs` honored. |
 | `branch-fanin.formula.toml`   | `ComposeRules.branch` | Fork-join: parallel steps fan in to a single join step. |
 | `condition.formula.toml`      | `Step.condition`   | Variable-driven step inclusion at cook time. |
@@ -21,8 +19,8 @@ run:
 
 ```sh
 bd formula schema                 # list every declared schema struct
-bd formula schema loop            # show LoopSpec fields
-bd formula primitives gate        # alias
+bd formula schema gate            # show Gate fields
+bd formula primitives step        # alias
 bd formula schema --json          # machine-readable
 ```
 
