@@ -125,6 +125,60 @@ func cliTestDatabaseName(testName, suffix string) string {
 	return cliTestDatabaseNamePrefix + readable + "_" + suffix
 }
 
+// workspaceEnvVars are the variables that point bd at a workspace or database
+// other than the one in the working directory.
+var workspaceEnvVars = []string{"BEADS_DIR", "BEADS_DB", "BD_DB"}
+
+// withoutWorkspaceEnv returns environ without the workspace variables, so a
+// value an earlier in-process run left behind cannot reach a bd init child.
+func withoutWorkspaceEnv(environ []string) []string {
+	kept := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		drop := false
+		for _, key := range workspaceEnvVars {
+			if strings.HasPrefix(kv, key+"=") {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
+}
+
+// TestWithoutWorkspaceEnvDropsTheWorkspaceVariables checks that only the
+// variables that name a workspace are removed.
+func TestWithoutWorkspaceEnvDropsTheWorkspaceVariables(t *testing.T) {
+	in := []string{"BEADS_DIR=/gone/.beads", "PATH=/usr/bin", "BEADS_DB=/gone/db", "BD_DB=/gone/db"}
+	got := withoutWorkspaceEnv(in)
+	if len(got) != 1 || got[0] != "PATH=/usr/bin" {
+		t.Errorf("withoutWorkspaceEnv(%q) = %q, want only PATH", in, got)
+	}
+}
+
+// TestRunBDInProcessRestoresTheWorkspaceVariables checks that a run leaves the
+// workspace variables as it found them: a set value comes back, an unset
+// variable stays unset. It goes red if the restore in runBDInProcess is removed.
+func TestRunBDInProcessRestoresTheWorkspaceVariables(t *testing.T) {
+	t.Setenv("BEADS_DIR", "/restore/me/.beads")
+	t.Setenv("BEADS_DB", "/restore/me/db")
+	os.Unsetenv("BD_DB")
+
+	runBDInProcess(t, t.TempDir(), "version")
+
+	if got := os.Getenv("BEADS_DIR"); got != "/restore/me/.beads" {
+		t.Errorf("BEADS_DIR after the run = %q, want it restored", got)
+	}
+	if got := os.Getenv("BEADS_DB"); got != "/restore/me/db" {
+		t.Errorf("BEADS_DB after the run = %q, want it restored", got)
+	}
+	if v, ok := os.LookupEnv("BD_DB"); ok {
+		t.Errorf("BD_DB after the run = %q, want it still unset", v)
+	}
+}
+
 // initCLITestDatabase initializes dir as a bd workspace whose data lives in
 // dbName on the test Dolt server.
 //
@@ -144,7 +198,7 @@ func initCLITestDatabase(t *testing.T, dir, dbName string) {
 		"--database", dbName,
 		"--prefix", "test", "--quiet", "--skip-hooks", "--skip-agents")
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = withoutWorkspaceEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Fatalf("bd init for database %s did not finish within %v\n%s", dbName, cliTestInitTimeout, out)
@@ -266,6 +320,16 @@ func runBDInProcess(t *testing.T, dir string, args ...string) string {
 	oldStderr := os.Stderr
 	oldDir, _ := os.Getwd()
 	oldArgs := os.Args
+	// rootCmd's pre-run sets BEADS_DIR for the workspace it resolves and never
+	// restores it; unset the workspace variables for this run and put them back.
+	for _, key := range workspaceEnvVars {
+		if v, ok := os.LookupEnv(key); ok {
+			defer os.Setenv(key, v)
+		} else {
+			defer os.Unsetenv(key)
+		}
+		os.Unsetenv(key)
+	}
 
 	// Change to test directory
 	if err := os.Chdir(dir); err != nil {
