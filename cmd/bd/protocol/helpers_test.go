@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/steveyegge/beads/internal/testshard"
 	"github.com/steveyegge/beads/internal/testutil"
 )
 
@@ -51,6 +53,12 @@ func testMainInner(m *testing.M) int {
 	os.Setenv("BEADS_TEST_MODE", "1")
 	// AD-01 (be-c5p): allow protocol tests to connect to the spawned test server.
 	os.Setenv("BEADS_TEST_SERVER", "1")
+	// be-wr0k: narrow this run to one shard of the package's top-level tests
+	// before the container starts, so a bad spec never pays for Docker.
+	if err := applyTestShard(); err != nil {
+		fmt.Fprintln(os.Stderr, "protocol: "+err.Error())
+		return 2
+	}
 	if err := testutil.EnsureDoltContainerForTestMain(); err != nil {
 		fmt.Fprintf(os.Stderr, "WARN: %v, skipping Dolt tests\n", err)
 	} else {
@@ -67,6 +75,48 @@ func testMainInner(m *testing.M) int {
 		os.RemoveAll(bdDir)
 	}
 	return code
+}
+
+// shardEnv names the shard of this package's top-level tests to run
+// ("i/n", see internal/testshard). Unset runs every test.
+const shardEnv = "BD_TEST_SHARD"
+
+// applyTestShard turns BD_TEST_SHARD into a -test.run restriction on the
+// top-level tests, so that this package can be split across CI jobs that each
+// finish under the integration tier's alarm (be-wr0k). Selection is by name
+// hash, with no manifest to update as tests are added.
+//
+// An unset BD_TEST_SHARD changes nothing. A malformed one, or one combined with
+// an explicit -test.run, is an error: reinterpreting either would run a
+// different set of tests than the caller asked for, and a shard that quietly
+// ran everything or nothing would hide the tests it was meant to cover.
+func applyTestShard() error {
+	spec, ok := os.LookupEnv(shardEnv)
+	if !ok {
+		return nil
+	}
+	flag.Parse()
+	runGiven := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "test.run" {
+			runGiven = true
+		}
+	})
+	if runGiven {
+		return fmt.Errorf("%s=%q cannot be combined with -test.run=%q", shardEnv, spec, flag.Lookup("test.run").Value.String())
+	}
+	index, count, err := testshard.ParseSpec(spec)
+	if err != nil {
+		return fmt.Errorf("%s: %w", shardEnv, err)
+	}
+	names, err := testshard.TestNames(".")
+	if err != nil {
+		return fmt.Errorf("%s=%q: %w", shardEnv, spec, err)
+	}
+	if err := flag.Set("test.run", testshard.Pattern(names, index, count)); err != nil {
+		return fmt.Errorf("%s=%q: setting -test.run: %w", shardEnv, spec, err)
+	}
+	return nil
 }
 
 // requireDoltStore enforces the Dolt-backed store precondition for a test.
