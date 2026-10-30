@@ -31,7 +31,9 @@ func TestParseSpec(t *testing.T) {
 		})
 	}
 
-	invalid := []string{"", "x", "1", "a/b", "2/2", "-1/3", "0/0", "1/0", "1/", "/3", "0/3/1", "1 /3", "+0/3", "-0/3"}
+	// The last entry is all digits, so it reaches strconv rather than the
+	// digit check: a count too large for an int is still an error.
+	invalid := []string{"", "x", "1", "a/b", "2/2", "-1/3", "0/0", "1/0", "1/", "/3", "0/3/1", "1 /3", "+0/3", "-0/3", "999999999999999999999999/3"}
 	for _, spec := range invalid {
 		t.Run("invalid "+fmt.Sprintf("%q", spec), func(t *testing.T) {
 			index, count, err := ParseSpec(spec)

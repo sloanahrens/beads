@@ -81,7 +81,7 @@ func parseNonNegative(s string) (int, error) {
 	}
 	n, err := strconv.Atoi(s)
 	if err != nil {
-		return 0, fmt.Errorf("%q is not a decimal number", s)
+		return 0, fmt.Errorf("%q: %w", s, err)
 	}
 	return n, nil
 }
