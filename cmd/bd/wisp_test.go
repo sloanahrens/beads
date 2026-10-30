@@ -52,12 +52,23 @@ func wispTestProto(t *testing.T, ctx context.Context, s *dolt.DoltStore, numChil
 // makeWispTestCmd builds a cobra.Command with the same flag schema as the
 // real `bd mol wisp` command, with the given flag values set as defaults
 // (so runWispCreate reads them back without needing arg parsing).
-func makeWispTestCmd(rootOnly, dryRun bool) *cobra.Command {
+func makeWispTestCmd(dryRun bool) *cobra.Command {
 	c := &cobra.Command{Use: "wisp"}
 	c.Flags().StringArray("var", []string{}, "")
 	c.Flags().Bool("dry-run", dryRun, "")
-	c.Flags().Bool("root-only", rootOnly, "")
 	return c
+}
+
+// TestWispCommandsRegisterNoRootOnlyFlag locks in that pouring a wisp always
+// materializes every step, so the former opt-out flag is gone from both
+// entrypoints (be-2gw.5). Re-registering it would restore the root-only
+// escape hatch GH#3872 removed.
+func TestWispCommandsRegisterNoRootOnlyFlag(t *testing.T) {
+	for _, c := range []*cobra.Command{wispCmd, wispCreateCmd} {
+		if f := c.Flags().Lookup("root-only"); f != nil {
+			t.Errorf("%q still registers --root-only (%s); steps are always materialized", c.CommandPath(), f.Usage)
+		}
+	}
 }
 
 // countEphemeral returns the number of issues in the store with Ephemeral=true.

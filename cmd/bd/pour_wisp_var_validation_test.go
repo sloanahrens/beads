@@ -69,6 +69,5 @@ func makeWispVarTestCmd(varFlags []string) *cobra.Command {
 	c := &cobra.Command{Use: "wisp"}
 	c.Flags().StringArray("var", varFlags, "")
 	c.Flags().Bool("dry-run", true, "")
-	c.Flags().Bool("root-only", false, "")
 	return c
 }

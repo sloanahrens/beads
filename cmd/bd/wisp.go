@@ -162,14 +162,12 @@ func runWispCreate(cmd *cobra.Command, args []string) error {
 type wispCreateInput struct {
 	protoArg string
 	dryRun   bool
-	rootOnly bool
 	varFlags []string
 }
 
 func gatherWispCreateInput(cmd *cobra.Command, args []string) wispCreateInput {
 	in := wispCreateInput{protoArg: args[0]}
 	in.dryRun, _ = cmd.Flags().GetBool("dry-run")
-	in.rootOnly, _ = cmd.Flags().GetBool("root-only")
 	in.varFlags, _ = cmd.Flags().GetStringArray("var")
 	return in
 }
@@ -191,7 +189,6 @@ func runWispCreateCore(cmd *cobra.Command, args []string) error {
 	}
 	args = []string{in.protoArg}
 	dryRun := in.dryRun
-	rootOnly := in.rootOnly
 
 	// Try to load as formula first (ephemeral proto)
 	// If that fails, fall back to loading from DB (legacy proto beads)
@@ -268,7 +265,7 @@ func runWispCreateCore(cmd *cobra.Command, args []string) error {
 	}
 
 	if dryRun {
-		renderWispCreateDryRun(protoID, subgraph, vars, rootOnly)
+		renderWispCreateDryRun(protoID, subgraph, vars)
 		return nil
 	}
 
@@ -277,7 +274,6 @@ func runWispCreateCore(cmd *cobra.Command, args []string) error {
 		Actor:     actor,
 		Ephemeral: true,
 		Prefix:    types.IDPrefixWisp,
-		RootOnly:  rootOnly,
 	})
 	if err != nil {
 		return HandleError("creating wisp: %v", err)
@@ -308,22 +304,10 @@ func firstMissingVar(subgraph *TemplateSubgraph, vars map[string]string) string 
 	return ""
 }
 
-func renderWispCreateDryRun(protoID string, subgraph *TemplateSubgraph, vars map[string]string, rootOnly bool) {
-	if rootOnly {
-		skipped := len(subgraph.Issues) - 1
-		fmt.Printf("\nDry run: would create wisp with 1 issue (root only) from proto %s\n", protoID)
-		if skipped > 0 {
-			fmt.Printf("  Note: %d child step(s) skipped (--root-only)\n", skipped)
-		}
-	} else {
-		fmt.Printf("\nDry run: would create wisp with %d issues from proto %s\n\n", len(subgraph.Issues), protoID)
-	}
+func renderWispCreateDryRun(protoID string, subgraph *TemplateSubgraph, vars map[string]string) {
+	fmt.Printf("\nDry run: would create wisp with %d issues from proto %s\n\n", len(subgraph.Issues), protoID)
 	fmt.Printf("Storage: main database (ephemeral=true, not synced via git)\n\n")
-	issuesToShow := subgraph.Issues
-	if rootOnly && len(issuesToShow) > 0 {
-		issuesToShow = issuesToShow[:1]
-	}
-	for _, issue := range issuesToShow {
+	for _, issue := range subgraph.Issues {
 		newTitle := substituteVariables(issue.Title, vars)
 		fmt.Printf("  - %s (from %s)\n", newTitle, issue.ID)
 	}
@@ -1058,12 +1042,10 @@ func init() {
 	wispCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
 	wispCmd.Flags().BoolVar(&formulaStrictFlag, "strict", false, "Reject formula keys bd would drop instead of warning")
 	wispCmd.Flags().Bool("dry-run", false, "Preview what would be created")
-	wispCmd.Flags().Bool("root-only", false, "Create only the root issue (no child step issues)")
 
 	// Wisp create command flags (kept for backwards compat: bd mol wisp create <proto>)
 	wispCreateCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
 	wispCreateCmd.Flags().Bool("dry-run", false, "Preview what would be created")
-	wispCreateCmd.Flags().Bool("root-only", false, "Create only the root issue (no child step issues)")
 
 	wispListCmd.Flags().Bool("all", false, "Include closed wisps")
 	wispListCmd.Flags().String("type", "", "Filter by issue type (e.g., agent, task, patrol)")
