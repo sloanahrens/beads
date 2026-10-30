@@ -26,6 +26,10 @@ import (
 func TestCreateRemoteRepoSkipsLocalDatabaseGuard(t *testing.T) {
 	saveAndRestoreGlobals(t)
 	ensureCleanGlobalState(t)
+	if err := resetCommandTreeFlags(rootCmd); err != nil {
+		t.Fatalf("reset command flags: %v", err)
+	}
+	t.Cleanup(func() { _ = resetCommandTreeFlags(rootCmd) })
 
 	originalReadonly := readonlyMode
 	t.Cleanup(func() { readonlyMode = originalReadonly })
