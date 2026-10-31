@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
@@ -96,13 +95,6 @@ type WispListResult struct {
 const OldThreshold = 24 * time.Hour
 
 func runWisp(cmd *cobra.Command, args []string) error {
-	evt := metrics.NewCommandEvent("wisp")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
-
 	if len(args) == 0 {
 		_ = cmd.Help()
 		return nil
@@ -145,13 +137,6 @@ Examples:
 }
 
 func runWispCreate(cmd *cobra.Command, args []string) error {
-	evt := metrics.NewCommandEvent("wisp-create")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
-
 	return runWispCreateCore(cmd, args)
 }
 
@@ -487,13 +472,6 @@ func renderWispListResult(result WispListResult) error {
 }
 
 func runWispList(cmd *cobra.Command, args []string) error {
-	evt := metrics.NewCommandEvent("wisp-list")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
-
 	showAll, _ := cmd.Flags().GetBool("all")
 	typeFilter, _ := cmd.Flags().GetString("type")
 
@@ -706,13 +684,6 @@ func isProtectedWisp(issue *types.Issue, blockedSet, hookedSet map[string]bool, 
 
 func runWispGC(cmd *cobra.Command, args []string) error {
 	CheckReadonly("wisp gc")
-
-	evt := metrics.NewCommandEvent("wisp-gc")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
 
 	ctx := rootCtx
 

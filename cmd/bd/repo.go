@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/config"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/remotecache"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
@@ -54,13 +53,6 @@ shared across all clones of this repository.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("repo-add")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		repoPath := args[0]
 
 		if remotecache.IsRemoteURL(repoPath) {
@@ -117,13 +109,6 @@ that came from the removed repository.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("repo-remove")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		repoPath := args[0]
 
 		if err := ensureDirectMode("repo remove requires direct database access"); err != nil {
@@ -186,13 +171,6 @@ repositories configured for hydration.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("repo-list")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		configPath, err := config.FindConfigYAMLPath()
 		if err != nil {
 			return HandleError("failed to find config.yaml: %v", err)
@@ -245,13 +223,6 @@ Also triggers Dolt push/pull if a remote is configured.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("repo-sync")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		if err := ensureDirectMode("repo sync requires direct database access"); err != nil {
 			return HandleError("%v", err)
 		}
