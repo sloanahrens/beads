@@ -111,8 +111,8 @@ durable fix is to move to the pinned version.
 
 This matters because `bd flatten` and the Dolt-history compaction in
 `bd admin compact` both finish by hard-resetting `main` onto a temporary
-branch, and the merge-settle path behind `bd dolt pull` / `bd sync` falls
-back to a hard reset when it has to abandon a merge. See
+branch, and the merge-settle path behind `bd dolt pull` falls back to a hard
+reset when it has to abandon a merge. See
 [Maintenance](#maintenance--bd-prune-and-bd-purge).
 
 ### New Project
@@ -246,10 +246,10 @@ with `bd flatten`.
 **On Dolt 2.3.x, storage-reclaim operations can fail partway.** `bd flatten`
 and the Dolt-history compaction in `bd admin compact` both build a temporary
 branch and then hard-reset `main` onto it, and the merge-settle path behind
-`bd dolt pull` / `bd sync` falls back to a hard reset when it abandons a
-merge. On an affected database that hard reset returns
-`Error 1105 (HY000): context canceled`: `bd flatten` and `bd admin compact`
-stop at that step, and an abandoned merge is left without its rollback. See
+`bd dolt pull` falls back to a hard reset when it abandons a merge. On an
+affected database that hard reset returns `Error 1105 (HY000): context
+canceled`: `bd flatten` and `bd admin compact` stop at that step, and an
+abandoned merge is left without its rollback. See
 [Which Dolt version to install](#which-dolt-version-to-install) for the check
 and the fix.
 

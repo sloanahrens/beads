@@ -17,13 +17,14 @@ cloud account, or when you already have one.
 ```
    machine one                  gs://my-bucket/beads/myproject                machine two
   ┌─────────────┐                    ┌──────────────┐                      ┌─────────────┐
-  │ .beads/dolt │ ──── bd sync ────► │    bucket    │ ◄──── bd sync ────── │ .beads/dolt │
-  │  (replica)  │ ◄──────────────────│  (no server) │ ─────────────────────►│  (replica)  │
+  │ .beads/dolt │ ◄── push / pull ──►│    bucket    │◄── push / pull ─────►│ .beads/dolt │
+  │  (replica)  │                    │  (no server) │                      │  (replica)  │
   └─────────────┘                    └──────────────┘                      └─────────────┘
 ```
 
 Each machine keeps a full local replica and works offline against it; a timer
-runs `bd sync` on both ends. Nothing arbitrates between them but the bucket.
+runs `bd dolt pull` and `bd dolt push` on both ends. Nothing arbitrates between
+them but the bucket.
 
 ## Prerequisites
 
@@ -72,9 +73,10 @@ Two details worth knowing:
   immediately. A remote added with the `dolt` CLI lands in filesystem config
   only, and push/pull then fail with *remote not found* until the server
   restarts.
-- **Naming it `origin` also persists `sync.remote`** into `.beads/config.yaml`,
-  which is what lets `bd sync` find the remote with no flags. Any other name
-  works, but every sync then needs `bd sync --remote <name>`.
+- **Naming it `origin` also persists `sync.remote`** into `.beads/config.yaml`.
+  That is the remote `bd dolt pull` and `bd dolt push` use when you pass no
+  `--remote` flag. Any other name works, but every pull and push then needs
+  `--remote <name>`.
 
 Verify:
 
@@ -89,9 +91,9 @@ bd init --remote gs://my-bucket/beads/myproject
 ```
 
 `bd init --remote` clones the Dolt database from the bucket and persists
-`sync.remote`, so machine two is ready to sync immediately. This is a *clone*,
-not an import: no JSONL round-trip, no re-keying, and the full commit history
-comes with it.
+`sync.remote`, so machine two is ready to pull and push immediately. This is a
+*clone*, not an import: no JSONL round-trip, no re-keying, and the full commit
+history comes with it.
 
 Verify the birth before you trust it:
 
@@ -101,7 +103,7 @@ bd list --status all --json | jq length   # issue-count parity with machine one
 ```
 
 An issue that machine one closed *after* the last push will still look open
-here. That is federation lag, not a bad clone — it arrives on the next sync.
+here. That is federation lag, not a bad clone — it arrives on the next pull.
 
 <Note>
 Already have a `.beads/` directory on machine two that you want to replace with
@@ -112,32 +114,34 @@ rails.
 
 ## 4. Pick a sync cadence
 
-`bd sync` is the whole loop — pull, positively check for conflicts, repair
-`is_blocked`, push with bounded retry:
+Each replica syncs with two commands, run in this order: pull the bucket's
+history, then push your own commits.
 
 ```bash
-bd sync                  # default remote
-bd sync --remote mini    # a specific named remote
-bd sync --json           # machine-parseable outcome
+bd dolt pull                 # default remote: fetch and merge the bucket's history
+bd dolt push                 # default remote: publish your local commits
+bd dolt pull --remote mini   # a specific named remote
+bd dolt push --remote mini
 ```
 
-Run it from a timer on both machines. A 60-second cadence is comfortable at
-the scale measured below; the loop is a no-op when nothing changed.
+Pull first. A push from a replica whose history has diverged from the bucket's
+is rejected, and `bd dolt push --force` overwrites the bucket's history, so keep
+`--force` out of timers.
+
+Run the pair from a timer on both machines. A 60-second cadence is comfortable
+at the scale measured below; the pair is a no-op when nothing changed.
 
 ```bash
-# cron, every minute
-* * * * * cd /path/to/workspace && /usr/local/bin/bd sync --json >> /tmp/bd-sync.log 2>&1
+# cron, every minute: push runs only if pull succeeded
+* * * * * cd /path/to/workspace && { /usr/local/bin/bd dolt pull && /usr/local/bin/bd dolt push; } >> /tmp/bd-sync.log 2>&1
 ```
 
-A timer branches on the exit code without parsing output:
-
-| Exit | Meaning | What the timer should do |
-|------|---------|--------------------------|
-| 0 | Synced, or nothing to do | Nothing |
-| 1 | Error (transport, auth, storage) | Alert if it repeats |
-| 2 | Merge conflict — halted, nothing pushed | **Alert a human**; never auto-resolve |
-| 3 | Retries exhausted (push race, or another writer's dirty working set) | Nothing; the next tick retries |
-| 4 | Dirty working set is stuck, not busy | **Alert a human**; no later tick will publish |
+Both commands exit 1 on failure, so a timer can branch on the exit status
+without parsing output. A failed pull is not retried by the next tick: a merge
+conflict repeats the same failure until someone resolves it (see
+[A pull stops on a merge conflict](#a-pull-stops-on-a-merge-conflict)). Alert a
+human on a failure that repeats; a transport or auth error usually clears by
+itself, a conflict does not.
 
 Three rules for choosing the interval:
 
@@ -151,7 +155,7 @@ Three rules for choosing the interval:
   cross-replica reclaim guard arms.
 - **A longer interval means more conflicts, not just staler data.**
   `updated_at` is touched by *every* bd mutation, so two replicas editing the
-  same issue between syncs conflict even when the fields they changed are
+  same issue between pulls conflict even when the fields they changed are
   disjoint. Disjoint edits to *different* issues merge cleanly at any cadence.
 
 ## Measured cost
@@ -191,16 +195,16 @@ dolt config --global --add user.name  "Your Name"
 dolt config --global --add user.email "you@example.com"
 ```
 
-### Auth works in the shell but sync fails in server mode
+### Auth works in the shell but pull or push fails in server mode
 
 With an external Dolt SQL server, `CALL DOLT_PUSH/PULL` runs *inside the
 server process*, which only has the environment it inherited at startup.
 Credentials exported afterwards never reach it. bd detects cloud credentials
 matching the remote's scheme (`GOOGLE_*`/`GCS_*` for `gs://`, `AWS_*` for
 `s3://`/`aws://`, `AZURE_STORAGE_*` for `az://`) and routes push/pull through
-a `dolt` CLI subprocess, which inherits the current environment. If sync still
-cannot authenticate, restart the server with the credentials in its
-environment.
+a `dolt` CLI subprocess, which inherits the current environment. If the pull
+or push still cannot authenticate, restart the server with the credentials in
+its environment.
 
 ### The remote is named something other than `origin`
 
@@ -209,20 +213,28 @@ A replica born with `bd init --remote` (or `dolt clone`) names its remote
 anything. Timers must pass the right `--remote` on each machine — or rename
 the remote so both ends match.
 
-### A sync exits 2 (conflict)
+### A pull stops on a merge conflict
 
-`bd sync` halts before recomputing or pushing and never auto-resolves what it
-cannot settle safely. Repeated runs keep halting the same way until an
-operator resolves the divergence. Inside `.beads/dolt/<db>`:
+`bd dolt pull` fails with `merge conflicts in <tables> require operator
+resolution` when a merge brings in changes it cannot settle safely. It never
+auto-resolves what it cannot settle, and it does not push. Repeated pulls keep
+failing the same way until an operator resolves the divergence. Where the
+conflicts land depends on how the remote is reached:
 
-```bash
-dolt sql -q 'select * from dolt_conflicts'   # positive check — do NOT trust pull exit codes
-dolt conflicts cat issues                    # base / ours / theirs rows
-dolt conflicts resolve --theirs issues       # or --ours
-dolt add -A && dolt commit -m 'resolve conflict' && dolt push origin main
-```
+- **Remotes reached through the `dolt` CLI** (git-protocol and cloud-credential
+  remotes) leave the conflicts in the working set. Look at them with
+  `bd conflicts list` (which tables and issues) and `bd conflicts show` (field
+  by field). Resolve each one with `bd conflicts resolve <issue-id> --ours` or
+  `--theirs`, or resolve a whole table with `bd conflicts resolve --all --theirs`.
+  The merge is committed once no conflicts remain. If you resolved with
+  `--no-commit`, finish it with `bd conflicts resolve --conclude`.
+- **Remotes reached through SQL** roll the merge back, so the working set is
+  restored and `bd conflicts list` shows nothing. Re-run the pull once the other
+  side is fixed, or settle it on the pull itself with
+  `bd dolt pull --strategy ours` or `--strategy theirs` (embedded storage only).
 
-Then let the timer resume.
+After the merge is settled, push it with `bd dolt push`, then let the timer
+resume.
 
 ### One bucket path, two databases
 
@@ -230,30 +242,9 @@ A bucket path is a single Dolt history. Pointing a second, unrelated beads
 database at the same path produces a divergence no merge can reconcile. Give
 each database its own path.
 
-## Relationship to `bd federation`
-
-Both paths write Dolt remotes; they differ in what they are for.
-
-| | `bd sync` (this page) | `bd federation sync` |
-|---|---|---|
-| Target | The workspace's configured remote | Named peer towns |
-| Conflicts | Halts (exit 2); no override switch | `--strategy ours\|theirs` available |
-| Use for | Replicas of *one* database across machines | Sharing across independent teams/orgs |
-
-Registering the bucket as a named peer instead is one command, and the peer
-surface adds sovereignty tiers and topologies:
-
-```bash
-bd federation add-peer backup gs://my-bucket/beads-backup
-```
-
-See [Federation Setup](/multi-agent/federation) for peers, sovereignty tiers,
-and topologies.
-
 ## Reference
 
 - [Federation Setup](/multi-agent/federation) — peers, sovereignty, topologies
 - [Dolt Architecture](/architecture/dolt) — remotes, push/pull, storage layout
-- [`bd dolt`](/cli-reference/dolt) · [`bd init`](/cli-reference/init) ·
-  `bd sync --help` for the full sync surface
+- [`bd dolt`](/cli-reference/dolt) · [`bd init`](/cli-reference/init)
 - [Sync Failures](/recovery/sync-failures) — recovering a wedged sync
