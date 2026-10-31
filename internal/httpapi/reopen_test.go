@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,7 +17,56 @@ import (
 // closed_by_session, and the reason landing on the issue's event stream — lives
 // in cmd/bd's TestProxiedServerServeClose against real Dolt.
 
-const reopenPath = "/v0/beads/issues/bd-1:reopen"
+const (
+	reopenPath = "/v0/beads/issues/bd-1:reopen"
+	closePath  = "/v0/beads/issues/bd-1:close"
+)
+
+func (ts *testServer) closeIssue(t *testing.T, path, body string) *http.Response {
+	t.Helper()
+	return ts.postBody(t, path, "application/json", body)
+}
+
+func closedIssue(id string) *types.Issue {
+	issue := seededIssue(id, "alice", types.StatusClosed)
+	issue.CloseReason = "shipped"
+	issue.ClosedBySession = "session-7"
+	return issue
+}
+
+// Live row_lock tokens run in this range, which is how the update slice's first
+// integration case failed — the guard it composed from a float64-decoded
+// revision was refused against a row nothing else had touched. Pinning it here
+// means a member decoded the wrong way fails in milliseconds instead of against
+// real Dolt.
+const guardToken int64 = 9007199254740993
+
+// guard spells a row-version expectation the way a request carries one: through
+// a pointer, so that nil ("do not check") stays distinct from a guard on the
+// never-written version 0.
+func guard(v int64) *int64 { return &v }
+
+// revisionOf reads `revision` as the 64-BIT INTEGER the document declares,
+// which is the whole reason it exists beside decodeBody: that helper decodes
+// into `any`, and `any` is a float64.
+//
+// NEVER ORDER IT AND NEVER COMPUTE ONE. The token is opaque and compared for
+// equality alone, so "the previous revision" is not `revision - 1`; it is the
+// value an earlier write answered with.
+func revisionOf(t *testing.T, resp *http.Response) int64 {
+	t.Helper()
+	raw := readAll(t, resp)
+	var body struct {
+		Revision *int64 `json:"revision"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("decode revision from %q: %v", raw, err)
+	}
+	if body.Revision == nil {
+		t.Fatalf("the response carries no `revision`: %s", raw)
+	}
+	return *body.Revision
+}
 
 func (ts *testServer) reopenIssue(t *testing.T, path, body string) *http.Response {
 	t.Helper()
