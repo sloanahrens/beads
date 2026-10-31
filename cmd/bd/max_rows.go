@@ -105,11 +105,12 @@ func resolveMaxRowsEnvOnly() (int, string) {
 //	return HandleError("%v", err)
 //
 // This used to call os.Exit(2) directly, which — since it runs from deep
-// inside RunE, sometimes several calls below it — bypassed both the
-// calling command's own `defer func() { metrics.CloseEventAndAdd(evt) }()`
-// and main()'s post-ExecuteC metrics.CloseAndFlush(), stranding queued
-// metrics. Returning through RunE like every other command error lets both
-// run before process exit.
+// inside RunE, sometimes several calls below it — abandoned the stack, so
+// neither the calling command's own deferred cleanup nor the root
+// PersistentPostRunE's close-out (store close and workspace gate release,
+// the wait for fired hooks, the OTel span end and telemetry.Shutdown
+// flush) ran. Returning through RunE like every other command error lets
+// them all run before process exit.
 //
 // The error is intentionally rendered without ANSI color and without
 // touching stdout: a half-rendered JSON array on stdout would cause `jq`

@@ -1,6 +1,6 @@
 # Error Handling Guidelines
 
-Last reviewed: 2026-07-07
+Last reviewed: 2026-10-31
 
 Freshness source: `cmd/bd/*.go`, especially command error exits and JSON error
 helpers in `cmd/bd/errors.go`.
@@ -29,25 +29,29 @@ if err := store.CreateIssue(ctx, issue, actor); err != nil {
 ```
 
 **Why not `os.Exit(1)`?** Calling `os.Exit` inside a command handler abandons the
-stack without running deferred functions — the per-command metrics event
-(`CloseEventAndAdd`) and `main()`'s `metrics.CloseAndFlush()` never run, so the
-invocation records no usage event and any `defer`red cleanup (unit-of-work close,
-temp-file removal) is skipped. Instead return a `HandleError*` value: it prints
-the message and returns a sentinel `*exitError`; cobra unwinds the stack (running
+stack without running deferred functions, so the root command's deferred
+close-out never runs: closing the store and releasing the workspace gates,
+waiting for the hooks the command fired, and ending the command span and
+flushing OpenTelemetry through `telemetry.Shutdown` (`cmd/bd/main.go`). Any
+`defer`red cleanup the command itself installed (unit-of-work close, temp-file
+removal) is skipped too. Instead return a `HandleError*` value: it prints the
+message and returns a sentinel `*exitError`; cobra unwinds the stack (running
 every `defer`), and `main()` maps the sentinel to exit code 1.
 
 **Characteristics:**
 - Prints `Error:` (plus `Hint:` for the `WithHint` variants) to stderr; the
   `RespectJSON` variants emit a structured JSON error to stdout under `--json`
 - Returns `&exitError{Code: 1}` up through `RunE`; `main()` exits 1 after
-  deferred cleanup and the metrics flush have run
+  deferred cleanup and the OTel telemetry flush have run
 - The command's `cobra.Command` **must** set `SilenceUsage: true` and
   `SilenceErrors: true`, or cobra will additionally print `Error: exit code 1`
   and the usage text on top of the real message
 
-**Narrow exceptions still using `os.Exit`:** process-level gates that run before
-or outside the `RunE` error path — e.g. `CheckReadonly`, which aborts a blocked
-command after flushing metrics first. A handful of pre-existing direct
+**Narrow exceptions still using `os.Exit`:** process-level gates that refuse a
+command before it can write — e.g. `CheckReadonly`, which exits through
+`exitRefused`. It still skips the close-out above: the store and the workspace
+gates were already taken in the root `PersistentPreRunE`, so the process exits
+with them held for the kernel to drop. A handful of pre-existing direct
 `os.Exit(1)` calls also remain inside handler bodies; new command code should
 return a `HandleError*` value instead of adding more.
 
