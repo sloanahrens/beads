@@ -1202,7 +1202,7 @@ func autoExportDataLossTestEnv(home string) []string {
 	// BEADS_TEST_SERVER lets bd connect to the shared test Dolt server that
 	// serverInitArgs points init at; without it the guard refuses test
 	// databases on any server.
-	return append(env, "HOME="+home, "BEADS_DOLT_AUTO_START=0", "BEADS_NO_DAEMON=1", "BD_DISABLE_METRICS=1", "BD_DISABLE_EVENT_FLUSH=1", "BEADS_TEST_SERVER=1")
+	return append(env, "HOME="+home, "BEADS_DOLT_AUTO_START=0", "BEADS_NO_DAEMON=1", "BEADS_TEST_SERVER=1")
 }
 
 // ---------------------------------------------------------------------------

@@ -33,8 +33,6 @@ func newDatabaseRefusalEnv(home string, autoStart bool, extra ...string) []strin
 		"HOME="+home,
 		"BEADS_NO_DAEMON=1",
 		"BD_NON_INTERACTIVE=1",
-		"BD_DISABLE_METRICS=1",
-		"BD_DISABLE_EVENT_FLUSH=1",
 	)
 	if !autoStart {
 		env = append(env, "BEADS_DOLT_AUTO_START=0")

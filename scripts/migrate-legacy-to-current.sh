@@ -320,8 +320,8 @@ run_at() {
             XDG_CONFIG_HOME="$destination/home/config" \
             XDG_CACHE_HOME="$destination/home/cache" \
             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-            GIT_TERMINAL_PROMPT=0 BD_DISABLE_METRICS=1 \
-            BD_DISABLE_EVENT_FLUSH=1 BD_NON_INTERACTIVE=1 \
+            GIT_TERMINAL_PROMPT=0 \
+            BD_NON_INTERACTIVE=1 \
             BEADS_NO_DAEMON=1 BEADS_DOLT_AUTO_START=0 \
             BRIDGE_TEST_MARKER="${BRIDGE_TEST_MARKER:-}" "$@"
     )

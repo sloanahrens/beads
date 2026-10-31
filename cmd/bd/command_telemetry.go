@@ -49,7 +49,7 @@ func initTelemetry(ctx context.Context, version string) {
 //
 // Assumes initTelemetry has already run for this invocation; does not call
 // telemetry.Init itself so callers can gate the usage-metrics bootstrap
-// block (e.g. skipping span creation for the internal send-metrics
+// block (e.g. skipping span creation for an internal
 // subcommand) between the two.
 func startCommandSpan(ctx context.Context, cmdName, version string, args []string, secretFlags map[string]bool) (context.Context, oteltrace.Span) {
 	return telemetry.Tracer("bd").Start(ctx, "bd.command."+cmdName,

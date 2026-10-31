@@ -437,7 +437,7 @@ func shouldWarnImplicitBlocksDefault(dt types.DependencyType, explicit, quiet bo
 	}
 	// --quiet is documented as "Suppress non-essential output (errors only)",
 	// and the other non-error stderr notices in this package (tips.go,
-	// metrics.go, routing_read.go) respect it the same way.
+	// routing_read.go) respect it the same way.
 	if quiet {
 		return false
 	}

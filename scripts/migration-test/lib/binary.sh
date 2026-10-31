@@ -113,8 +113,6 @@ verify_release_binary_version() (
         GIT_CONFIG_GLOBAL=/dev/null \
         GIT_CONFIG_SYSTEM=/dev/null \
         GIT_TERMINAL_PROMPT=0 \
-        BD_DISABLE_METRICS=1 \
-        BD_DISABLE_EVENT_FLUSH=1 \
         BD_NON_INTERACTIVE=1 \
         "$timeout_bin" --kill-after=5s "$probe_timeout" "$binary" version 2>&1); then
         echo "ERROR: verified $version binary does not run" >&2

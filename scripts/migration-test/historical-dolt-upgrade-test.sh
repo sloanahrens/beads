@@ -126,12 +126,12 @@ isolated_env() {
     if [ "${ISOLATED_ENV_EXEC:-0}" = 1 ]; then
         exec env -i PATH="$PATH" HOME="$workspace/home" XDG_CONFIG_HOME="$workspace/home/config" \
             XDG_CACHE_HOME="$workspace/home/cache" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-            GIT_TERMINAL_PROMPT=0 BD_DISABLE_METRICS=1 BD_DISABLE_EVENT_FLUSH=1 \
+            GIT_TERMINAL_PROMPT=0 \
             BD_NON_INTERACTIVE=1 BEADS_NO_DAEMON=1 BEADS_DOLT_AUTO_START="$auto_start" BD_AUTHOR="${BD_AUTHOR:-}" "$@"
     fi
     env -i PATH="$PATH" HOME="$workspace/home" XDG_CONFIG_HOME="$workspace/home/config" \
         XDG_CACHE_HOME="$workspace/home/cache" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-        GIT_TERMINAL_PROMPT=0 BD_DISABLE_METRICS=1 BD_DISABLE_EVENT_FLUSH=1 \
+        GIT_TERMINAL_PROMPT=0 \
         BD_NON_INTERACTIVE=1 BEADS_NO_DAEMON=1 BEADS_DOLT_AUTO_START="$auto_start" BD_AUTHOR="${BD_AUTHOR:-}" "$@"
 }
 

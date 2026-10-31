@@ -137,7 +137,6 @@ func readonlyCanaryEnv(home, beadsDir, circuitDir string, port int) []string {
 		"BEADS_DIR": true, "BEADS_DB": true, "BD_DB": true,
 		"BEADS_DOLT_PORT": true, "BEADS_DOLT_SERVER_PORT": true, "BEADS_DOLT_AUTO_START": true,
 		"BEADS_TEST_MODE": true, "BEADS_TEST_CIRCUIT_DIR": true,
-		"BD_DISABLE_METRICS": true, "BD_DISABLE_EVENT_FLUSH": true,
 		"BD_OTEL_METRICS_URL": true, "BD_OTEL_LOGS_URL": true, "BD_OTEL_STDOUT": true,
 	}
 	env := make([]string, 0, len(os.Environ())+16)
@@ -157,8 +156,6 @@ func readonlyCanaryEnv(home, beadsDir, circuitDir string, port int) []string {
 		"BEADS_DOLT_AUTO_START=0",
 		"BEADS_TEST_MODE=1",
 		"BEADS_TEST_CIRCUIT_DIR="+circuitDir,
-		"BD_DISABLE_METRICS=1",
-		"BD_DISABLE_EVENT_FLUSH=1",
 		"BD_OTEL_METRICS_URL=", "BD_OTEL_LOGS_URL=", "BD_OTEL_STDOUT=false",
 		"BEADS_TEST_IGNORE_REPO_CONFIG=1",
 	)
