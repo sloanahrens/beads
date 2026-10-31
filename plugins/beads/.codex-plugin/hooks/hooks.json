@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bd codex-hook SessionStart",
+            "command": "bd prime",
             "statusMessage": "Loading Beads context"
           }
         ]
@@ -18,31 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bd codex-hook PreCompact",
+            "command": "bd prime --memories-only",
             "statusMessage": "Checking Beads context"
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "matcher": "manual|auto",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bd codex-hook PostCompact",
-            "statusMessage": "Scheduling Beads context refresh"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bd codex-hook UserPromptSubmit",
-            "statusMessage": "Refreshing Beads context"
           }
         ]
       }
