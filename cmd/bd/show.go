@@ -11,7 +11,6 @@ import (
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
-	"github.com/steveyegge/beads/internal/uimd"
 	"github.com/steveyegge/beads/issueops"
 )
 
@@ -212,18 +211,18 @@ var showCmd = &cobra.Command{
 			// Content sections — always show DESCRIPTION header so the user
 			// can distinguish "empty" from "hidden" (GH#3336).
 			if issue.Description != "" {
-				fmt.Printf("\n%s\n%s\n", ui.RenderBold("DESCRIPTION"), uimd.RenderMarkdown(issue.Description))
+				fmt.Print(formatShowSection("DESCRIPTION", issue.Description))
 			} else {
 				fmt.Printf("\n%s\n  %s\n", ui.RenderBold("DESCRIPTION"), ui.RenderMuted("(none)"))
 			}
 			if issue.Design != "" {
-				fmt.Printf("\n%s\n%s\n", ui.RenderBold("DESIGN"), uimd.RenderMarkdown(issue.Design))
+				fmt.Print(formatShowSection("DESIGN", issue.Design))
 			}
 			if issue.Notes != "" {
-				fmt.Printf("\n%s\n%s\n", ui.RenderBold("NOTES"), uimd.RenderMarkdown(issue.Notes))
+				fmt.Print(formatShowSection("NOTES", issue.Notes))
 			}
 			if issue.AcceptanceCriteria != "" {
-				fmt.Printf("\n%s\n%s\n", ui.RenderBold("ACCEPTANCE CRITERIA"), uimd.RenderMarkdown(issue.AcceptanceCriteria))
+				fmt.Print(formatShowSection("ACCEPTANCE CRITERIA", issue.AcceptanceCriteria))
 			}
 
 			// Show labels
@@ -264,9 +263,8 @@ var showCmd = &cobra.Command{
 				fmt.Printf("\n%s\n", ui.RenderBold("COMMENTS"))
 				for _, comment := range comments {
 					fmt.Printf("  %s %s\n", ui.RenderMuted(formatTime(comment.CreatedAt)), comment.Author)
-					rendered := uimd.RenderMarkdown(comment.Text)
-					// TrimRight removes trailing newlines that Glamour adds, preventing extra blank lines
-					for _, line := range strings.Split(strings.TrimRight(rendered, "\n"), "\n") {
+					// TrimRight drops trailing newlines in the stored text, preventing extra blank lines
+					for _, line := range strings.Split(strings.TrimRight(comment.Text, "\n"), "\n") {
 						fmt.Printf("    %s\n", line)
 					}
 				}
