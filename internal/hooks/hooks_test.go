@@ -1,6 +1,8 @@
 package hooks
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -329,16 +331,133 @@ func TestRunSync_KillsDescendants(t *testing.T) {
 
 	// RunSync returns only after cmd.Wait saw the hook's stdout pipe close,
 	// and the backgrounded sleep holds that pipe, so it has already exited.
-	// What /proc can still show is a zombie awaiting its reaper, which is not
-	// running; check once.
+	// What /proc can still show for a moment under load is a process the group
+	// kill has signalled but has not yet been scheduled to die. Wait for the
+	// state this is about — not running — instead of sampling it once.
+	stopped, err := waitForStopped(
+		func() (bool, error) { return childStopped(pid) },
+		runtime.Gosched,
+		50000,
+	)
+	if err != nil {
+		t.Fatalf("Failed to read state of child process %d: %v", pid, err)
+	}
+	if !stopped {
+		t.Fatalf("Child process %d still running after timeout", pid)
+	}
+}
+
+// waitForStopped polls step until it reports a stopped child, up to attempts
+// times, pausing between attempts. It returns false with no error when the
+// bound runs out with the child still running, and passes a read error back
+// without retrying it. The pause is injected so its own test can drive a fake
+// state sequence with no clock.
+func waitForStopped(step func() (bool, error), pause func(), attempts int) (bool, error) {
+	for i := 0; i < attempts; i++ {
+		stopped, err := step()
+		if err != nil {
+			return false, err
+		}
+		if stopped {
+			return true, nil
+		}
+		pause()
+	}
+	return false, nil
+}
+
+// childStopped reports whether the process is no longer running: reaped (gone),
+// a zombie, or dead. Any other read failure is returned rather than passing as
+// stopped, so an unreadable /proc cannot make the assertion above pass.
+func childStopped(pid int) (bool, error) {
 	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
 	if err != nil {
-		return // reaped, test passed
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
 	}
 	// Format: "pid (comm) S ..."; comm may contain spaces, so find the last ')'.
-	fields := strings.Fields(string(stat[strings.LastIndexByte(string(stat), ')')+1:]))
-	if len(fields) > 0 && fields[0] != "Z" && fields[0] != "X" {
-		t.Fatalf("Child process %d still running (state %s) after timeout", pid, fields[0])
+	closeParen := strings.LastIndexByte(string(stat), ')')
+	if closeParen < 0 {
+		return false, fmt.Errorf("malformed /proc/%d/stat: no comm terminator", pid)
+	}
+	fields := strings.Fields(string(stat[closeParen+1:]))
+	if len(fields) == 0 {
+		return false, fmt.Errorf("malformed /proc/%d/stat: no state field", pid)
+	}
+	return fields[0] == "Z" || fields[0] == "X", nil
+}
+
+// TestWaitForStopped_WaitsForAStoppedState pins the retry: a child that reads
+// as running twice and then stopped passes on the third read, with no clock.
+func TestWaitForStopped_WaitsForAStoppedState(t *testing.T) {
+	states := []bool{false, false, true}
+	reads, pauses := 0, 0
+	step := func() (bool, error) {
+		if reads >= len(states) {
+			return false, nil
+		}
+		stopped := states[reads]
+		reads++
+		return stopped, nil
+	}
+
+	stopped, err := waitForStopped(step, func() { pauses++ }, 10)
+	if err != nil {
+		t.Fatalf("waitForStopped returned an error: %v", err)
+	}
+	if !stopped {
+		t.Fatal("waitForStopped did not see the sequence reach a stopped state")
+	}
+	if reads != 3 {
+		t.Errorf("read the state %d times, want 3", reads)
+	}
+	if pauses != 2 {
+		t.Errorf("paused %d times, want 2 (only between reads)", pauses)
+	}
+}
+
+// TestWaitForStopped_GivesUpAfterTheBound pins the other half: a child that
+// never stops fails within the attempt bound instead of polling forever.
+func TestWaitForStopped_GivesUpAfterTheBound(t *testing.T) {
+	reads := 0
+	step := func() (bool, error) {
+		reads++
+		return false, nil
+	}
+
+	stopped, err := waitForStopped(step, func() {}, 5)
+	if err != nil {
+		t.Fatalf("waitForStopped returned an error: %v", err)
+	}
+	if stopped {
+		t.Fatal("a child that never stops was reported stopped")
+	}
+	if reads != 5 {
+		t.Errorf("read the state %d times, want the bound of 5", reads)
+	}
+}
+
+// TestWaitForStopped_ReportsAReadError pins that an unreadable state fails the
+// wait rather than counting as stopped.
+func TestWaitForStopped_ReportsAReadError(t *testing.T) {
+	wantErr := errors.New("permission denied")
+	reads := 0
+	step := func() (bool, error) {
+		reads++
+		return false, wantErr
+	}
+
+	stopped, err := waitForStopped(step, func() {}, 5)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("waitForStopped error = %v, want %v", err, wantErr)
+	}
+	if stopped {
+		t.Fatal("a read error was reported as a stopped child")
+	}
+	if reads != 1 {
+		t.Errorf("read the state %d times after an error, want 1", reads)
 	}
 }
 
