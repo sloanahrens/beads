@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
@@ -120,7 +121,7 @@ var showCmd = &cobra.Command{
 		// The JSON detail view for a list of ids is answered from one store
 		// read per database the ids live in, not one read per id (be-2wkz).
 		if jsonOutput && !shortMode {
-			return showIssuesJSON(ctx, args, includeDepends, includeComments, briefDeps)
+			return showIssuesJSON(ctx, args, includeDepends, includeComments, briefDeps, currentMode)
 		}
 
 		// Direct mode - use routed resolution for cross-repo lookups
@@ -336,21 +337,134 @@ func sameStoreHandle(a, b storage.DoltStorage) bool {
 	return a == b
 }
 
+// showResolution is one requested id's answer from resolution, before the
+// detail read: either a canonical id and the store that holds it, or the
+// per-id failure `bd show` reports for it.
+type showResolution struct {
+	requested string
+	canonical string
+	store     storage.DoltStorage
+	failure   idOutcome
+	failed    bool
+}
+
+// exactLocalIDs answers which of ids the local store holds EXACTLY, in one
+// query set. An id it leaves out is not decided by this read — it still goes
+// through resolveAndGetIssueWithRouting — so a miss here can only cost a
+// slower lookup, never change an answer.
+//
+// A store that cannot answer (no ExactIDStore capability, or a failed read)
+// yields nil, which sends every id down the per-id resolver: that is the same
+// read this fast path stands in for, and it reports a store failure on the id
+// that hits it instead of dropping the answer.
+func exactLocalIDs(ctx context.Context, s storage.DoltStorage, ids []string) map[string]struct{} {
+	if len(ids) == 0 || s == nil {
+		return nil
+	}
+	resolver, ok := s.(storage.ExactIDStore)
+	if !ok {
+		return nil
+	}
+	set, err := resolver.ExactIssueIDs(ctx, ids)
+	if err != nil {
+		// Not fatal, and not silent: the per-id resolver is the read this
+		// batch replaces, and it reports the store failure on the id that hits
+		// it, so the command still answers honestly — just slower. The debug
+		// line leaves a trace for a show that got slow for no visible reason.
+		debug.Logf("bd show: exact id lookup failed, resolving per id: %v", err)
+		return nil
+	}
+	return set
+}
+
+// showExactIDSet is exactLocalIDs as showIssuesJSON asks it: a --current pick
+// is not run through it, because that id came out of a store read of its own
+// and keeps resolving exactly as it did before this fast path existed.
+func showExactIDSet(ctx context.Context, s storage.DoltStorage, ids []string, currentPick bool) map[string]struct{} {
+	if currentPick {
+		return nil
+	}
+	return exactLocalIDs(ctx, s, ids)
+}
+
+// resolveShowIDs resolves every requested id for `bd show --json`, in the
+// order the caller named them.
+//
+// exactLocal is the set exactLocalIDs answered with: an id in it names a row
+// the local store holds under that very id, and routing is only consulted
+// after the local store answers not-found (resolveAndGetIssueWithRoutingAccess
+// tries the local store first, unconditionally), so such an id would have come
+// back from the resolver as itself, out of the local store. Taking it as its
+// own canonical id therefore skips only the lookup, not the answer.
+//
+// EVERY OTHER ID takes resolveAndGetIssueWithRouting exactly as before: fuzzy
+// and partial ids, a prefix routed to another rig, an auto-routed contributor
+// project, and a --current pick all keep the affordances and the failure
+// outcomes they have today. Prefix routing is not re-implemented here; the
+// fast path only covers the case where there is no routing decision to make.
+//
+// The returned slice is parallel to ids, and the second return holds the
+// routed results opened on the way, which the caller must Close.
+func resolveShowIDs(ctx context.Context, localStore storage.DoltStorage, ids []string, exactLocal map[string]struct{}) ([]showResolution, []*RoutedResult) {
+	resolutions := make([]showResolution, 0, len(ids))
+	var open []*RoutedResult
+	for _, id := range ids {
+		if _, ok := exactLocal[id]; ok {
+			resolutions = append(resolutions, showResolution{requested: id, canonical: id, store: localStore})
+			continue
+		}
+		result, err := resolveAndGetIssueWithRouting(ctx, localStore, id)
+		if err != nil {
+			if result != nil {
+				result.Close()
+			}
+			resolutions = append(resolutions, showResolution{
+				requested: id,
+				failure:   reportShowFailure(id, err),
+				failed:    true,
+			})
+			continue
+		}
+		if result == nil || result.Issue == nil {
+			if result != nil {
+				result.Close()
+			}
+			resolutions = append(resolutions, showResolution{
+				requested: id,
+				failure:   reportShowMissing(id),
+				failed:    true,
+			})
+			continue
+		}
+		open = append(open, result)
+		resolutions = append(resolutions, showResolution{
+			requested: id,
+			canonical: result.Issue.ID,
+			store:     result.Store,
+		})
+	}
+	return resolutions, open
+}
+
 // showIssuesJSON answers `bd show --json` for a list of ids.
 //
-// RESOLUTION STAYS PER ID and stays here: fuzzy ids, --current's pick and
+// RESOLUTION STAYS IN THIS PACKAGE: fuzzy ids, --current's pick and
 // prefix/cross-repo routing are interactive affordances that can answer with a
 // different issue than the caller named, which has no place on a contract an
-// unattended client also calls. What this function changes is only the DETAIL
-// VIEW read: every id resolved into one store is answered by a single
-// issueops.Reader.GetMany, so a list of a thousand ids costs one query set per
-// chunk instead of ten statements an id (be-2wkz).
+// unattended client also calls. What this function changes is what resolution
+// COSTS: ids the local store holds exactly are settled by one batched
+// existence lookup for the whole list (exactLocalIDs) instead of one store
+// call each, and only the ids that are not exactly local go through the
+// per-id resolver (be-mfu5). Every id is then answered by one
+// issueops.Reader.GetMany per store they resolved into, so a list of a
+// thousand ids costs one query set per chunk instead of ten statements an id
+// (be-2wkz).
 //
 // The output keeps the caller's order and the per-id failure outcome: an id
 // that does not resolve (or that the batch no longer holds) is reported on
 // stderr and named again in error.ids under machine mode, and the ids that did
 // answer are still printed.
-func showIssuesJSON(ctx context.Context, args []string, includeDependents, includeComments, briefDeps bool) error {
+func showIssuesJSON(ctx context.Context, args []string, includeDependents, includeComments, briefDeps, currentPick bool) error {
 	foundCount := 0
 	var showFailures []idOutcome
 
@@ -359,36 +473,26 @@ func showIssuesJSON(ctx context.Context, args []string, includeDependents, inclu
 	// were grouped.
 	resolved := make([]string, 0, len(args))
 	var groups []showBatchGroup
+
+	exactLocal := showExactIDSet(ctx, store, args, currentPick)
+	resolutions, open := resolveShowIDs(ctx, store, args, exactLocal)
 	// A routed lookup hands back a store it opened for that id, and only
 	// Close releases it — so the batch read below must happen while the
 	// results are still open. The local store's Close is a no-op, which is
 	// what keeps this from holding anything for the ordinary case.
-	var open []*RoutedResult
 	defer func() {
 		for _, result := range open {
 			result.Close()
 		}
 	}()
-	for _, id := range args {
-		result, err := resolveAndGetIssueWithRouting(ctx, store, id)
-		if err != nil {
-			if result != nil {
-				result.Close()
-			}
-			showFailures = append(showFailures, reportShowFailure(id, err))
+	for _, r := range resolutions {
+		if r.failed {
+			showFailures = append(showFailures, r.failure)
 			continue
 		}
-		if result == nil || result.Issue == nil {
-			if result != nil {
-				result.Close()
-			}
-			showFailures = append(showFailures, reportShowMissing(id))
-			continue
-		}
-		open = append(open, result)
 		foundCount++
-		resolved = append(resolved, result.Issue.ID)
-		groups = appendToShowBatchGroup(groups, result.Store, result.Issue.ID)
+		resolved = append(resolved, r.canonical)
+		groups = appendToShowBatchGroup(groups, r.store, r.canonical)
 	}
 
 	detailsByID := make(map[string]*issueops.IssueDetails, len(resolved))
