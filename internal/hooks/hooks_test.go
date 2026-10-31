@@ -336,7 +336,7 @@ func TestRunSync_KillsDescendants(t *testing.T) {
 	// with the kernel: a pidfd becomes readable when the process terminates,
 	// so one poll on it is the whole wait — no spin, and no attempt count
 	// standing in for the child's own progress.
-	res := awaitChildExit(realPidfdKernel(), pid, pidfdExitTimeout,
+	res := awaitChildExit(pid, pidfdExitTimeout,
 		func() (bool, error) { return childStopped(pid) })
 	if res.SkipReason != "" {
 		t.Skip(res.SkipReason)
@@ -359,26 +359,6 @@ type childExit struct {
 	SkipReason string
 	// Err is a failed open, wait or state read.
 	Err error
-}
-
-// awaitChildExit waits on pid's exit with the kernel and reads the state the
-// exit buys. It turns an unsupported kernel into a skip reason, so its caller
-// skips with a message instead of asserting without having waited. The kernel
-// and the state read are injected, so its rows run with fake waits, with no
-// clock and no sleep.
-func awaitChildExit(k pidfdKernel, pid int, timeout time.Duration, state func() (bool, error)) childExit {
-	wait, closePidfd, err := waitForChildExit(k, pid, timeout)
-	if err != nil {
-		if pidfdUnsupported(err) {
-			return childExit{SkipReason: fmt.Sprintf(
-				"pidfd_open is unavailable (Linux before 5.3, or not Linux); cannot wait for the child's exit: %v", err)}
-		}
-		return childExit{Err: err}
-	}
-	defer closePidfd()
-
-	stopped, err := waitForStopped(wait, state)
-	return childExit{Stopped: stopped, Err: err}
 }
 
 // waitForStopped waits for the child to exit and then reports whether its
