@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
@@ -238,13 +237,6 @@ var labelAddCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		CheckReadonly("label add")
 
-		evt := metrics.NewCommandEvent("label-add")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		return runLabelAdd(rootCtx, args)
 	},
 }
@@ -260,13 +252,6 @@ var labelRemoveCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		CheckReadonly("label remove")
 
-		evt := metrics.NewCommandEvent("label-remove")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		return runLabelRemove(rootCtx, args)
 	},
 }
@@ -277,13 +262,6 @@ var labelListCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("label-list")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		return runLabelList(rootCtx, args)
 	},
 }
@@ -316,13 +294,6 @@ var labelListAllCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("label-list-all")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		labelCounts, err := countLabelsAcrossIssues(rootCtx, store)
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
@@ -378,13 +349,6 @@ var labelPropagateCmd = &cobra.Command{
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		CheckReadonly("label propagate")
-
-		evt := metrics.NewCommandEvent("label-propagate")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
 
 		ctx := rootCtx
 

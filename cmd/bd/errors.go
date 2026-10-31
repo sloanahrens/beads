@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/migration"
 )
 
@@ -157,16 +156,11 @@ func WarnError(format string, args ...interface{}) {
 // covers the whole write surface at once, including commands added after
 // this comment is written — not just a hand-picked list that rots (one
 // concrete instance the hand-picked list missed: "bd q", cmd/bd/quick.go,
-// the create alias). It exits via os.Exit and so cannot run the per-command
-// deferred CloseEventAndAdd — a command blocked here records no
-// cli_command event of its own (it never actually ran). It does flush
-// metrics first, so events already queued earlier in this run are still
-// written and scheduled for upload rather than stranded until the next
-// clean exit.
+// the create alias). It exits via os.Exit, so a command blocked here never
+// reaches its own deferred cleanup: it never actually ran.
 func CheckReadonly(operation string) {
 	if readonlyMode {
 		fmt.Fprintf(os.Stderr, "Error: operation '%s' is not allowed in read-only mode\n", operation)
-		metrics.CloseAndFlush()
 		exitRefused(1, "operation '%s' is not allowed in read-only mode", operation)
 	}
 	CheckMigrationFreeze(operation)
@@ -179,8 +173,7 @@ func CheckReadonly(operation string) {
 // via the migration playbook's plist-unload step, so this closes the
 // remaining gap: a human typing 'bd create'/'bd update' etc. mid-migration,
 // bypassing the gt-layer gate. Same exit-via-os.Exit tradeoff as
-// CheckReadonly above — no cli_command event for a command blocked here,
-// but queued metrics are still flushed.
+// CheckReadonly above: a command blocked here never runs its own cleanup.
 //
 // Three callers, each closing a different hole:
 //  1. CheckReadonly above — the per-command chokepoint covering the write
@@ -215,7 +208,6 @@ func CheckMigrationFreeze(operation string) {
 		fmt.Fprintf(os.Stderr, "   Reason: %s\n", reason)
 	}
 	fmt.Fprintf(os.Stderr, "   bd %s is blocked. Clear the freeze: gt migrate thaw\n", operation)
-	metrics.CloseAndFlush()
 	exitRefused(1, "town is frozen for migration (by %s); bd %s is blocked", operator, operation)
 }
 

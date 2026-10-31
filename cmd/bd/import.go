@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -144,13 +143,6 @@ func runImport(cmd *cobra.Command, args []string) error {
 	// doesn't gate bd import either), so it can't pick up the freeze check
 	// folded into CheckReadonly the way create/update/close/remember do.
 	CheckMigrationFreeze("import")
-
-	evt := metrics.NewCommandEvent("import")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
 
 	if err := runImportInner(args); err != nil {
 		if _, isExit := err.(*exitError); isExit {
