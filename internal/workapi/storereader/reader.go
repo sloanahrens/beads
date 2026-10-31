@@ -16,6 +16,7 @@ package storereader
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
@@ -163,6 +164,12 @@ func (r *storeReader) GetMany(ctx context.Context, req issueops.GetManyRequest) 
 	})
 	if err != nil {
 		return issueops.GetManyResult{}, err
+	}
+	if batch == nil {
+		// A store that answers no error and no rows has not answered. Saying so
+		// is the only reading that cannot be mistaken for "those ids do not
+		// exist", which is what an empty batch would look like below.
+		return issueops.GetManyResult{}, fmt.Errorf("GetMany: store returned no batch for %d ids", len(req.IDs))
 	}
 	details, notFound := workapi.BuildIssueDetailsBatch(batch, req.IDs, workapi.DetailOptions{
 		IncludeDependents: req.IncludeDependents,

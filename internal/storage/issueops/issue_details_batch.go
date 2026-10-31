@@ -49,6 +49,9 @@ func GetIssueDetailsBatchInTx(ctx context.Context, tx DBTX, req storage.IssueDet
 		return nil, fmt.Errorf("issue details batch: %w", err)
 	}
 
+	if err := requireLeasesTableInTx(ctx, tx); err != nil {
+		return nil, fmt.Errorf("issue details batch: %w", err)
+	}
 	issues, err := GetIssuesByIDsInTx(ctx, tx, ids, wispSet)
 	if err != nil {
 		return nil, fmt.Errorf("issue details batch: issues: %w", err)
@@ -79,6 +82,35 @@ func GetIssueDetailsBatchInTx(ctx context.Context, tx DBTX, req storage.IssueDet
 		out.Comments = comments
 	}
 	return out, nil
+}
+
+// requireLeasesTableInTx refuses a database whose leases table is missing,
+// which is what the single-issue read does (getIssueFromTableInTx) and what
+// GetIssuesByIDsInTx deliberately does NOT: that helper degrades its lease
+// overlay on such a database, because the listings it serves treat a missing
+// overlay as a display detail. This read replaces `bd show`'s per-issue one,
+// where the overlay is read straight into the row the command prints, so a
+// silent degrade here would answer differently from the path it stands in for
+// (be-2wkz, be-bz4).
+func requireLeasesTableInTx(ctx context.Context, tx DBTX) error {
+	rows, err := tx.QueryContext(ctx, "SELECT 1 FROM leases LIMIT 1")
+	if err != nil {
+		if leasesTableMissing(err) {
+			return ErrLeasesTableMissing
+		}
+		return fmt.Errorf("probe leases: %w", err)
+	}
+	for rows.Next() {
+		// The row's value is irrelevant: the statement's success is the answer.
+	}
+	closeErr := rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("probe leases: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("probe leases: %w", closeErr)
+	}
+	return nil
 }
 
 // compactIDs drops repeats (an IN list answers each id once) while keeping the
