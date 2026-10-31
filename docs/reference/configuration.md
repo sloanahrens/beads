@@ -5,7 +5,7 @@ description: Complete reference for bd configuration across config.yaml and data
 
 Complete configuration reference for beads.
 
-Last reviewed: 2026-07-10
+Last reviewed: 2026-10-31
 
 Freshness source: `cmd/bd/main.go`, `cmd/bd/config.go`, and `internal/configfile/`.
 
@@ -38,7 +38,7 @@ For Viper-managed (YAML) keys, highest to lowest:
 3. **`config.yaml`** files (in the order listed above)
 4. **Built-in defaults**
 
-Project-level keys written via `bd config set` (Jira, Linear, GitHub, status maps, etc.) live in the Dolt database. They are read at command time and have no env var override.
+Project-level keys written via `bd config set` (status maps, custom types, ID policy, `doctor.suppress.*`, etc.) live in the Dolt database. They are read at command time and have no env var override.
 
 When a config.yaml value or environment variable shadows a database key, `bd config list` prints an override warning, and `bd config show` reports the source of every effective key.
 
@@ -46,16 +46,16 @@ When a config.yaml value or environment variable shadows a database key, `bd con
 
 ```bash
 # Set a value (auto-routes to config.yaml or the database)
-bd config set jira.url "https://company.atlassian.net"
+bd config set routing.mode auto
 bd config set validation.on-create warn   # YAML-only key
 
 # Set many values in one go (single auto-commit; validates before writing)
-bd config set-many jira.url=https://example.atlassian.net jira.project=PROJ
+bd config set-many routing.mode=auto validation.on-create=warn
 
 # Get a value
-bd config get jira.url
-bd config get --json jira.url
-# → {"key":"jira.url","value":"https://company.atlassian.net"}
+bd config get routing.mode
+bd config get --json routing.mode
+# → {"key":"routing.mode","value":"auto"}
 
 # List all database-stored config (with override warnings)
 bd config list
@@ -69,7 +69,7 @@ bd config show --json
 bd config validate
 
 # Remove a value
-bd config unset jira.url
+bd config unset routing.mode
 ```
 
 `bd config set` automatically routes the write to the right location: keys in the YAML namespace (see below) are written to the project `config.yaml`; everything else is written to the Dolt database. `beads.role` is stored in git config.
@@ -88,9 +88,9 @@ The full namespaces routed to YAML are:
 
 Plus these individual keys:
 
-`no-db`, `json`, `db`, `actor`, `identity`, `no-push`, `no-git-ops`, `agent.profile`, `create.require-description`, `import.auto`, `import.path`, `prime.max-memories`, `prime.max-memory-chars`, and the secret keys `github.token`, `gitlab.token`, `jira.api_token`, `ado.pat`, `linear.api_key`, `linear.oauth_client_id`, `linear.oauth_client_secret`.
+`no-db`, `json`, `db`, `actor`, `identity`, `no-push`, `no-git-ops`, `agent.profile`, `create.require-description`, `import.auto`, `import.path`, `prime.max-memories`, `prime.max-memory-chars`, and the secret key `ai.api_key`.
 
-Any key whose name contains `api_key`, `api-key`, `secret`, `token`, or `password` is treated as a secret: it is refused on git-tracked `config.yaml` files unless you pass `--force-git-tracked`. Prefer exporting the value as an environment variable instead (e.g. `LINEAR_API_KEY`).
+Any key whose name contains `api_key`, `api-key`, `secret`, `token`, or `password` is treated as a secret: it is refused on git-tracked `config.yaml` files unless you pass `--force-git-tracked`. Prefer exporting the value as an environment variable instead (e.g. `ANTHROPIC_API_KEY` for `ai.api_key`).
 
 ## Tool-Level Settings (config.yaml)
 
@@ -266,14 +266,7 @@ These are written to the Dolt database by `bd config set` and have no env var ov
 
 | Namespace | Purpose |
 |---|---|
-| `jira.*` | Jira integration (URL, project(s), status_map, type_map, custom_fields) |
-| `linear.*` | Linear integration (team_id(s), priority_map, state_map, label_type_map, relation_map) |
-| `github.*` | GitHub integration (org, repo, label_map) |
-| `gitlab.*` | GitLab integration |
-| `ado.*` | Azure DevOps integration (org, project(s), state_map, type_map) |
-| `notion.*` | Notion integration |
-| `custom.*` | User-defined / custom integrations |
-| `<tracker>.last_sync` | Updated automatically after each tracker sync; enables incremental sync |
+| `custom.*` | User-defined settings |
 | `status.custom` | Custom statuses with optional behavior categories (see [below](#custom-statuses-and-types)) |
 | `types.custom` | Comma-separated list of custom issue types |
 | `types.infra` | Infra types routed to the wisps table instead of the versioned issues table |
@@ -403,7 +396,7 @@ Selected commonly-used variables:
 | `BD_ALLOW_NEW_DATABASE` | Set to `1` to let `bd init` create a database on a Dolt server that already serves other databases (same as `bd init --allow-new-database`). Without it that `bd init` is refused. A fresh server and shared-server mode are unaffected |
 | `BEADS_DOLT_BIN` | Pin the exact external `dolt` CLI binary managed proxied-server mode spawns, overriding PATH lookup (highest precedence; an explicit path that fails validation is an error, not a silent fallback to PATH). On Windows the executable extension may be omitted — `C:\tools\dolt` finds `C:\tools\dolt.exe` via PATHEXT, though a file at the exact spelled path wins if both exist |
 
-Integration secrets follow tracker-specific conventions: `LINEAR_API_KEY`, `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_API_TOKEN`, `AZURE_DEVOPS_PAT`, `ANTHROPIC_API_KEY`. These are preferred over storing the value in `config.yaml` for git-tracked projects.
+Secrets belong in environment variables rather than `config.yaml` for git-tracked projects: `ai.api_key` resolves from `ANTHROPIC_API_KEY` first, then `MINIMAX_API_KEY`.
 
 `bd config show` will display the source of every effective key, making overrides explicit.
 
@@ -484,11 +477,11 @@ bd --json --actor "ci-bot" create "Fix things"  # Multiple flags
 Configuration is designed for scripting; every `bd config` subcommand takes `--json`:
 
 ```bash
-# Get one value ({"key":"jira.url","value":"..."})
-JIRA_URL=$(bd config get --json jira.url | jq -r '.value')
+# Get one value ({"key":"routing.mode","value":"..."})
+MODE=$(bd config get --json routing.mode | jq -r '.value')
 
 # Get all database config as a flat object
-bd config list --json | jq -r '.["jira.project"]'
+bd config list --json | jq -r '.["issue_id_mode"]'
 ```
 
 ## Viewing Active Configuration
