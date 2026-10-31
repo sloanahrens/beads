@@ -25,9 +25,6 @@ self: final: prev: {
 
     phases = [ "installPhase" ];
 
-    env.BD_DISABLE_METRICS = "1";
-    env.BD_DISABLE_EVENT_FLUSH = "1";
-
     installPhase = ''
       mkdir -p $out/bin
       cp ${final.beads-unwrapped}/bin/bd $out/bin/bd

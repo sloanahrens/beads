@@ -99,13 +99,7 @@ beads_test_env_enter() {
         unset "$bd_var"
     done
 
-    # be-9zm: with HOME pointed at an empty sandbox there is no user config,
-    # so every bd the suites spawn would resolve telemetry ENABLED: fork the
-    # platform machine-id probe (ioreg on macOS) on the cold cache, write
-    # event files under $HOME/.beads/eventsData, and spawn detached
-    # send-metrics children aimed at the real endpoint. Set the two switches
-    # AFTER the sweep above (which would otherwise remove BD_DISABLE_METRICS).
-    export BD_DISABLE_METRICS=1
+    # Set the test-mode switch after the sweep above.
     export BEADS_TEST_MODE=1
 
     # be-b23: the test tier, also exported after the sweep. The unit tier

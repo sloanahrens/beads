@@ -32,7 +32,7 @@ func TestInitReinitLocalConfiguredRemoteWithoutDoltDataSucceeds(t *testing.T) {
 	runGitForBootstrapTest(t, workDir, "init", "-b", "main")
 	runGitForBootstrapTest(t, workDir, "config", "core.hooksPath", ".git/hooks")
 
-	homeDir := t.TempDir() // must differ from workDir: metrics.go caches to $HOME/.beads
+	homeDir := t.TempDir()
 
 	cmd := exec.Command(bdBin, "init", "--reinit-local", "--prefix", "cfg", "--quiet", "--non-interactive", "--skip-hooks", "--skip-agents")
 	cmd.Dir = workDir
@@ -70,7 +70,7 @@ func TestInitFreshWithUnreachableGitOriginSucceeds(t *testing.T) {
 	runGitForBootstrapTest(t, workDir, "remote", "add", "origin",
 		filepath.Join(t.TempDir(), "does-not-exist.git"))
 
-	homeDir := t.TempDir() // must differ from workDir: metrics.go caches to $HOME/.beads
+	homeDir := t.TempDir()
 
 	cmd := exec.Command(bdBin, "init", "--backend", "dolt", "--prefix", "org", "--quiet", "--non-interactive", "--skip-hooks", "--skip-agents")
 	cmd.Dir = workDir
@@ -92,7 +92,7 @@ func TestInitFreshWithUnreachableGitOriginSucceeds(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(homeDir, ".beads", "eventsData")); !os.IsNotExist(err) {
 		t.Errorf("metrics queue dir was created under the isolated HOME (err=%v); "+
-			"the detached send-metrics child will race t.TempDir cleanup "+
+			"a telemetry queue under HOME would race t.TempDir cleanup "+
 			"(see test_repo_beads_guard_test.go:118)", err)
 	}
 }
