@@ -14,8 +14,9 @@ import (
 // RoleFiresHooks, and it exists because the instance-level pins were not enough.
 //
 // That switch is the only thing standing between a store-derived role and a
-// `bd serve` that runs a user's subprocess per landed mutation: httpapi.Listen
-// sweeps every configured role through it and refuses the ones it recognizes. A
+// `bd serve` that runs a user's subprocess per landed mutation: the listener
+// `bd serve` started swept every configured role through it and refused the
+// ones it recognized. A
 // role the switch does not know about is ADMITTED — served, silently, firing the
 // workspace's scripts for as long as the process is up.
 //
@@ -47,7 +48,7 @@ func TestRoleFiresHooksKnowsEveryHookFiringRole(t *testing.T) {
 
 	if missing := missingFrom(fired, known); len(missing) > 0 {
 		t.Errorf("these decorators fire the workspace's hooks and RoleFiresHooks answers FALSE for them: %v\n"+
-			"each one is a role httpapi.Listen would ADMIT and serve, running a user's subprocess per landed mutation.\n"+
+			"each one is a role a serving listener would ADMIT and serve, running a user's subprocess per landed mutation.\n"+
 			"Add a `case *<type>: return true` to RoleFiresHooks, and pin it from both ends the way the others are.",
 			missing)
 	}

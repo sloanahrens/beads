@@ -60,12 +60,12 @@ type AssigneeStatsRequest struct {
 // object is pinned to with x-go-type, so both front doors serialize ONE struct
 // and neither performs a Go-to-Go mapping on the way to the wire. A result type
 // of this role's own would have put a translation step between the role and
-// both surfaces, which is precisely the second wire struct that
-// internal/httpapi/pinning.go exists to forbid.
+// both surfaces, which is precisely the second wire struct that the deleted
+// HTTP API's pinning test existed to forbid.
 //
 // The summary is a VALUE, not a pointer. A role that answered with a pointer
 // would let a nil-with-nil-error reach a front door that dereferences it — the
-// hazard internal/httpapi/roles.go wraps checkedReader around Get for — and
+// hazard the deleted HTTP API's roles.go wrapped checkedReader around Get for — and
 // there is nothing this role could mean by "no summary": an empty workspace has
 // statistics, and they are zeros.
 type StatsResult struct {

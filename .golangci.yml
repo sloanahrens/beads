@@ -75,65 +75,6 @@ linters:
               desc: "internal/workapi is frontend-independent: the CLI parses flags and passes plain params - see internal/workapi/doc.go"
             - pkg: net/http
               desc: "internal/workapi is frontend-independent: the HTTP layer decodes requests and passes plain params - see internal/workapi/doc.go"
-        # The other half of that boundary. internal/httpapi is TRANSPORT: it
-        # decodes parameters, hands the whole request to issueops.Reader, and
-        # shapes the answer onto the wire. "No handler builds a filter or
-        # supplies a ConfigSource" is the Reader slice's acceptance criterion,
-        # and the rule above cannot enforce it - it constrains what workapi
-        # imports, not who imports workapi. Without this, a handler could call
-        # BuildListFilter tomorrow and every gate would stay green, which is
-        # exactly how a hosted viewer once shipped a bare IssueFilter and served
-        # in_progress rows as "ready".
-        #
-        # Tests are exempt: they read the shared default constants
-        # (workapi.DefaultReadyLimit) to prove the handler uses those rather
-        # than literals of its own, which is a guard, not a construction.
-        httpapi-transport-boundary:
-          list-mode: lax
-          files:
-            - "**/internal/httpapi/**"
-            - "!$test"
-          deny:
-            - pkg: github.com/steveyegge/beads/internal/workapi
-              desc: "internal/httpapi is transport only: a read handler asks the provider for issueops.Reader and passes the whole request - it never builds a filter - see internal/httpapi/reads.go"
-        # The OTHER way past the roles, and the one the rule above does not
-        # close. Denying internal/workapi stops a handler BUILDING a filter; it
-        # does nothing about a handler taking uw.IssueUseCase() and calling the
-        # use case straight, which needs no filter and no builder. That is not a
-        # hypothetical shortcut - it is exactly what the proxied CLI did for
-        # years, and unpicking it is what the role accessors exist for. A second
-        # front door that reached the domain directly would be the same two
-        # implementations again, arriving one handler at a time.
-        #
-        # Deny-by-default over the whole package, so a file added here tomorrow
-        # is covered the moment it exists. The two holes below are named, and
-        # each one is a VALUE the caller assembled, never a use case:
-        #
-        #   server.go     Config.Workspace is domain.ContextInfo, the startup
-        #                 snapshot the embedder hands in. The package resolves
-        #                 no workspace state of its own; this is the type of the
-        #                 thing it is given.
-        #   handlers.go   contextResponse projects that snapshot with
-        #                 domain.PublishedContext - the SAME projection `bd
-        #                 context` publishes, which is where the credential and
-        #                 host-path exclusions live. Reimplementing it here to
-        #                 satisfy a lint rule would be the field-by-field copy
-        #                 that projection exists to prevent.
-        #
-        # Neither file touches a use case, and both are small: the read handlers
-        # (reads.go), the one write (claim.go) and everything added later stay
-        # guarded. Tests are exempt for the reason the rule above exempts them -
-        # they stand up domain fakes to drive the handlers.
-        httpapi-domain-boundary:
-          list-mode: lax
-          files:
-            - "**/internal/httpapi/**"
-            - "!$test"
-            - "!**/internal/httpapi/server.go"
-            - "!**/internal/httpapi/handlers.go"
-          deny:
-            - pkg: github.com/steveyegge/beads/internal/storage/domain
-              desc: "internal/httpapi is transport only: a handler reaches storage through an issueops role accessor on the provider, never through the domain use cases - see internal/httpapi/claim.go"
         # The same boundary, transposed onto the front door that was last past
         # it. cmd/bd cannot be closed to the domain wholesale — thirty of its
         # non-test files import internal/storage/domain today and unpicking
@@ -209,10 +150,6 @@ linters:
         # times. It now lives in internal/workapi/storereader and this is what
         # keeps it there.
         #
-        # No matching entry for internal/httpapi: depguard matches pkg by
-        # prefix, so httpapi-transport-boundary above already denies the
-        # subpackage along with its parent.
-        #
         # The list grows by one entry per store-backed role that gets a shared
         # body of its own. It is a LIST rather than a rule per role so the next
         # one is a one-line edit here - see
@@ -255,8 +192,9 @@ linters:
     # The CONSTRUCTION half of that same boundary, and the half that actually
     # matches the failure. The depguard rule above denies a handler IMPORTING
     # the builders; it does not deny a handler naming the filter types, which
-    # internal/httpapi can already reach (reads.go uses types.CheckFieldLen and
-    # types.IssueWithCounts). A hand-rolled `types.IssueFilter{}` would skip the
+    # a front door can already reach (the deleted HTTP API's reads.go used
+    # types.CheckFieldLen and types.IssueWithCounts). A hand-rolled
+    # `types.IssueFilter{}` would skip the
     # builders entirely and still lint clean - which is EXACTLY what the hosted
     # viewer shipped: a bare IssueFilter that leaked gates, wisps, templates and
     # closed beads that `bd list` hides.
@@ -278,10 +216,6 @@ linters:
     #
     # SCOPE, set by the exclusion rules near the bottom of this file:
     #
-    #   internal/httpapi/**  every file, no exceptions. Each read handler hands
-    #                        the whole request to issueops.Reader and the
-    #                        surface has no other job, so a file added here
-    #                        tomorrow is covered the moment it exists.
     #   cmd/bd/**            DENY BY DEFAULT, with the files that legitimately
     #                        build a filter named as exceptions below. This is
     #                        the way round that survives a rename: `bd list`
@@ -300,7 +234,7 @@ linters:
           msg: "reach the label plane through issueops.Lifecycle (Patch.Labels) and issueops.Reader, never the domain use case - see openIssueLifecycle in cmd/bd/label.go"
         - pattern: '^types\.(IssueFilter|WorkFilter)$'
           pkg: '^github\.com/steveyegge/beads/internal/types$'
-          msg: "do not write a filter here: take one back from a builder in internal/workapi, or pass the whole request to issueops.Reader. internal/httpapi may never name these types; cmd/bd denies them by default and lists the files that legitimately build their own, with the reason for each, in .golangci.yml - see issueops/reader.go"
+          msg: "do not write a filter here: take one back from a builder in internal/workapi, or pass the whole request to issueops.Reader. cmd/bd denies them by default and lists the files that legitimately build their own, with the reason for each, in .golangci.yml - see issueops/reader.go"
     errcheck:
       exclude-functions:
         - (*database/sql.DB).Close
@@ -340,7 +274,7 @@ linters:
       # both. That is fine wherever the file never reaches a label use case, and
       # it is not fine for the files that do - see the three `text:`-scoped
       # entries below.
-      - path-except: '^(internal/httpapi/|cmd/bd/)'
+      - path-except: '^cmd/bd/'
         linters:
           - forbidigo
       #
@@ -360,8 +294,7 @@ linters:
       # Inside cmd/bd the rule is deny-by-default, so each entry below is a
       # HOLE in it and carries the reason that hole exists. 59 of the 389
       # non-test files under cmd/bd are on this list; widening it is an edit
-      # here and a diff a reviewer sees. internal/httpapi has no entry and is
-      # meant not to.
+      # here and a diff a reviewer sees.
       #
       # The modes of `bd list` and `bd show` that consume the filter as a
       # VALUE: the recursive --parent tree walk (it re-parents a copy at every

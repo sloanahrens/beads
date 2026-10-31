@@ -12,7 +12,7 @@ import (
 // when GET /v0/beads/events published the same records over HTTP. Two encoders
 // of the same journal row is exactly the drift this package exists to prevent:
 // the CLI's JSONL output is byte-pinned by the protocol corpus, so a second
-// struct in internal/httpapi would have satisfied its own tests while quietly
+// struct in an HTTP handler would have satisfied its own tests while quietly
 // serving a different `ts` shape, a `dep` that was emitted when empty, or an
 // `issue` that was `{}` where the CLI says `null`. A consumer that mirrors a
 // workspace over HTTP and reconciles against a CLI export has to see one

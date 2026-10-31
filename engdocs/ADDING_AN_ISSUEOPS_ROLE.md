@@ -311,12 +311,9 @@ in; 13 is the HTTP surface, which lands with the command rather than after it.
 
 12. **Both front doors, and the lint that keeps them there.** The CLI handler
     and any HTTP handler call the role and nothing else — no filter, no config
-    load, no unit of work opened by hand. Since the owner's 2026-08-05 scope
-    decision the HTTP half lands WITH the command: the operation is written into
-    `internal/httpapi/spec/openapi.v0.yaml` FIRST and the types generated from
-    it (`make api-gen`), never the other way round. Step 13 has the measured
-    file list for that half; it is not repeated here, because two copies of one
-    count is how the last one went stale.
+    load, no unit of work opened by hand. There is no HTTP front door in the
+    tree since be-xu2.3 deleted `internal/httpapi`, so the CLI handler is the
+    only caller a role has today.
     Then close the holes behind them in
     `.golangci.yml`: add the step-3 package to the `cmd-bd-role-constructors`
     depguard deny list, and if the command no longer names `types.IssueFilter`,
@@ -325,64 +322,7 @@ in; 13 is the HTTP surface, which lands with the command rather than after it.
     number). Removing an entry there is how a role commit proves its front door
     actually reached the role.
 
-13. **The HTTP half, when the role has one.** The spec is written FIRST —
-    `internal/httpapi/spec/openapi.v0.yaml`, then `make api-gen` — and the
-    handler is written against the generated types, never the other way round.
-    `make api-check` is the gate: it regenerates and fails if regeneration
-    changed anything, then runs the spec tests.
-
-    **What an operation costs beside the handler, measured against the two
-    freshest wire slices** — `issueops.GraphCounter`'s (#5536) and
-    `issueops.Relations`' (#5540), whose full file sets differ (each has its own
-    handler, its own handler test and its own proxied integration test) around
-    an identical nine-file core:
-
-    | File | Edit |
-    |---|---|
-    | `spec/openapi.v0.yaml` | The operation, its schemas, and the capability token in `ContextResponse.capabilities`'s prose — that token is hand-edited; `Capabilities()` itself is derived from the route table |
-    | `problem.go` | The `Op<Name>` constant and its `operationCodes` row |
-    | `routes.go` | The `routeTable` row, carrying the `capability` token |
-    | `server.go` | A required `Config` field, its entry in `sourceRoles`, its name in `roleSourceNames`, the `Server` field, the `Listen` assignment, and the per-request accessor |
-    | `claim.go` | The `timedProvider` accessor, plus the `uow.<Role>Source` compile-time assertion beside its siblings |
-    | `cmd/bd/serve.go` | The `serveRoleSource` method, the `serveIssueRoles` row, the `serveRoles` field, and the `httpapi.Config` literal |
-    | `cmd/bd/serve_source_test.go`, `cmd/bd/serve_store_identity_test.go` | The two serve stubs — a COMPILE ERROR since #5539 if you forget, see "the step with no number" |
-
-    Nine files, and the spec tests name most of them if you miss one. Budget
-    `server.go` in particular: six lines in one file, and the `Config` field is
-    REQUIRED, so every caller and test that built a Config grows a line too.
-
-    **And a tenth both slices paid, which is not in the core because it is a
-    test:** `internal/httpapi/roles_test.go` needs the role's fake and its entry
-    in `rolesConfig` — about thirty lines each time, and the compiler does not
-    ask for them, so it is the one on this list you can finish the operation
-    without noticing.
-
-    **A role may honestly have none, and `issueops.VersionReconciler` is the
-    one that does.** It answers a startup hook rather than a command: its two
-    markers are clone-local and dolt-ignored, so they describe the machine
-    holding the database and mean nothing to a remote caller, and the one
-    version fact a client can act on is already `ContextResponse.bd_version`.
-    Writing that decision down — in the leaf doc, beside the promises, and in
-    AMBIGUITIES.md for the owner — is the work. Adding an operation because the
-    checklist has a row for one is not.
-
-    `issueops.Bootstrapper` and `issueops.InitVerifier` are the second and third,
-    and their reason is different enough to be worth its own sentence: a server
-    can only serve a database it is already bound to, and binding it required
-    the identity the bootstrapper writes, so the only caller that could reach
-    such an endpoint would be asking a running server to identify a workspace
-    that is by construction already identified. The read half has no endpoint
-    because it already has one — `ContextResponse.project_id` is its answer, on
-    the wire, today.
-
-    **The ROLES database source is the part that surprises.** `httpapi.Config`
-    carries either a unit-of-work provider or the roles, and the roles are
-    required TOGETHER: a new operation served from a new role adds a required
-    field, so `checkDatabaseSource` grows a term and every caller and test that
-    built a Config grows a line. That is deliberate — a Config missing the new
-    role would otherwise bind and nil-dereference on the first request that
-    reached the new handler — but budget it, because it is the one edit in this
-    list that touches code the role commit did not write.
+13. **The HTTP half: none in this tree.** `internal/httpapi` (the `/v0` surface) was deleted in be-xu2.3, so a role has no HTTP handler to wire today. A future front door needs its own spec, its own generated types and its own lint holes; this guide does not describe one.
 
 ## What the whole thing costs
 
@@ -599,14 +539,14 @@ function (`issueops.ReadEventsPageInTx`) that no front door can hold, so there
 is no constructor to deny.
 
 **Conditional requiredness is a RESOLVED BOOLEAN the caller hands in, never
-something the server works out.** `httpapi.Config.EventsJournal` is the one
+something the server works out.** The deleted HTTP API's `Config.EventsJournal` was the one
 role field required conditionally — on `Config.EventsJournalEnabled` — and the
 flag is separate from the role because it CANNOT BE INFERRED FROM THE DATA: a
 disabled journal presents as zero rows and a head of zero, byte-identical to an
 enabled journal nothing has written to yet, so a server without the flag would
 answer "you are caught up" to a consumer polling a workspace that will never
 emit a record. Activation lives in the target workspace's own config and
-environment, which `internal/httpapi` resolves none of. If your role is
+environment, which the deleted HTTP API resolved none of. If your role is
 optional, ask what tells the difference between "off" and "empty"; if the
 answer is nothing, the flag is a field and not an inference.
 
@@ -618,7 +558,7 @@ names and a constant moved from `internal/storage` into the leaf and the old
 spellings became aliases —
 `type EventsJournalCursor = journalops.Journal` and its three siblings — and
 the whole tree compiled with **no non-test change anywhere else**: not in
-`internal/httpapi`, not in `cmd/bd`, not in any of the four implementations,
+the deleted HTTP API, not in `cmd/bd`, not in any of the four implementations,
 not in the enterprise sync. `errors.As` against `*journalops.TruncatedError`
 matches an error every leg constructs as `*storage.EventsJournalTruncatedError`,
 because they are one type. The direction is what has to be right — the leaf
@@ -739,7 +679,7 @@ member a bare `json.RawMessage` — an `Unmarshaler` in its own right, so it
 receives the literal, while an omitted member still leaves it nil and
 `omitempty` still omits it on the way out. **The wire does not change in either
 direction**, which is why nothing else catches the regression: add a test that
-decodes a present null INTO the generated struct, or the next `make api-gen`
+decodes a present null INTO the generated struct, or the next regeneration of the types
 takes the fix away. Add `nullable: true` too — the document is OpenAPI 3.0.3 and
 a validating gateway is entitled to reject a legitimate null without it.
 

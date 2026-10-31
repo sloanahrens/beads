@@ -125,7 +125,7 @@ func BuildQueryPlan(in issueops.QueryRequest) (QueryPlan, error) {
 }
 
 // invalidQueryExpression is the one refusal shape a bad expression takes. The
-// prefix is load-bearing: internal/httpapi maps it back to the `q` parameter
+// prefix is load-bearing: an HTTP front door maps it back to the `q` parameter
 // so an unparseable expression is the documented 400 rather than a 500.
 func invalidQueryExpression(detail string) error {
 	return fmt.Errorf("invalid query expression: %s%.0w", detail, issueops.ErrValidation)
