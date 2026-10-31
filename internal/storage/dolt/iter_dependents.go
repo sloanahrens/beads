@@ -61,21 +61,12 @@ func (s *DoltStore) IterDependentsWithMetadata(ctx context.Context, issueID stri
 // with no duplicates. Each table's arms share one projection, and the compound
 // keeps the ORDER BY the two-arm form had, so callers scan the same shape and
 // the same order.
-//
-// THE ORDER BY CARRIES A TIEBREAKER (id ASC) because created_at ties are
-// ordinary — issues seeded in one second are, and the schema's precision makes
-// that the common case in a test fixture. Without it a tie is ordered by the
-// plan, and the batch detail read (issueops.GetIssueDetailsBatchInTx) sorts the
-// same rows for a whole id list in one statement; the two would then disagree
-// on the very ties `bd show --json` must render identically (be-2wkz). The
-// batch read orders by the same two keys, so the tie is broken the same way on
-// both sides.
 func dependentsIterSQL() string {
 	return fmt.Sprintf(`
 		%s
 		UNION ALL
 		%s
-		ORDER BY created_at ASC, id ASC
+		ORDER BY created_at ASC
 	`,
 		sqlbuild.DepTargetSelectSQL(
 			"issues i JOIN dependencies d ON d.issue_id = i.id "+sqlbuild.LeaseJoin("i"),

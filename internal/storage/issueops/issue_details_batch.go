@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/sqlbuild"
@@ -317,12 +318,15 @@ func addDependentCounts(ctx context.Context, tx DBTX, table string, ids []string
 // readBatchDependents fills out.Dependents with each id's INCOMING edges,
 // already reduced to the fields the detail view publishes for a dependent.
 //
-// The row set, the join target and the order mirror IterDependentsWithMetadata,
+// The row set, the join target and the ORDER BY mirror IterDependentsWithMetadata,
 // which is what the per-issue path streams: both dependency tables, joined to
-// their own source plane, ordered by the dependent's created_at with the id as
-// a tiebreaker so the two reads agree on equal timestamps. The lease overlay
-// the iterator selects is omitted rather than dropped: none of the five fields
-// this projection keeps comes from it.
+// their own source plane, ordered by the dependent's created_at. Equal
+// timestamps are not ordered by SQL on either side, so the row's created_at
+// rides along on the dependent and the shared assembly breaks the tie in Go
+// (workapi.orderDependents) — that is what makes the two reads agree, rather
+// than a tiebreaker this statement's sibling does not carry (be-2wkz). The
+// lease overlay the iterator selects is omitted rather than dropped: none of
+// the five fields this projection keeps comes from it.
 func readBatchDependents(ctx context.Context, tx DBTX, ids []string, out *storage.IssueDetailsBatch) error {
 	arms := []struct {
 		source string // the joined source, aliased i or w
@@ -351,7 +355,7 @@ func readBatchDependents(ctx context.Context, tx DBTX, ids []string, out *storag
 			}
 		}
 		//nolint:gosec // G201: table, alias and column fragments are hardcoded constants; placeholders are ? only.
-		querySQL := strings.Join(selects, " UNION ALL ") + " ORDER BY created_at ASC, id ASC"
+		querySQL := strings.Join(selects, " UNION ALL ") + " ORDER BY created_at ASC"
 		queryRows, err := tx.QueryContext(ctx, querySQL, branchArgs...)
 		if err != nil {
 			return fmt.Errorf("dependents: %w", err)
@@ -359,10 +363,17 @@ func readBatchDependents(ctx context.Context, tx DBTX, ids []string, out *storag
 		for queryRows.Next() {
 			var targetID, id, status, issueType, title, depType string
 			var priority int
-			var createdAt sql.NullString // ORDER BY only; the detail view publishes none of it
+			var createdAt sql.NullString
 			if scanErr := queryRows.Scan(&targetID, &id, &status, &issueType, &priority, &title, &depType, &createdAt); scanErr != nil {
 				_ = queryRows.Close()
 				return fmt.Errorf("dependents: scan: %w", scanErr)
+			}
+			// created_at is NOT in the published view; it is carried so the
+			// shared assembly can break created_at ties the same way on this
+			// path and the per-issue one.
+			var created time.Time
+			if createdAt.Valid {
+				created = ParseTimeString(createdAt.String)
 			}
 			out.Dependents[targetID] = append(out.Dependents[targetID], &types.IssueWithDependencyMetadata{
 				Issue: types.Issue{
@@ -371,6 +382,7 @@ func readBatchDependents(ctx context.Context, tx DBTX, ids []string, out *storag
 					IssueType: types.IssueType(issueType),
 					Priority:  priority,
 					Title:     title,
+					CreatedAt: created,
 				},
 				DependencyType: types.DependencyType(depType),
 			})

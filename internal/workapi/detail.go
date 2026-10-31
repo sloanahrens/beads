@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
+	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/domain"
@@ -230,16 +232,23 @@ func BuildIssueDetailsBatch(batch *storage.IssueDetailsBatch, ids []string, opts
 		}
 		var dependents []*types.IssueWithDependencyMetadata
 		if opts.IncludeDependents {
-			// The batch projection is already the shallow shape; shallowDep is
-			// applied anyway so this path keeps ONE definition of which fields
-			// a dependent publishes, and a wider projection added later cannot
-			// leak into the batch answer alone.
+			// shallowDep is applied here so this path keeps ONE definition of
+			// which fields a dependent publishes, and a wider projection added
+			// later cannot leak into the batch answer alone. The rows arrive in
+			// whatever order one UNION ALL statement over many ids produced,
+			// so orderDependents restores the per-id order.
+			rows := make([]dependentRow, 0, len(batch.Dependents[id]))
 			for _, dep := range batch.Dependents[id] {
 				if dep == nil {
 					continue
 				}
-				dependents = append(dependents, shallowDep(dep))
+				rows = append(rows, dependentRow{
+					createdAt: dep.Issue.CreatedAt,
+					id:        dep.Issue.ID,
+					dep:       shallowDep(dep),
+				})
 			}
+			dependents = orderDependents(rows)
 		}
 		details = append(details, assembleIssueDetails(issue, detailRows{
 			labels:          issue.Labels,
@@ -269,6 +278,39 @@ func shallowDep(item *types.IssueWithDependencyMetadata) *types.IssueWithDepende
 	}
 }
 
+// dependentRow is one dependent with the keys the detail view publishes it
+// ordered by. The keys are kept apart from the published view because the view
+// does not carry created_at (shallowDep does not copy it).
+type dependentRow struct {
+	createdAt time.Time
+	id        string
+	dep       *types.IssueWithDependencyMetadata
+}
+
+// orderDependents orders rows by the dependent's created_at with the id as the
+// tiebreaker, and returns the shallow views in that order.
+//
+// THE TIEBREAKER LIVES HERE, NOT IN THE SQL, on purpose. The per-issue read's
+// statement (dependentsIterSQL) keeps one ORDER BY created_at ASC, which SQL
+// leaves free to order equal timestamps however the plan likes; the batch read
+// is one UNION ALL over a whole id list, so its plan is a different one. The
+// rows carry their created_at to this function from both paths, and ordering
+// them here is what makes `bd show --json` render a batch id exactly as it
+// renders that id alone, ties included (be-2wkz).
+func orderDependents(rows []dependentRow) []*types.IssueWithDependencyMetadata {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if !rows[i].createdAt.Equal(rows[j].createdAt) {
+			return rows[i].createdAt.Before(rows[j].createdAt)
+		}
+		return rows[i].id < rows[j].id
+	})
+	out := make([]*types.IssueWithDependencyMetadata, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.dep)
+	}
+	return out
+}
+
 // collectDependents streams the dependents and keeps only the
 // identity-and-shape fields of each.
 //
@@ -284,18 +326,24 @@ func collectDependents(ctx context.Context, src DetailSource, id string, isWisp 
 	}
 	defer iter.Close() //nolint:errcheck // read-only iterator
 
-	var out []*types.IssueWithDependencyMetadata
+	var rows []dependentRow
 	for iter.Next(ctx) {
 		item := iter.Value()
 		if item == nil {
 			continue
 		}
-		out = append(out, shallowDep(item))
+		// The shallow copy is kept, not the iterator's row: the iterator may
+		// reuse it, and be-4d36f2 is about not holding full rows at all.
+		rows = append(rows, dependentRow{
+			createdAt: item.Issue.CreatedAt,
+			id:        item.Issue.ID,
+			dep:       shallowDep(item),
+		})
 	}
 	if err := iter.Err(); err != nil {
 		return nil, fmt.Errorf("iter dependents %s: %w", id, err)
 	}
-	return out, nil
+	return orderDependents(rows), nil
 }
 
 func collectComments(ctx context.Context, src DetailSource, id string, isWisp bool) ([]*types.Comment, error) {

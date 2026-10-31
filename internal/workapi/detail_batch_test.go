@@ -3,7 +3,9 @@ package workapi
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
@@ -52,7 +54,11 @@ func detailBatchFromFixture(fx *detailFixture, ids []string, opts DetailOptions)
 		batch.CommentCounts[id] = int64(len(fx.comments[id]))
 		if opts.IncludeDependents {
 			for _, dep := range fx.dependents[id] {
-				batch.Dependents[id] = append(batch.Dependents[id], shallowDep(dep))
+				// The store carries created_at on the row so the assembly can
+				// order it; the published shallow view drops it.
+				row := shallowDep(dep)
+				row.Issue.CreatedAt = dep.Issue.CreatedAt
+				batch.Dependents[id] = append(batch.Dependents[id], row)
 			}
 		}
 		if opts.IncludeComments {
@@ -187,4 +193,70 @@ func TestBuildIssueDetailsBatchIsSensitiveToADroppedField(t *testing.T) {
 			t.Errorf("dropping the comment rows did not change the view: %s", withRows)
 		}
 	})
+}
+
+// TestBuildIssueDetailsOrdersDependentsByCreatedAtThenID pins the order the
+// per-id path publishes dependents in. The store's statement orders by
+// created_at alone (dependentsIterSQL), which leaves equal timestamps to the
+// plan, and the batch read is a different statement over a whole id list. The
+// shared assembly breaks the tie by id, so neither path's output depends on a
+// plan.
+func TestBuildIssueDetailsOrdersDependentsByCreatedAtThenID(t *testing.T) {
+	fx := newDetailFixture()
+	early := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	late := early.Add(time.Second)
+	// Arrival order is the one that must NOT survive: id-descending within the
+	// tie, and the newest row first.
+	fx.dependents["bd-epic"] = []*types.IssueWithDependencyMetadata{
+		{Issue: types.Issue{ID: "bd-c", CreatedAt: late}, DependencyType: types.DepParentChild},
+		{Issue: types.Issue{ID: "bd-b", CreatedAt: early}, DependencyType: types.DepParentChild},
+		{Issue: types.Issue{ID: "bd-a", CreatedAt: early}, DependencyType: types.DepParentChild},
+	}
+	storeSrc, _ := fixtureSources(fx)
+
+	details, err := BuildIssueDetails(context.Background(), storeSrc, fx.issues["bd-epic"], false, DetailOptions{IncludeDependents: true})
+	if err != nil {
+		t.Fatalf("BuildIssueDetails(bd-epic): %v", err)
+	}
+	var got []string
+	for _, dep := range details.Dependents {
+		got = append(got, dep.ID)
+	}
+	want := []string{"bd-a", "bd-b", "bd-c"}
+	if !slices.Equal(got, want) {
+		t.Errorf("dependents = %v, want %v (created_at, then id)", got, want)
+	}
+}
+
+// TestBuildIssueDetailsBatchOrdersDependentsLikeThePerIDPath is the order half
+// of the equality case: the same dependent rows arriving in a different order,
+// as one UNION ALL over many ids would hand them back, must publish the per-id
+// path's order.
+func TestBuildIssueDetailsBatchOrdersDependentsLikeThePerIDPath(t *testing.T) {
+	fx := newDetailFixture()
+	early := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	late := early.Add(time.Second)
+	fx.dependents["bd-1"] = []*types.IssueWithDependencyMetadata{
+		{Issue: types.Issue{ID: "bd-y", Title: "Y", CreatedAt: early}, DependencyType: types.DepBlocks},
+		{Issue: types.Issue{ID: "bd-x", Title: "X", CreatedAt: early}, DependencyType: types.DepBlocks},
+		{Issue: types.Issue{ID: "bd-w", Title: "W", CreatedAt: late}, DependencyType: types.DepBlocks},
+	}
+	ids := []string{"bd-1"}
+	opts := DetailOptions{IncludeDependents: true}
+
+	storeSrc, _ := fixtureSources(fx)
+	perID, err := BuildIssueDetails(context.Background(), storeSrc, fx.issues["bd-1"], false, opts)
+	if err != nil {
+		t.Fatalf("BuildIssueDetails(bd-1): %v", err)
+	}
+
+	batch := detailBatchFromFixture(fx, ids, opts)
+	slices.Reverse(batch.Dependents["bd-1"]) // arrival order must not matter
+	got, notFound := BuildIssueDetailsBatch(batch, ids, opts)
+	if len(notFound) != 0 || len(got) != 1 {
+		t.Fatalf("batch answered %d views (notFound %v), want 1", len(got), notFound)
+	}
+	if want := detailJSON(t, "bd-1", perID); detailJSON(t, "bd-1", got[0]) != want {
+		t.Errorf("batch order differs from the per-id order:\n batch:  %s\n per-id: %s", detailJSON(t, "bd-1", got[0]), want)
+	}
 }
