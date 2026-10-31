@@ -180,20 +180,94 @@ func RecomputeIsBlockedForWispIDsInTx(ctx context.Context, tx DBTX, ids []string
 	return RecomputeIsBlockedInTx(ctx, tx, nil, ids)
 }
 
-//nolint:gosec // G201: SQL templates are constant; only IN-clause placeholders are formatted in.
 func recomputeIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues(), ids)
+	return runMarkUnmarkBatchedInTx(ctx, tx, issuesBlockedTarget,
+		markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues(), ids)
 }
 
 func markIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), ids)
+	return runMarkBatchedInTx(ctx, tx, issuesBlockedTarget, markBlockedTemplateForIssues(), ids)
+}
+
+// blockedStatementTarget names one of the two tables the fixpoint writes and
+// the alias its statements use, so the candidate prefilter is built from the
+// same names as the statement it narrows.
+type blockedStatementTarget struct {
+	table string
+	alias string
+}
+
+var (
+	issuesBlockedTarget = blockedStatementTarget{table: "issues", alias: "i"}
+	wispsBlockedTarget  = blockedStatementTarget{table: "wisps", alias: "w"}
+)
+
+// markCandidatesSQL selects the ids a mark statement can possibly change, from
+// the statement's own cheap predicates: not already blocked, not closed, not
+// pinned. Each is a comparison on a row found by the primary-key IN list, so a
+// batch of ids costs one index lookup per id and never touches the dependency
+// graph (be-gxe3).
+//
+// It exists because the mark statement's predicate order is the engine's to
+// choose: measured on a 500-id batch of closed wisps the five correlated EXISTS
+// subqueries ran for every id in the IN list before is_blocked/status excluded
+// the row, turning a no-op mark into an 11 s write that held the transaction
+// against the dispatcher. Selecting the candidates first and marking only those
+// keeps those subqueries to the rows that can actually change.
+//
+//nolint:gosec // G201: table and alias are package constants; only the IN placeholders are formatted in.
+func (t blockedStatementTarget) markCandidatesSQL() string {
+	return fmt.Sprintf(`
+		SELECT %[2]s.id FROM %[1]s %[2]s
+		WHERE %[2]s.id IN (%%s)
+		  AND %[2]s.is_blocked = 0
+		  AND %[2]s.status <> 'closed' AND %[2]s.status <> 'pinned'
+	`, t.table, t.alias)
+}
+
+// unmarkCandidatesSQL selects the ids an unmark statement can possibly change:
+// exactly the rows that are currently blocked. The unmark predicate's remaining
+// legs (closed/pinned, or no surviving blocker) decide which of them flip, but
+// a row that is not blocked cannot, so it need not reach the statement at all.
+//
+//nolint:gosec // G201: table and alias are package constants; only the IN placeholders are formatted in.
+func (t blockedStatementTarget) unmarkCandidatesSQL() string {
+	return fmt.Sprintf(`
+		SELECT %[2]s.id FROM %[1]s %[2]s
+		WHERE %[2]s.id IN (%%s)
+		  AND %[2]s.is_blocked = 1
+	`, t.table, t.alias)
+}
+
+// selectBlockedCandidatesInTx runs one candidate select for ids and returns the
+// ids it found. candidatesSQL is a constant template from blockedStatementTarget.
+func selectBlockedCandidatesInTx(ctx context.Context, tx DBTX, candidatesSQL string, ids []string) ([]string, error) {
+	placeholders, args := buildSQLInClause(ids)
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(candidatesSQL, placeholders), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var candidates []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return candidates, nil
 }
 
 // The mark/unmark templates explicitly assign updated_at to itself:
@@ -293,20 +367,20 @@ func unmarkBlockedTemplateForIssues() string {
 	`, waitsForGateBlockedSQL)
 }
 
-//nolint:gosec // G201: SQL templates are constant; only IN-clause placeholders are formatted in.
 func recomputeIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), unmarkBlockedTemplateForWisps(), ids)
+	return runMarkUnmarkBatchedInTx(ctx, tx, wispsBlockedTarget,
+		markBlockedTemplateForWisps(), unmarkBlockedTemplateForWisps(), ids)
 }
 
 func markIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), ids)
+	return runMarkBatchedInTx(ctx, tx, wispsBlockedTarget, markBlockedTemplateForWisps(), ids)
 }
 
 func markBlockedTemplateForWisps() string {
@@ -400,48 +474,77 @@ func unmarkBlockedTemplateForWisps() string {
 }
 
 //nolint:gosec // G201: callers pass constant templates; only IN-clause placeholders are formatted in.
-func runMarkUnmarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl, unmarkTmpl string, ids []string) (int64, error) {
+func runMarkUnmarkBatchedInTx(
+	ctx context.Context, tx DBTX,
+	target blockedStatementTarget, markTmpl, unmarkTmpl string, ids []string,
+) (int64, error) {
 	var changed int64
 	for start := 0; start < len(ids); start += queryBatchSize {
 		end := start + queryBatchSize
 		if end > len(ids) {
 			end = len(ids)
 		}
-		placeholders, args := buildSQLInClause(ids[start:end])
+		batch := ids[start:end]
 
-		res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, placeholders), args...)
+		// Narrow before the correlated subqueries run: see markCandidatesSQL.
+		markIDs, err := selectBlockedCandidatesInTx(ctx, tx, target.markCandidatesSQL(), batch)
 		if err != nil {
-			return changed, fmt.Errorf("recompute is_blocked (mark): %w", err)
+			return changed, fmt.Errorf("recompute is_blocked (mark candidates): %w", err)
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return changed, fmt.Errorf("recompute is_blocked (mark rows affected): %w", err)
+		if len(markIDs) > 0 {
+			placeholders, args := buildSQLInClause(markIDs)
+			res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, placeholders), args...)
+			if err != nil {
+				return changed, fmt.Errorf("recompute is_blocked (mark): %w", err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return changed, fmt.Errorf("recompute is_blocked (mark rows affected): %w", err)
+			}
+			changed += n
 		}
-		changed += n
 
-		res, err = tx.ExecContext(ctx, fmt.Sprintf(unmarkTmpl, placeholders), args...)
+		unmarkIDs, err := selectBlockedCandidatesInTx(ctx, tx, target.unmarkCandidatesSQL(), batch)
 		if err != nil {
-			return changed, fmt.Errorf("recompute is_blocked (unmark): %w", err)
+			return changed, fmt.Errorf("recompute is_blocked (unmark candidates): %w", err)
 		}
-		n, err = res.RowsAffected()
-		if err != nil {
-			return changed, fmt.Errorf("recompute is_blocked (unmark rows affected): %w", err)
+		if len(unmarkIDs) > 0 {
+			placeholders, args := buildSQLInClause(unmarkIDs)
+			res, err := tx.ExecContext(ctx, fmt.Sprintf(unmarkTmpl, placeholders), args...)
+			if err != nil {
+				return changed, fmt.Errorf("recompute is_blocked (unmark): %w", err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return changed, fmt.Errorf("recompute is_blocked (unmark rows affected): %w", err)
+			}
+			changed += n
 		}
-		changed += n
 	}
 	return changed, nil
 }
 
 //nolint:gosec // G201: callers pass constant templates; only IN-clause placeholders are formatted in.
-func runMarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl string, ids []string) (int64, error) {
+func runMarkBatchedInTx(
+	ctx context.Context, tx DBTX,
+	target blockedStatementTarget, markTmpl string, ids []string,
+) (int64, error) {
 	var changed int64
 	for start := 0; start < len(ids); start += queryBatchSize {
 		end := start + queryBatchSize
 		if end > len(ids) {
 			end = len(ids)
 		}
-		placeholders, args := buildSQLInClause(ids[start:end])
 
+		markIDs, err := selectBlockedCandidatesInTx(ctx, tx, target.markCandidatesSQL(), ids[start:end])
+		if err != nil {
+			return changed, fmt.Errorf("mark is_blocked (candidates): %w", err)
+		}
+		if len(markIDs) == 0 {
+			continue
+		}
+
+		placeholders, args := buildSQLInClause(markIDs)
 		res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, placeholders), args...)
 		if err != nil {
 			return changed, fmt.Errorf("mark is_blocked: %w", err)
