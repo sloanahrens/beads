@@ -1535,7 +1535,7 @@ func runBDExec(t *testing.T, dir string, args ...string) string {
 func runBDExecAllowErrorWithEnv(t *testing.T, dir string, env []string, args ...string) (string, error) {
 	t.Helper()
 
-	cmd := exec.Command(testBD, args...)
+	cmd := exec.Command(testBD, withUniqueInitDatabase(t, args)...)
 	cmd.Dir = dir
 	cmd.Env = env
 
