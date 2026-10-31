@@ -25,6 +25,9 @@ func TestIsRecognizedConfigKey(t *testing.T) {
 		// are no longer recognized.
 		"jira.url", "ado.org", "github.token", "linear.api-key",
 		"gitlab.url", "notion.token",
+		// The usage-metrics feature is gone (be-xu2.21), so its namespace is
+		// no longer recognized.
+		"metrics.disabled", "metrics.endpoint",
 	}
 	for _, key := range unrecognized {
 		if isRecognizedConfigKey(key) {
