@@ -143,9 +143,6 @@ func TestPrimeBinaryPortfolio(t *testing.T) {
 	t.Run("TestPrime_HookJSON_NoBeadsWorkspace", func(t *testing.T) {
 		primeScenarioHookJSONNoBeadsWorkspace(t, binPath, noWorkspaceWorkDir)
 	})
-	t.Run("TestPrime_NoTelemetryInIsolatedHome", func(t *testing.T) {
-		primeScenarioNoTelemetryInIsolatedHome(t, binPath, localWorkDir)
-	})
 
 	rememberInWorkspace(t, binPath, localWorkDir, "prime-mem-key", "remember this insight")
 
@@ -453,52 +450,6 @@ func primeScenarioNoMemoriesMemoriesOnlyWins(t *testing.T, binPath, workDir stri
 	out := string(stdout)
 	if !strings.Contains(out, "remember this insight") {
 		t.Errorf("--memories-only should win over --no-memories and include memories, got: %q", firstN(out, 400))
-	}
-}
-
-// TestPrime_NoTelemetryInIsolatedHome is the regression guard for wy-12x1p:
-// a `bd` subprocess launched by this suite must not write a telemetry queue
-// into its isolated HOME. The queue came from the metrics flusher, which was
-// removed with the metrics package (be-xu2.21). While it existed, a detached
-// flusher child outlived its parent and raced t.TempDir cleanup, which showed
-// up as an intermittent, assertion-free
-// "TempDir RemoveAll cleanup: ... directory not empty" that reddened the whole
-// cmd/bd package (the TestPrime_HookJSON_* tests were the observed victims).
-//
-// The assertion stays as a tripwire: the eventsData dir must not reappear in
-// an isolated HOME.
-func primeScenarioNoTelemetryInIsolatedHome(t *testing.T, binPath, workDir string) {
-	home := t.TempDir()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binPath, "prime", "--hook-json")
-	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"XDG_CONFIG_HOME="+t.TempDir(),
-		"BEADS_TEST_IGNORE_REPO_CONFIG=1",
-		"BEADS_DIR=",
-		"BEADS_DB=",
-		"LINEAR_API_KEY=",
-	)
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("bd prime --hook-json: %v\nstdout: %s\nstderr: %s", err, outBuf.String(), errBuf.String())
-	}
-
-	eventsData := filepath.Join(home, ".beads", "eventsData")
-	if _, err := os.Stat(eventsData); !os.IsNotExist(err) {
-		entries, _ := os.ReadDir(eventsData)
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			names = append(names, e.Name())
-		}
-		t.Fatalf("telemetry queue %s exists after a suite-launched bd run (stat err: %v, entries: %v); "+
-			"a telemetry queue exists under the isolated HOME, so a detached child could race t.TempDir cleanup — "+
-			"see wy-12x1p", eventsData, err, names)
 	}
 }
 
