@@ -2015,6 +2015,26 @@ func KillStaleServers(beadsDir string) ([]int, error) {
 	)
 }
 
+const (
+	// readyPollInterval is how long waitForReady waits between readiness probes.
+	readyPollInterval = 500 * time.Millisecond
+	// readyProbeTimeout bounds the dial of a single readiness probe.
+	readyProbeTimeout = 500 * time.Millisecond
+)
+
+// readyDeps is waitForReady's time source. The production value is the real
+// clock and real sleeps; tests substitute a fake clock so the poll loop can be
+// driven deterministically instead of racing a wall-clock window.
+type readyDeps struct {
+	now   func() time.Time
+	sleep func(time.Duration)
+}
+
+// realReadyDeps returns the production time source.
+func realReadyDeps() readyDeps {
+	return readyDeps{now: time.Now, sleep: time.Sleep}
+}
+
 // waitForReady polls until the server accepts TCP connections AND greets
 // with a MySQL handshake. Draining the handshake before closing the probe
 // connection makes Close() send TCP FIN instead of RST, which prevents the
@@ -2025,15 +2045,20 @@ func KillStaleServers(beadsDir string) ([]int, error) {
 // engine not yet writing) is not treated as ready: this function keeps
 // polling until either a greeting arrives or the deadline is reached.
 func waitForReady(host string, port int, timeout time.Duration) error {
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	deadline := time.Now().Add(timeout)
+	return waitForReadyWith(realReadyDeps(), host, port, timeout)
+}
 
-	for time.Now().Before(deadline) {
-		greeted, err := ProbeSQLServer("tcp", addr, 500*time.Millisecond) //nolint:gosec // G704: addr is built from internal host+port, not user input
+// waitForReadyWith is waitForReady with its clock injected.
+func waitForReadyWith(deps readyDeps, host string, port int, timeout time.Duration) error {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	deadline := deps.now().Add(timeout)
+
+	for deps.now().Before(deadline) {
+		greeted, err := ProbeSQLServer("tcp", addr, readyProbeTimeout) //nolint:gosec // G704: addr is built from internal host+port, not user input
 		if err == nil && greeted {
 			return nil
 		}
-		time.Sleep(500 * time.Millisecond)
+		deps.sleep(readyPollInterval)
 	}
 
 	return fmt.Errorf("timeout after %s waiting for server at %s", timeout, addr)

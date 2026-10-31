@@ -3,6 +3,7 @@ package doltserver
 import (
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,13 +76,81 @@ func TestWaitForReadyEmitsRST(t *testing.T) {
 	t.Logf("waitForReady made %d TCP connections (drained, no RST)", got)
 }
 
+// fakeReadyClock is a manual clock for driving waitForReady's poll loop.
+// Sleep advances the clock instead of blocking, so a test observes exactly how
+// many polls the loop makes without depending on a real-time window.
+type fakeReadyClock struct {
+	now    time.Time
+	sleeps []time.Duration
+}
+
+func newFakeReadyClock() *fakeReadyClock {
+	return &fakeReadyClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeReadyClock) Now() time.Time { return c.now }
+
+func (c *fakeReadyClock) Sleep(d time.Duration) {
+	c.now = c.now.Add(d)
+	c.sleeps = append(c.sleeps, d)
+}
+
+func (c *fakeReadyClock) deps() readyDeps {
+	return readyDeps{now: c.Now, sleep: c.Sleep}
+}
+
 // TestWaitForReadyRepollsUntilGreeted is the F7 regression test: a listener
 // that accepts TCP connections but never writes anything is a "TCP-accepting
 // but mute" server — not ready. waitForReady must not treat dial success
 // alone as readiness; it must keep polling until a greeting arrives or the
 // deadline passes.
+//
+// The poll loop runs on a fake clock, so the poll count is exact and no real
+// time window bounds it.
 func TestWaitForReadyRepollsUntilGreeted(t *testing.T) {
-	t.Run("mute listener: keeps polling, returns timeout error", func(t *testing.T) {
+	t.Run("mute listener: polled until the timeout, returns timeout error", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		port := ln.Addr().(*net.TCPAddr).Port
+
+		go func() {
+			for {
+				conn, acceptErr := ln.Accept()
+				if acceptErr != nil {
+					return
+				}
+				// Accept but never write and never close promptly — mute peer.
+				go holdUntilPeerCloses(conn)
+			}
+		}()
+
+		clock := newFakeReadyClock()
+		timeout := 3 * readyPollInterval
+		err = waitForReadyWith(clock.deps(), "127.0.0.1", port, timeout)
+		if err == nil {
+			t.Fatalf("waitForReady returned nil for a mute (accepting, never-greeting) server; want a timeout error")
+		}
+		if !strings.Contains(err.Error(), "timeout") {
+			t.Errorf("waitForReady returned %v; want a timeout error", err)
+		}
+
+		// A mute peer is never ready, so the loop must poll through the whole
+		// timeout: one probe per interval until the deadline passes.
+		wantPolls := int(timeout / readyPollInterval)
+		if got := len(clock.sleeps); got != wantPolls {
+			t.Errorf("waitForReady polled %d time(s) before giving up; want %d (dial-success-without-greeting must not be treated as ready)", got, wantPolls)
+		}
+		for i, d := range clock.sleeps {
+			if d != readyPollInterval {
+				t.Errorf("poll %d slept %v between probes; want the production poll interval %v", i, d, readyPollInterval)
+			}
+		}
+	})
+
+	t.Run("delayed greeting: succeeds once the greeting arrives", func(t *testing.T) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("listen: %v", err)
@@ -96,37 +165,7 @@ func TestWaitForReadyRepollsUntilGreeted(t *testing.T) {
 				if acceptErr != nil {
 					return
 				}
-				accepts.Add(1)
-				// Accept but never write and never close promptly — mute peer.
-				go holdUntilPeerCloses(conn)
-			}
-		}()
-
-		err = waitForReady("127.0.0.1", port, 700*time.Millisecond)
-		if err == nil {
-			t.Fatalf("waitForReady returned nil for a mute (accepting, never-greeting) server; want a timeout error")
-		}
-		if got := accepts.Load(); got < 2 {
-			t.Errorf("waitForReady accepted only %d connection(s) before giving up; want re-polling (>=2) since dial-success-without-greeting must not be treated as ready", got)
-		}
-	})
-
-	t.Run("delayed greeting: succeeds once the greeting arrives", func(t *testing.T) {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("listen: %v", err)
-		}
-		t.Cleanup(func() { _ = ln.Close() })
-		port := ln.Addr().(*net.TCPAddr).Port
-
-		var callCount atomic.Int32
-		go func() {
-			for {
-				conn, acceptErr := ln.Accept()
-				if acceptErr != nil {
-					return
-				}
-				n := callCount.Add(1)
+				n := accepts.Add(1)
 				go func(c net.Conn, attempt int32) {
 					if attempt >= 2 {
 						_, _ = c.Write(fakeMySQLGreeting)
@@ -138,11 +177,9 @@ func TestWaitForReadyRepollsUntilGreeted(t *testing.T) {
 			}
 		}()
 
-		if err := waitForReady("127.0.0.1", port, 5*time.Second); err != nil {
+		clock := newFakeReadyClock()
+		if err := waitForReadyWith(clock.deps(), "127.0.0.1", port, 5*time.Second); err != nil {
 			t.Fatalf("waitForReady: %v", err)
-		}
-		if got := callCount.Load(); got < 2 {
-			t.Errorf("expected waitForReady to re-poll past the mute accept, got only %d accept(s)", got)
 		}
 	})
 }
