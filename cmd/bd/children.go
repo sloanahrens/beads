@@ -36,8 +36,8 @@ Examples:
 			defer func() { _ = listCmd.Flags().Set("pretty", "false") }()
 		}
 
-		// Reuse the shared, non-emitting list core so a single `bd children`
-		// records exactly one cli_command event ("children"), not also "list".
+		// Reuse the shared list core: children sets listCmd's flags and calls
+		// it directly rather than re-entering the list command.
 		return runListCore(listCmd, []string{})
 	},
 }
