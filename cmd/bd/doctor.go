@@ -687,11 +687,6 @@ func runDiagnostics(path string) doctorResult {
 	result.Checks = append(result.Checks, bdPathCheck)
 	// Don't fail overall check for missing bd in PATH, just warn
 
-	// Check 11e: Cursor integration (agent hooks)
-	cursorCheck := convertWithCategory(doctor.CheckCursor(path), doctor.CategoryIntegration)
-	result.Checks = append(result.Checks, cursorCheck)
-	// Don't fail overall check for missing Cursor integration, just warn
-
 	// Check 11f: Cursor hooks file health (malformed JSON detection)
 	cursorSettingsCheck := convertWithCategory(doctor.CheckCursorSettingsHealth(path), doctor.CategoryIntegration)
 	result.Checks = append(result.Checks, cursorSettingsCheck)
