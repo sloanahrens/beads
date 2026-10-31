@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/steveyegge/beads/internal/metrics"
 )
 
 var molSeedCmd = &cobra.Command{
@@ -34,13 +32,6 @@ Examples:
 }
 
 func runMolSeed(cmd *cobra.Command, args []string) error {
-	evt := metrics.NewCommandEvent("mol-seed")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
-
 	varFlags, _ := cmd.Flags().GetStringArray("var")
 
 	vars := make(map[string]string)

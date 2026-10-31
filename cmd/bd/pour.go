@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
@@ -85,13 +84,6 @@ func parseVarFlags(varFlags []string) (map[string]string, error) {
 
 func runPour(cmd *cobra.Command, args []string) error {
 	CheckReadonly("pour")
-
-	evt := metrics.NewCommandEvent("pour")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
 
 	in := gatherPourInput(cmd, args)
 

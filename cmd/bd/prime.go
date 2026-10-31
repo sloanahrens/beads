@@ -17,7 +17,6 @@ import (
 	"github.com/steveyegge/beads"
 	internalbeads "github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/memoryops"
 )
 
@@ -125,13 +124,6 @@ Memory injection caps:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("prime")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		primeMaxMemoriesSet = cmd.Flags().Changed("max-memories")
 		primeMaxMemoryCharsSet = cmd.Flags().Changed("max-memory-chars")
 
