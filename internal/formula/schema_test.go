@@ -3,16 +3,14 @@ package formula
 import "testing"
 
 func TestPrimitiveByName_ExactBeatsSuffixStrip(t *testing.T) {
-	// "gate" must resolve to Gate (the field-bearing struct), not GateRule.
-	// Same logic for any other Foo / FooRule / FooSpec collision.
+	// "gate" must resolve to Gate (the field-bearing struct) by exact match,
+	// not by stripping a suffix off a longer name.
 	cases := []struct {
 		input string
 		want  string
 	}{
 		{"Gate", "Gate"},
 		{"gate", "Gate"},
-		{"gaterule", "GateRule"},
-		{"gate_rule", "GateRule"},
 	}
 	for _, c := range cases {
 		got := PrimitiveByName(c.input)
@@ -31,14 +29,10 @@ func TestPrimitiveByName_SuffixStripFallback(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"on_complete", "OnCompleteSpec"},
-		{"OnComplete", "OnCompleteSpec"},
-		{"branch", "BranchRule"},
 		{"compose", "ComposeRules"},
 		{"map", "MapRule"},
 		{"expand", "ExpandRule"},
 		{"advice", "AdviceRule"},
-		{"waits_for", "WaitsForSpec"},
 	}
 	for _, c := range cases {
 		got := PrimitiveByName(c.input)
@@ -65,7 +59,7 @@ func TestPrimitivesIndex_NonEmpty(t *testing.T) {
 		t.Fatal("Primitives is empty; did go generate run?")
 	}
 	// Spot-check a few that should always be present.
-	for _, name := range []string{"Formula", "Step", "Gate", "OnCompleteSpec"} {
+	for _, name := range []string{"Formula", "Step", "Gate", "ComposeRules"} {
 		if PrimitiveByName(name) == nil {
 			t.Errorf("expected %s in Primitives index", name)
 		}

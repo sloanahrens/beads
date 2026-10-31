@@ -231,11 +231,6 @@ type Step struct {
 	// Either Needs or DependsOn can be used; they are merged during cooking.
 	Needs []string `json:"needs,omitempty" toml:"needs,omitempty"`
 
-	// WaitsFor specifies a fanout gate type for this step.
-	// Values: "all-children" (wait for all dynamic children) or "any-children" (wait for first).
-	// When set, the cooked issue gets a "gate:<value>" label.
-	WaitsFor string `json:"waits_for,omitempty" toml:"waits_for,omitempty"`
-
 	// Assignee is the default assignee (supports substitution).
 	Assignee string `json:"assignee,omitempty"`
 
@@ -260,10 +255,6 @@ type Step struct {
 	// When set, bd cook creates a gate issue that blocks this step.
 	// Close the gate issue (bd close bd-xxx.gate-stepid) to unblock.
 	Gate *Gate `json:"gate,omitempty"`
-
-	// OnComplete defines actions triggered when this step completes.
-	// Used for runtime expansion over step output (the for-each construct).
-	OnComplete *OnCompleteSpec `json:"on_complete,omitempty" toml:"on_complete,omitempty"`
 
 	// Source tracing fields: track where this step came from.
 	// These are set during parsing/transformation and copied to Issues during cooking.
@@ -302,74 +293,6 @@ type Gate struct {
 	Repo string `json:"repo,omitempty" toml:"repo,omitempty"`
 }
 
-// OnCompleteSpec defines actions triggered when a step completes.
-// Used for runtime expansion over step output (the for-each construct).
-//
-// Example YAML:
-//
-//	step: survey-workers
-//	on_complete:
-//	  for_each: output.workers
-//	  bond: mol-worker-arm
-//	  vars:
-//	    worker_name: "{item.name}"
-//	    rig: "{item.rig}"
-//	  parallel: true
-type OnCompleteSpec struct {
-	// ForEach is the path to the iterable collection in step output.
-	// Format: "output.<field>" or "output.<field>.<nested>"
-	// The collection must be an array at runtime.
-	ForEach string `json:"for_each,omitempty" toml:"for_each,omitempty"`
-
-	// Bond is the formula to instantiate for each item.
-	// A new molecule is created for each element in the ForEach collection.
-	Bond string `json:"bond,omitempty"`
-
-	// Vars are variable bindings for each iteration.
-	// Supports placeholders:
-	//   - {item} - the current item value (for primitives)
-	//   - {item.field} - a field from the current item (for objects)
-	//   - {index} - the zero-based iteration index
-	Vars map[string]string `json:"vars,omitempty"`
-
-	// Parallel runs all bonded molecules concurrently (default behavior).
-	// Set to true to make this explicit.
-	Parallel bool `json:"parallel,omitempty"`
-
-	// Sequential runs bonded molecules one at a time.
-	// Each molecule starts only after the previous one completes.
-	// Mutually exclusive with Parallel.
-	Sequential bool `json:"sequential,omitempty"`
-}
-
-// BranchRule defines parallel execution paths that rejoin.
-// Creates a fork-join pattern: from -> [parallel steps] -> join.
-type BranchRule struct {
-	// From is the step ID that precedes the parallel paths.
-	// All branch steps will depend on this step.
-	From string `json:"from"`
-
-	// Steps are the step IDs that run in parallel.
-	// These steps will all depend on From.
-	Steps []string `json:"steps"`
-
-	// Join is the step ID that follows all parallel paths.
-	// This step will depend on all Steps completing.
-	Join string `json:"join"`
-}
-
-// GateRule defines a condition that must be satisfied before a step proceeds.
-// Gates are evaluated at runtime by the patrol executor.
-type GateRule struct {
-	// Before is the step ID that the gate applies to.
-	// The condition must be satisfied before this step can start.
-	Before string `json:"before"`
-
-	// Condition is the expression to evaluate.
-	// Format matches condition evaluator syntax (e.g., "tests.status == 'complete'").
-	Condition string `json:"condition"`
-}
-
 // ComposeRules define how formulas can be bonded together.
 type ComposeRules struct {
 	// BondPoints are named locations where other formulas can attach.
@@ -385,14 +308,6 @@ type ComposeRules struct {
 	// Map applies an expansion template to all steps matching a pattern.
 	// Each matching step is replaced by the expanded template steps.
 	Map []*MapRule `json:"map,omitempty"`
-
-	// Branch defines fork-join parallel execution patterns.
-	// Each rule creates dependencies for parallel paths that rejoin.
-	Branch []*BranchRule `json:"branch,omitempty"`
-
-	// Gate defines conditional waits before steps.
-	// Each rule adds a condition that must be satisfied at runtime.
-	Gate []*GateRule `json:"gate,omitempty"`
 
 	// Aspects lists aspect formula names to apply to this formula.
 	// Aspects are applied after expansions, adding before/after/around
@@ -599,17 +514,6 @@ func (f *Formula) validationProblems() []string {
 				errs = append(errs, fmt.Sprintf("steps[%d] (%s): needs references unknown step %q", i, step.ID, need))
 			}
 		}
-		// Validate waits_for field
-		// Valid formats: "all-children", "any-children", "children-of(step-id)"
-		if step.WaitsFor != "" {
-			if err := validateWaitsFor(step.WaitsFor, stepIDLocations); err != nil {
-				errs = append(errs, fmt.Sprintf("steps[%d] (%s): %s", i, step.ID, err.Error()))
-			}
-		}
-		// Validate on_complete field - runtime expansion
-		if step.OnComplete != nil {
-			validateOnComplete(step.OnComplete, &errs, fmt.Sprintf("steps[%d] (%s)", i, step.ID))
-		}
 		// Validate children's depends_on and needs recursively
 		validateChildDependsOn(step.Children, stepIDLocations, &errs, fmt.Sprintf("steps[%d]", i))
 	}
@@ -676,66 +580,6 @@ func collectChildIDs(children []*Step, idLocations map[string]string, errs *[]st
 	}
 }
 
-// WaitsForSpec holds the parsed waits_for field.
-type WaitsForSpec struct {
-	// Gate is the gate type: "all-children" or "any-children"
-	Gate string
-	// SpawnerID is the step ID whose children to wait for.
-	// Empty means infer from context (typically first step in needs).
-	SpawnerID string
-}
-
-// ParseWaitsFor parses a waits_for value into its components.
-// Returns nil if the value is empty.
-func ParseWaitsFor(value string) *WaitsForSpec {
-	if value == "" {
-		return nil
-	}
-
-	// Simple gate types - spawner inferred from needs
-	if value == "all-children" || value == "any-children" {
-		return &WaitsForSpec{Gate: value}
-	}
-
-	// children-of(step-id) syntax
-	if strings.HasPrefix(value, "children-of(") && strings.HasSuffix(value, ")") {
-		stepID := value[len("children-of(") : len(value)-1]
-		return &WaitsForSpec{
-			Gate:      "all-children", // Default gate type
-			SpawnerID: stepID,
-		}
-	}
-
-	// Invalid - return nil (validation should have caught this)
-	return nil
-}
-
-// validateWaitsFor validates the waits_for field value.
-// Valid formats:
-//   - "all-children": wait for all dynamically-bonded children
-//   - "any-children": wait for first child to complete
-//   - "children-of(step-id)": wait for children of a specific step
-func validateWaitsFor(value string, stepIDLocations map[string]string) error {
-	// Simple gate types
-	if value == "all-children" || value == "any-children" {
-		return nil
-	}
-
-	// children-of(step-id) syntax
-	if strings.HasPrefix(value, "children-of(") && strings.HasSuffix(value, ")") {
-		stepID := value[len("children-of(") : len(value)-1]
-		if stepID == "" {
-			return fmt.Errorf("waits_for children-of() requires a step ID")
-		}
-		if _, exists := stepIDLocations[stepID]; !exists {
-			return fmt.Errorf("waits_for references unknown step %q in children-of()", stepID)
-		}
-		return nil
-	}
-
-	return fmt.Errorf("waits_for has invalid value %q (must be all-children, any-children, or children-of(step-id))", value)
-}
-
 // validateChildDependsOn recursively validates depends_on and needs references for children.
 func validateChildDependsOn(children []*Step, idLocations map[string]string, errs *[]string, prefix string) {
 	for i, child := range children {
@@ -751,40 +595,7 @@ func validateChildDependsOn(children []*Step, idLocations map[string]string, err
 				*errs = append(*errs, fmt.Sprintf("%s (%s): needs references unknown step %q", childPrefix, child.ID, need))
 			}
 		}
-		// Validate waits_for field
-		if child.WaitsFor != "" {
-			if err := validateWaitsFor(child.WaitsFor, idLocations); err != nil {
-				*errs = append(*errs, fmt.Sprintf("%s (%s): %s", childPrefix, child.ID, err.Error()))
-			}
-		}
-		// Validate on_complete field
-		if child.OnComplete != nil {
-			validateOnComplete(child.OnComplete, errs, fmt.Sprintf("%s (%s)", childPrefix, child.ID))
-		}
 		validateChildDependsOn(child.Children, idLocations, errs, childPrefix)
-	}
-}
-
-// validateOnComplete validates an OnCompleteSpec.
-func validateOnComplete(oc *OnCompleteSpec, errs *[]string, prefix string) {
-	// Check that for_each and bond are both present or both absent
-	if oc.ForEach != "" && oc.Bond == "" {
-		*errs = append(*errs, fmt.Sprintf("%s.on_complete: bond is required when for_each is set", prefix))
-	}
-	if oc.ForEach == "" && oc.Bond != "" {
-		*errs = append(*errs, fmt.Sprintf("%s.on_complete: for_each is required when bond is set", prefix))
-	}
-
-	// Validate for_each path format
-	if oc.ForEach != "" {
-		if !strings.HasPrefix(oc.ForEach, "output.") {
-			*errs = append(*errs, fmt.Sprintf("%s.on_complete: for_each must start with 'output.' (got %q)", prefix, oc.ForEach))
-		}
-	}
-
-	// Check parallel and sequential are mutually exclusive
-	if oc.Parallel && oc.Sequential {
-		*errs = append(*errs, fmt.Sprintf("%s.on_complete: cannot set both parallel and sequential", prefix))
 	}
 }
 

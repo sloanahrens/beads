@@ -44,16 +44,6 @@ func TestFormulaPrimitiveExamples(t *testing.T) {
 			},
 		},
 		{
-			name: "branch-fanin",
-			assert: func(t *testing.T, sg *TemplateSubgraph) {
-				for _, src := range []string{"test", "lint", "build"} {
-					if !hasBlockingDep(sg, "branch-fanin.deploy", "branch-fanin."+src) {
-						t.Errorf("deploy must block on %s; deps: %v", src, allDeps(sg))
-					}
-				}
-			},
-		},
-		{
 			name: "condition",
 			vars: map[string]string{}, // trigger filtering with formula's deploy=false default
 			assert: func(t *testing.T, sg *TemplateSubgraph) {

@@ -9,7 +9,6 @@ and exercises exactly one primitive.
 | Fixture                       | Primitive          | One-line behavior |
 |-------------------------------|--------------------|-------------------|
 | `children-epic.formula.toml`  | `Step.children`    | Nested steps form an epic with sibling `needs` honored. |
-| `branch-fanin.formula.toml`   | `ComposeRules.branch` | Fork-join: parallel steps fan in to a single join step. |
 | `condition.formula.toml`      | `Step.condition`   | Variable-driven step inclusion at cook time. |
 | `gate-timer.formula.toml`     | `Step.gate`        | Sibling `gate`-typed issue with `await_type` blocks the target step. |
 

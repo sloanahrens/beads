@@ -70,15 +70,15 @@ func TestFormulaSchemaShow_AliasResolution(t *testing.T) {
 	jsonOutput = false
 	defer func() { jsonOutput = prevJSON }()
 
-	for _, input := range []string{"on_complete", "OnComplete", "OnCompleteSpec"} {
+	for _, input := range []string{"expand", "ExpandRule", "expand_rule"} {
 		out := captureStdout(t, func() error {
 			return runFormulaSchemaShow(input)
 		})
-		if !strings.Contains(out, "OnCompleteSpec") {
-			t.Errorf("%q did not resolve to OnCompleteSpec; output:\n%s", input, out)
+		if !strings.Contains(out, "ExpandRule") {
+			t.Errorf("%q did not resolve to ExpandRule; output:\n%s", input, out)
 		}
-		if !strings.Contains(out, "for_each") {
-			t.Errorf("%q output missing for_each field", input)
+		if !strings.Contains(out, "target") {
+			t.Errorf("%q output missing target field", input)
 		}
 	}
 }
