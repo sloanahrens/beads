@@ -34,10 +34,9 @@ func commandSpanAttrs(cmdName, version string, args []string, secretFlags map[st
 // "telemetry is opt-in, never blocks the user" stance.
 //
 // Extracted so the call from main.go's PreRunE is a single testable line.
-// Must run before any DB access so SQL spans nest under the command span;
-// in main.go it runs ahead of the usage-metrics bootstrap block (a separate
-// subsystem, unrelated to OTel), so it is kept independent of
-// startCommandSpan rather than folded into a single combined call.
+// Must run before any DB access so SQL spans nest under the command span. It
+// is kept independent of startCommandSpan rather than folded into a single
+// combined call, so callers can run other setup between the two steps.
 func initTelemetry(ctx context.Context, version string) {
 	if err := telemetry.Init(ctx, "bd", version); err != nil {
 		debug.Logf("warning: telemetry init failed: %v", err)
@@ -48,9 +47,8 @@ func initTelemetry(ctx context.Context, version string) {
 // context (carrying the span) and the span itself for End().
 //
 // Assumes initTelemetry has already run for this invocation; does not call
-// telemetry.Init itself so callers can gate the usage-metrics bootstrap
-// block (e.g. skipping span creation for an internal
-// subcommand) between the two.
+// telemetry.Init itself so callers can run other setup (e.g. skipping span
+// creation for an internal subcommand) between the two.
 func startCommandSpan(ctx context.Context, cmdName, version string, args []string, secretFlags map[string]bool) (context.Context, oteltrace.Span) {
 	return telemetry.Tracer("bd").Start(ctx, "bd.command."+cmdName,
 		oteltrace.WithAttributes(commandSpanAttrs(cmdName, version, args, secretFlags)...),

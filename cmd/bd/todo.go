@@ -29,8 +29,8 @@ TODOs can be promoted to full issues by changing type or priority:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Delegate to the shared, non-emitting list core so a single `bd todo`
-		// records exactly one cli_command event ("todo"), not also "todo-list".
+		// Delegate to the shared list core so `bd todo` runs the same code path
+		// as `bd todo list`.
 		return runTodoListCore(cmd, args)
 	},
 }
@@ -92,9 +92,8 @@ var listTodosCmd = &cobra.Command{
 	},
 }
 
-// runTodoListCore lists TODO (task) issues. It deliberately emits no metrics
-// event so callers own event emission: `bd todo list` emits "todo-list" and the
-// bare `bd todo` alias emits "todo", each exactly once.
+// runTodoListCore lists TODO (task) issues. Both `bd todo list` and the bare
+// `bd todo` alias call it, so each runs the same code path.
 func runTodoListCore(cmd *cobra.Command, _ []string) error {
 	showAll, _ := cmd.Flags().GetBool("all")
 

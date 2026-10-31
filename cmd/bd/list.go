@@ -171,11 +171,9 @@ var listCmd = &cobra.Command{
 	},
 }
 
-// runListCore runs the list query and rendering without emitting a metrics
-// event, so the caller owns emission: `bd list` emits "list" exactly once, and
-// the `bd children` alias emits "children" exactly once. children sets listCmd's
-// flags and calls this core directly rather than listCmd.RunE, which would emit
-// a second "list" event for a single user command.
+// runListCore runs the list query and rendering. `bd children` sets listCmd's
+// flags and calls this core directly rather than listCmd.RunE, which only
+// wraps it.
 func runListCore(cmd *cobra.Command, _ []string) error {
 	in, err := gatherListInput(cmd)
 	if err != nil {

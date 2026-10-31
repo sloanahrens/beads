@@ -99,8 +99,8 @@ func runWisp(cmd *cobra.Command, args []string) error {
 		_ = cmd.Help()
 		return nil
 	}
-	// Delegate to the non-emitting core so `bd wisp <name>` records exactly one
-	// cli_command event ("wisp"), not also "wisp-create".
+	// Delegate to the shared core so `bd wisp <name>` runs the same code path
+	// as `bd mol wisp create`.
 	return runWispCreateCore(cmd, args)
 }
 
@@ -140,10 +140,9 @@ func runWispCreate(cmd *cobra.Command, args []string) error {
 	return runWispCreateCore(cmd, args)
 }
 
-// runWispCreateCore instantiates a proto as a wisp without emitting a metrics
-// event, so the caller owns emission: the standalone `bd mol wisp create`
-// entrypoint records "wisp-create", while the bare `bd wisp <name>` alias records
-// "wisp". This keeps each invocation to exactly one cli_command event.
+// runWispCreateCore instantiates a proto as a wisp. The standalone
+// `bd mol wisp create` entrypoint and the bare `bd wisp <name>` alias both
+// call it, so each invocation runs the same code path.
 type wispCreateInput struct {
 	protoArg string
 	dryRun   bool

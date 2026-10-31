@@ -67,8 +67,8 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			if claimReady {
 				return HandleErrorRespectJSON("--claim cannot be combined with --gated")
 			}
-			// Delegate to the non-emitting core so `bd ready --gated` records
-			// exactly one cli_command event ("ready"), not also "mol-ready-gated".
+			// Delegate to the shared core so `bd ready --gated` runs the same
+			// code path as `bd mol ready --gated`.
 			return runMolReadyGatedCore(cmd, args)
 		}
 
