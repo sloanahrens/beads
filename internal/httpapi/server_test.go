@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,6 +87,60 @@ func (emptyDeps) GetIssueDependencyRecords(context.Context, []string) (map[strin
 // cycle route would 500 through the panic recovery rather than answering.
 func (emptyDeps) DetectCycleReport(context.Context) (issueops.CycleReport, error) {
 	return issueops.CycleReport{Cycles: []issueops.Cycle{}}, nil
+}
+
+// fakeIssues embeds the interface so any method the claim path does not call
+// panics instead of quietly returning a zero value.
+type fakeIssues struct {
+	domain.IssueUseCase
+
+	mu sync.Mutex
+	// claims records (id, actor) per CAS attempt. An empty list is how the
+	// tests assert that a refusal happened before any database work.
+	claims []claimCall
+	// claim answers the CAS. Default: the caller wins it.
+	claim func(id, actor string) (domain.ClaimResult, error)
+	// issue is what the same-transaction read returns; get overrides it.
+	issue *types.Issue
+	get   func(id string) (*types.Issue, error)
+}
+
+type claimCall struct{ id, actor string }
+
+func (f *fakeIssues) ClaimIssue(_ context.Context, id, actor string) (domain.ClaimResult, error) {
+	f.mu.Lock()
+	f.claims = append(f.claims, claimCall{id, actor})
+	f.mu.Unlock()
+	if f.claim == nil {
+		return domain.ClaimResult{}, nil
+	}
+	return f.claim(id, actor)
+}
+
+func (f *fakeIssues) GetIssue(_ context.Context, id string) (*types.Issue, error) {
+	if f.get != nil {
+		return f.get(id)
+	}
+	return f.issue, nil
+}
+
+func (f *fakeIssues) claimed() []claimCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.claims)
+}
+
+func seededIssue(id, assignee string, status types.Status) *types.Issue {
+	return &types.Issue{
+		ID:        id,
+		Title:     "claim me",
+		Status:    status,
+		Priority:  1,
+		Assignee:  assignee,
+		IssueType: types.TypeTask,
+		CreatedAt: time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC),
+	}
 }
 
 // WalkDependencyTree answers a one-node tree, present for the same reason
@@ -259,6 +314,56 @@ func newTestServer(t *testing.T, cfg Config, tune ...func(*Server)) *testServer 
 	}
 }
 
+// fakeClock is the injected time source. Verify's reload gate is the one place
+// this package reads a wall clock, so a test that wants to cross the gate moves
+// this rather than sleeping a real second.
+type fakeClock struct{ nanos atomic.Int64 }
+
+func (c *fakeClock) now() time.Time          { return time.Unix(0, c.nanos.Load()) }
+func (c *fakeClock) advance(d time.Duration) { c.nanos.Add(int64(d)) }
+
+// writeTokenFile writes content and returns the path. Every rewrite moves the
+// modification time forward explicitly: a test that rewrites a file twice
+// inside one filesystem timestamp tick would otherwise be asserting against
+// the stat cache rather than against the reload.
+func writeTokenFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	touch(t, path, time.Now())
+}
+
+func touch(t *testing.T, path string, mod time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, mod, mod); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
+	}
+}
+
+func newAuthForTest(t *testing.T, content string) (*TokenFileAuth, string, *fakeClock) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tokens")
+	writeTokenFile(t, path, content)
+	auth, err := NewTokenFileAuth(path)
+	if err != nil {
+		t.Fatalf("NewTokenFileAuth: %v", err)
+	}
+	clock := &fakeClock{}
+	clock.nanos.Store(int64(time.Hour))
+	auth.now = clock.now
+	auth.reloadGate = time.Second
+	return auth, path, clock
+}
+
+// newClaimServer wires a server over a provider whose units of work all share
+// one use case, so a retried attempt sees the state the previous one left.
+func newClaimServer(t *testing.T, issues *fakeIssues) (*testServer, *fakeProvider) {
+	t.Helper()
+	provider := &fakeProvider{issues: issues}
+	return newTestServer(t, Config{Provider: provider}), provider
+}
+
 func (ts *testServer) get(t *testing.T, path string) *http.Response {
 	t.Helper()
 	resp, err := ts.client.Get(ts.base + path)
@@ -267,6 +372,42 @@ func (ts *testServer) get(t *testing.T, path string) *http.Response {
 	}
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
+}
+
+const claimPath = "/v0/beads/issues/bd-1:claim"
+
+// postBody posts a body with an explicit media type, because the media type is
+// part of what every body-carrying endpoint checks.
+func (ts *testServer) postBody(t *testing.T, path, contentType, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, ts.base+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
+}
+
+// claim posts a body to path with the ordinary JSON media type.
+func (ts *testServer) claim(t *testing.T, path, body string) *http.Response {
+	t.Helper()
+	return ts.postBody(t, path, "application/json", body)
+}
+
+func readAll(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return string(b)
 }
 
 func decodeBody(t *testing.T, resp *http.Response) map[string]any {

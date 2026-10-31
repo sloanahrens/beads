@@ -19,6 +19,12 @@ import (
 
 const serverProjectID = "server-proj"
 
+const (
+	batchApplyPath = "/v0/beads/issues:batchApply"
+	batchClosePath = "/v0/beads/issues:batchClose"
+	createPath     = "/v0/beads/issues"
+)
+
 // stamped drives a request carrying (or omitting) the Bd-Project-Id header. An
 // empty stamp sends no header at all, which is the backward-compatible path.
 func (ts *testServer) stamped(t *testing.T, method, path, stamp, body string) *http.Response {
