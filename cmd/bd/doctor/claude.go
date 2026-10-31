@@ -54,14 +54,15 @@ func CheckClaude(repoPath string) DoctorCheck {
 			Detail: "MCP-only mode: relies on tools for every query (~10.5k tokens)\n" +
 				"  bd prime hooks provide much better token efficiency",
 			Fix: "Add bd prime hooks for better token efficiency:\n" +
-				"  1. Run 'bd setup claude' to add SessionStart hooks\n" +
+				"  1. Add a SessionStart hook that runs 'bd prime --hook-json'\n" +
+				"     (or install the beads plugin, which includes it)\n" +
 				"\n" +
 				"Benefits:\n" +
 				"  • MCP mode: ~50 tokens vs ~10.5k for full tool scan (99% reduction)\n" +
 				"  • Automatic context refresh on session start and compaction\n" +
 				"  • Works alongside MCP tools for when you need them\n" +
 				"\n" +
-				"See: bd setup claude --help",
+				"See: bd prime --help",
 		}
 	} else if !inClaudeCode || !isClaudePresent() {
 		// Not in Claude Code, or CLAUDECODE=1 was set by another AI tool but
@@ -70,7 +71,7 @@ func CheckClaude(repoPath string) DoctorCheck {
 			Name:    "Claude Integration",
 			Status:  "ok",
 			Message: "CLI-only mode",
-			Detail:  "To enable Claude integration, run bd setup claude",
+			Detail:  "To enable Claude integration, add a SessionStart hook that runs 'bd prime --hook-json', or install the beads plugin",
 		}
 	} else {
 		// In Claude Code but plugin not installed
@@ -85,7 +86,7 @@ func CheckClaude(repoPath string) DoctorCheck {
 				"    • See: https://github.com/gastownhall/beads/blob/main/docs/integrations/claude-code-plugin.md\n" +
 				"\n" +
 				"  Option 2: CLI-only mode\n" +
-				"    • Run 'bd setup claude' to add SessionStart hooks\n" +
+				"    • Add a SessionStart hook that runs 'bd prime --hook-json'\n" +
 				"    • No slash commands, but hooks provide workflow context\n" +
 				"\n" +
 				"Benefits:\n" +
@@ -756,7 +757,7 @@ func CheckClaudeHookCompleteness(repoPath string) DoctorCheck {
 		Status:  StatusWarning,
 		Message: "Missing hook event(s): SessionStart",
 		Detail:  "SessionStart injects context on new sessions and after compaction.",
-		Fix: "Run 'bd setup claude' to install hooks, or\n" +
+		Fix: "Add a SessionStart hook that runs 'bd prime --hook-json', or\n" +
 			"install the beads plugin which includes hooks automatically.",
 	}
 }

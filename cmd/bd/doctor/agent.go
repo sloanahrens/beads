@@ -586,7 +586,7 @@ func enrichCursor(dc DoctorCheck) agentEnrichment {
 		explanation: fmt.Sprintf("Cursor integration: %s. Beads integrates with Cursor via agent hooks in .cursor/hooks.json (or ~/.cursor/hooks.json) that inject bd prime on sessionStart and recover context after compaction.", dc.Message),
 		observed:    dc.Message + "\n" + dc.Detail,
 		expected:    "Cursor hooks configured for beads (sessionStart/preCompact/postToolUse)",
-		commands:    []string{"bd setup cursor"},
+		commands:    []string{"bd prime --hook-json"},
 		sourceFiles: []string{"cmd/bd/doctor/cursor.go:CheckCursor"},
 	}
 }
@@ -597,7 +597,7 @@ func enrichCursorSettings(dc DoctorCheck) agentEnrichment {
 		explanation: fmt.Sprintf("Cursor hooks file is malformed: %s. A corrupted .cursor/hooks.json prevents Cursor from loading any hooks, which silently breaks beads context injection and post-compaction recovery.", dc.Message),
 		observed:    dc.Message + "\n" + dc.Detail,
 		expected:    ".cursor/hooks.json (and ~/.cursor/hooks.json) are valid JSON",
-		commands:    []string{"cat .cursor/hooks.json | python3 -m json.tool", "bd setup cursor"},
+		commands:    []string{"cat .cursor/hooks.json | python3 -m json.tool", "bd prime --hook-json"},
 		sourceFiles: []string{"cmd/bd/doctor/cursor.go:CheckCursorSettingsHealth"},
 	}
 }

@@ -284,7 +284,7 @@ func isClaudeDetected() bool {
 
 // isClaudeSetupComplete checks if the beads Claude integration is properly configured.
 // Returns true if the beads plugin is installed (provides hooks via plugin.json),
-// or if hooks were manually installed via 'bd setup claude'.
+// or if the bd prime hooks were installed manually.
 func isClaudeSetupComplete() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -309,7 +309,7 @@ func isClaudeSetupComplete() bool {
 		}
 	}
 
-	// Check for manual hooks installation via 'bd setup claude'
+	// Check for manually installed bd prime hooks
 	// Global hooks in settings.json
 	if hasBeadsPrimeHooks(settingsPath) {
 		return true
@@ -381,7 +381,7 @@ func initDefaultTips() {
 	// but the integration is not configured
 	InjectTip(
 		"claude_setup",
-		"Install the beads plugin for automatic workflow context, or run 'bd setup claude' for CLI-only mode",
+		"Install the beads plugin for automatic workflow context, or add a SessionStart hook that runs 'bd prime --hook-json'",
 		100,          // Highest priority - this is important for Claude users
 		24*time.Hour, // Daily minimum gap
 		0.6,          // 60% chance when eligible (~4 times per week)
