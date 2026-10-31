@@ -334,7 +334,6 @@ var firstRunNoticeSuppressedCommands = map[string]bool{
 	"__completeNoDesc":            true,
 	"hook":                        true, // bd hook bridge (manages its own store/protocol lifecycle)
 	"hooks":                       true, // bd hooks ... (git-hook management/runner)
-	"codex-hook":                  true, // codex protocol bridge
 	"bash":                        true,
 	"zsh":                         true,
 	"fish":                        true,
