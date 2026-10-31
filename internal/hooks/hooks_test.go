@@ -336,8 +336,8 @@ func TestRunSync_KillsDescendants(t *testing.T) {
 	// state this is about — not running — instead of sampling it once.
 	stopped, err := waitForStopped(
 		func() (bool, error) { return childStopped(pid) },
-		func() { time.Sleep(10 * time.Millisecond) },
-		100,
+		runtime.Gosched,
+		50000,
 	)
 	if err != nil {
 		t.Fatalf("Failed to read state of child process %d: %v", pid, err)
