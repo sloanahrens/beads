@@ -45,18 +45,59 @@ func TestNoStaleUsageMetricsReferences(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// Drop comment markers so a phrase wrapped across two // lines
-		// ("emitting a metrics" / "// event") still reads as one sentence.
-		flat := strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(string(data), "//", "")), " "))
-		for _, phrase := range deadMetricsWording {
-			if strings.Contains(flat, phrase) {
-				t.Errorf("%s still mentions the deleted usage-metrics subsystem (%q)", path, phrase)
-			}
+		for _, phrase := range deadMetricsMentions(string(data)) {
+			t.Errorf("%s still mentions the deleted usage-metrics subsystem (%q)", path, phrase)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("scan cmd/bd sources: %v", err)
+	}
+}
+
+// deadMetricsMentions returns the dead-subsystem phrases present in src. Comment
+// markers and whitespace are dropped first so a phrase wrapped across two //
+// lines ("emitting a metrics" / "// event") still reads as one sentence.
+func deadMetricsMentions(src string) []string {
+	flat := strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(src, "//", "")), " "))
+	var found []string
+	for _, phrase := range deadMetricsWording {
+		if strings.Contains(flat, phrase) {
+			found = append(found, phrase)
+		}
+	}
+	return found
+}
+
+// TestDeadMetricsMentionsSpotsWrappedComments drives both sides of the matcher
+// the directory scan relies on: without it the scan could silently pass on a
+// stale phrase and report the tree clean.
+func TestDeadMetricsMentionsSpotsWrappedComments(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"plain mention", "// reuses the core so it emits one cli_command event\n", "cli_command"},
+		{"wrapped across comment lines", "// emits a metrics\n// event for the caller\n", "metrics event"},
+		{"clean comment", "// commandSpan covers SQL spans\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := deadMetricsMentions(tc.src)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("deadMetricsMentions(%q) = %v, want no match", tc.src, got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("deadMetricsMentions(%q) = %v, want [%q]", tc.src, got, tc.want)
+			}
+		})
 	}
 }
 
