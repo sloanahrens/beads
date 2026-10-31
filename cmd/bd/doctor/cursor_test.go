@@ -84,48 +84,6 @@ func TestCheckCursorSettingsHealth(t *testing.T) {
 	})
 }
 
-func TestCheckCursorHookCompleteness(t *testing.T) {
-	t.Run("all events present is ok", func(t *testing.T) {
-		repo := t.TempDir()
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv("USERPROFILE", t.TempDir())
-		writeCursorHooksFile(t, repo, `{"version":1,"hooks":{
-			"sessionStart":[{"command":"bd cursor-hook sessionStart"}],
-			"preCompact":[{"command":"bd cursor-hook preCompact"}],
-			"postToolUse":[{"command":"bd cursor-hook postToolUse"}]
-		}}`)
-
-		dc := CheckCursorHookCompleteness(repo)
-		if dc.Status != StatusOK {
-			t.Fatalf("status = %q, want ok (%#v)", dc.Status, dc)
-		}
-	})
-
-	t.Run("partial install warns", func(t *testing.T) {
-		repo := t.TempDir()
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv("USERPROFILE", t.TempDir())
-		// sessionStart only — recovery hooks missing.
-		writeCursorHooksFile(t, repo, `{"version":1,"hooks":{"sessionStart":[{"command":"bd cursor-hook sessionStart"}]}}`)
-
-		dc := CheckCursorHookCompleteness(repo)
-		if dc.Status != StatusWarning {
-			t.Fatalf("status = %q, want warning (%#v)", dc.Status, dc)
-		}
-	})
-
-	t.Run("no hooks is N/A ok", func(t *testing.T) {
-		repo := t.TempDir()
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv("USERPROFILE", t.TempDir())
-
-		dc := CheckCursorHookCompleteness(repo)
-		if dc.Status != StatusOK {
-			t.Fatalf("status = %q, want ok (%#v)", dc.Status, dc)
-		}
-	})
-}
-
 func TestHasBeadsCursorHooks(t *testing.T) {
 	dir := t.TempDir()
 	hooks := filepath.Join(dir, "hooks.json")

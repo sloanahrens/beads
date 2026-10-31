@@ -699,11 +699,6 @@ func runDiagnostics(path string) doctorResult {
 		result.OverallOK = false // Malformed hooks.json is a real problem
 	}
 
-	// Check 11g: Cursor hook completeness (all three lifecycle events)
-	cursorHookCheck := convertWithCategory(doctor.CheckCursorHookCompleteness(path), doctor.CategoryIntegration)
-	result.Checks = append(result.Checks, cursorHookCheck)
-	// Don't fail overall check for incomplete hooks, just warn
-
 	// Check 11h: Documentation bd prime references match installed version
 	bdPrimeDocsCheck := convertWithCategory(doctor.CheckDocumentationBdPrimeReference(path), doctor.CategoryIntegration)
 	result.Checks = append(result.Checks, bdPrimeDocsCheck)

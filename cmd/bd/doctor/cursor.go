@@ -134,55 +134,6 @@ func CheckCursorSettingsHealth(repoPath string) DoctorCheck {
 	}
 }
 
-// CheckCursorHookCompleteness verifies that when bd-managed Cursor hooks are
-// installed, all three lifecycle events are present. bd's compaction recovery
-// needs sessionStart (prime on start/after compaction), preCompact (arm
-// recovery), and postToolUse (re-inject after compaction); a partial install
-// (e.g. a hand-edited hooks.json) silently degrades recovery. Mirrors
-// CheckClaudeHookCompleteness. repoPath is the project root directory.
-func CheckCursorHookCompleteness(repoPath string) DoctorCheck {
-	paths := []string{filepath.Join(repoPath, ".cursor", "hooks.json")}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".cursor", "hooks.json"))
-	}
-
-	present := map[string]bool{}
-	for _, p := range paths {
-		for _, ev := range cursorBeadsHookEvents(p) {
-			present[ev] = true
-		}
-	}
-
-	if len(present) == 0 {
-		return DoctorCheck{
-			Name:    "Cursor Hook Completeness",
-			Status:  StatusOK,
-			Message: "N/A (no hooks installed)",
-		}
-	}
-
-	var missing []string
-	for _, ev := range setup.CursorManagedHookEventNames() {
-		if !present[ev] {
-			missing = append(missing, ev)
-		}
-	}
-	if len(missing) == 0 {
-		return DoctorCheck{
-			Name:    "Cursor Hook Completeness",
-			Status:  StatusOK,
-			Message: "All recovery hooks present (sessionStart, preCompact, postToolUse)",
-		}
-	}
-	return DoctorCheck{
-		Name:    "Cursor Hook Completeness",
-		Status:  StatusWarning,
-		Message: "Missing hook event(s): " + strings.Join(missing, ", "),
-		Detail:  "sessionStart primes context; preCompact + postToolUse recover beads context after a compaction.",
-		Fix:     "Run 'bd setup cursor' to reinstall the full hook set.",
-	}
-}
-
 // isCursorPresent returns true when Cursor appears to be in use: running inside
 // a Cursor hook/agent, the cursor CLI is on PATH, a project .cursor/ dir exists,
 // or the user has a ~/.cursor/ directory.

@@ -192,7 +192,7 @@ func TestFirstRunNoticeSuppressedByContext(t *testing.T) {
 		// Mirror the real root command's local --version/-V probe flag.
 		root.Flags().BoolP("version", "V", false, "Print version information")
 		cmds := map[string]*cobra.Command{"root": root}
-		for _, name := range []string{"list", "version", "prime", "codex-hook"} {
+		for _, name := range []string{"list", "version", "prime"} {
 			c := &cobra.Command{Use: name}
 			root.AddCommand(c)
 			cmds[name] = c
@@ -222,7 +222,7 @@ func TestFirstRunNoticeSuppressedByContext(t *testing.T) {
 		}
 	})
 
-	for _, name := range []string{"version", "prime", "codex-hook", "hooks-run"} {
+	for _, name := range []string{"version", "prime", "hooks-run"} {
 		t.Run(name+" is suppressed", func(t *testing.T) {
 			reset()
 			if !firstRunNoticeSuppressedByContext(newTree()[name]) {
