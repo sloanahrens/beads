@@ -341,11 +341,12 @@ The sections below are the canonical backend migration reference.
 ## Federation (Peer-to-Peer Sync)
 
 Federation lets independent Dolt-backed workspaces ("towns") sync issues
-directly with each other via `bd federation add-peer`/`sync`/`status`,
-without a central hub. Credentials are AES-256 encrypted and stored locally.
+directly with each other through a shared Dolt remote, without a central hub:
+each town registers the remote with `bd dolt remote add`, then runs
+`bd dolt pull` and `bd dolt push`.
 
-See [Federation Setup Guide](/multi-agent/federation) for the full setup guide, including
-peer configuration, sovereignty tiers, sync/status/topology details, and
+See [Federation Setup Guide](/multi-agent/federation) for the full setup guide,
+including remote configuration, sovereignty tiers, topologies, and
 troubleshooting.
 
 ## Dolt Remotes

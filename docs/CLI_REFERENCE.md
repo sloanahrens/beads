@@ -102,7 +102,6 @@ Reference for bd Latest. Generated from `bd help --all`.
   - [bd backup sync](#bd-backup-sync) — Push database to configured Dolt backup
 - [bd branch](#bd-branch) — List or create branches
 - [bd export](#bd-export) — Export issues to JSONL format
-- [bd federation](#bd-federation) — Manage peer-to-peer federation (requires CGO)
 - [bd import](#bd-import) — Import issues from a JSONL file or stdin into the database
 - [bd restore](#bd-restore) — Restore the pre-compaction content of a compacted issue
 - [bd vc](#bd-vc) — Version control operations
@@ -2384,21 +2383,6 @@ bd export [flags]
       --include-memories   Include persistent memories (from 'bd remember') in the export
   -o, --output string      Output file path (default: stdout)
       --scrub              Exclude test/pollution records
-```
-
-### bd federation
-
-Federation commands require CGO and the Dolt storage backend.
-
-This binary was built without CGO support. To use federation features:
-  1. Use pre-built binaries from GitHub releases, or
-  2. Build from source with CGO enabled
-
-Federation enables synchronized issue tracking across multiple workspaces,
-each maintaining their own Dolt database while sharing updates via remotes.
-
-```
-bd federation
 ```
 
 ### bd import

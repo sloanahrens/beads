@@ -127,7 +127,8 @@ bd dolt pull    # Fetch and merge updates from the Dolt remote
 bd ready        # Shows fresh data
 ```
 
-For federation setups, `bd federation sync` syncs with all configured peers. See [Federation](/multi-agent/federation).
+For federation setups, run `bd dolt pull` and then `bd dolt push` against the
+shared remote. See [Federation](/multi-agent/federation).
 
 ### How do I handle merge conflicts?
 

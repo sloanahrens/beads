@@ -120,6 +120,10 @@
       "destination": "/multi-agent/federation"
     },
     {
+      "source": "/cli-reference/federation",
+      "destination": "/multi-agent/federation"
+    },
+    {
       "source": "/PLUGIN",
       "destination": "/integrations/claude-code-plugin"
     },
@@ -367,7 +371,6 @@
               "cli-reference/edit",
               "cli-reference/epic",
               "cli-reference/export",
-              "cli-reference/federation",
               "cli-reference/find-duplicates",
               "cli-reference/flatten",
               "cli-reference/forget",
