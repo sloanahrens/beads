@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/issueops"
@@ -114,8 +117,13 @@ var showCmd = &cobra.Command{
 			return showIssueChildren(ctx, args, jsonOutput, shortMode)
 		}
 
+		// The JSON detail view for a list of ids is answered from one store
+		// read per database the ids live in, not one read per id (be-2wkz).
+		if jsonOutput && !shortMode {
+			return showIssuesJSON(ctx, args, includeDepends, includeComments, briefDeps)
+		}
+
 		// Direct mode - use routed resolution for cross-repo lookups
-		allDetails := []interface{}{}
 		foundCount := 0
 		// Ids that could not be shown, with why. Machine mode reports them
 		// in error.ids (not_found, route_unreachable, ...).
@@ -127,28 +135,14 @@ var showCmd = &cobra.Command{
 				if result != nil {
 					result.Close()
 				}
-				var unreachable *routeUnreachableError
-				switch {
-				case errors.As(err, &unreachable):
-					// UNKNOWN, not a definite negative: say which database
-					// could not be asked (B1-05).
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				case isNotFoundErr(err):
-					fmt.Fprintf(os.Stderr, "Issue %s not found\n", id)
-					fmt.Fprintf(os.Stderr, "Hint: %s\n", showNotFoundHint(id))
-				default:
-					fmt.Fprintf(os.Stderr, "Error fetching %s: %v\n", id, err)
-				}
-				showFailures = append(showFailures, idOutcome{ID: id, Kind: errorKindOf(err), Message: err.Error()})
+				showFailures = append(showFailures, reportShowFailure(id, err))
 				continue
 			}
 			if result == nil || result.Issue == nil {
 				if result != nil {
 					result.Close()
 				}
-				fmt.Fprintf(os.Stderr, "Issue %s not found\n", id)
-				fmt.Fprintf(os.Stderr, "Hint: %s\n", showNotFoundHint(id))
-				showFailures = append(showFailures, idOutcome{ID: id, Kind: kindNotFound, Message: fmt.Sprintf("issue %s not found", id)})
+				showFailures = append(showFailures, reportShowMissing(id))
 				continue
 			}
 			issue := result.Issue
@@ -162,34 +156,6 @@ var showCmd = &cobra.Command{
 				continue
 			}
 
-			if jsonOutput {
-				// Shaping the detail view belongs to the reader role, not the
-				// CLI: the count-only default (be-ijck6q), the
-				// comments-omitted flag (ga-clgh), and the shallow dependent
-				// rows (be-4d36f2) have to read the same from every frontend,
-				// and going through the accessor is what makes that true by
-				// construction rather than by everyone remembering to call the
-				// same helper.
-				//
-				// The id handed over is the CANONICAL one this command already
-				// resolved. Fuzzy and cross-repo resolution stay here on
-				// purpose: an affordance that can answer with a different
-				// issue than the caller named has no place on a contract an
-				// unattended HTTP client also calls.
-				rd, rerr := issueStore.IssueReader()
-				if rerr != nil {
-					result.Close()
-					return HandleErrorRespectJSON("%v", rerr)
-				}
-				details, derr := rd.Get(ctx, showGetRequest(issue.ID, includeDepends, includeComments, briefDeps))
-				if derr != nil {
-					result.Close()
-					return HandleErrorRespectJSON("%v", derr)
-				}
-				allDetails = append(allDetails, details)
-				result.Close()
-				continue
-			}
 			if idx > 0 {
 				fmt.Println("\n" + ui.RenderMuted(strings.Repeat("─", 60)))
 				fmt.Printf("\n%s\n", formatIssueHeader(issue))
@@ -272,17 +238,15 @@ var showCmd = &cobra.Command{
 		}
 
 		if jsonOutput {
-			if len(allDetails) > 0 {
-				if jerr := outputJSON(allDetails); jerr != nil {
-					return jerr
-				}
-			} else {
-				if machineModeActive() {
-					return batchError(0, showFailures)
-				}
-				return HandleErrorWithHintRespectJSON("no issues found matching the provided IDs",
-					"some IDs may reference deleted/purged records with no trace left in the live database — try 'bd history <id>' to check")
+			// Only --json --short reaches this point: --short printed its
+			// lines above and the detail views are showIssuesJSON's, so there
+			// is nothing to marshal. This is the answer that combination has
+			// always given, kept as it was.
+			if machineModeActive() {
+				return batchError(0, showFailures)
 			}
+			return HandleErrorWithHintRespectJSON("no issues found matching the provided IDs",
+				"some IDs may reference deleted/purged records with no trace left in the live database — try 'bd history <id>' to check")
 		} else if foundCount > 0 {
 			maybeShowTip(store)
 		} else {
@@ -321,14 +285,185 @@ func init() {
 	rootCmd.AddCommand(showCmd)
 }
 
-// showGetRequest carries the show flags onto the read contract. Extracted so
-// the hop is reachable from a test: both show routes build this request
-// independently, and a dropped field here is invisible to every other test.
-func showGetRequest(id string, includeDependents, includeComments, briefDeps bool) issueops.GetRequest {
-	return issueops.GetRequest{
-		ID:                id,
+// showGetManyRequest carries the show flags onto the reader contract's batch
+// form. Extracted so the hop is reachable from a test: a dropped flag here is
+// invisible to every other test, and it would change the answer for every id in
+// the list at once.
+func showGetManyRequest(ids []string, includeDependents, includeComments, briefDeps bool) issueops.GetManyRequest {
+	return issueops.GetManyRequest{
+		IDs:               ids,
 		IncludeDependents: includeDependents,
 		IncludeComments:   includeComments,
 		BriefDeps:         briefDeps,
 	}
+}
+
+// showBatchGroup is one store and the ids resolution landed in it.
+type showBatchGroup struct {
+	store storage.DoltStorage
+	ids   []string
+}
+
+// appendToShowBatchGroup adds id to the group for its store, appending a group
+// on first sight.
+//
+// Grouping by store is what turns "one detail read per id" into "one detail
+// read per database": every id resolved against the local store shares it, and
+// a prefix- or auto-routed lookup answers with a store of its own, so it gets a
+// group of its own — slower, but never wrong.
+func appendToShowBatchGroup(groups []showBatchGroup, store storage.DoltStorage, id string) []showBatchGroup {
+	for i := range groups {
+		if sameStoreHandle(groups[i].store, store) {
+			groups[i].ids = append(groups[i].ids, id)
+			return groups
+		}
+	}
+	return append(groups, showBatchGroup{store: store, ids: []string{id}})
+}
+
+// sameStoreHandle reports whether two handles name the same store. Interface
+// equality panics when a dynamic type is not comparable, so the guard keeps a
+// value-typed backend from turning `bd show` into a panic; every real backend
+// is a pointer and compares by identity.
+func sameStoreHandle(a, b storage.DoltStorage) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	t := reflect.TypeOf(a)
+	if t != reflect.TypeOf(b) || !t.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+// showIssuesJSON answers `bd show --json` for a list of ids.
+//
+// RESOLUTION STAYS PER ID and stays here: fuzzy ids, --current's pick and
+// prefix/cross-repo routing are interactive affordances that can answer with a
+// different issue than the caller named, which has no place on a contract an
+// unattended client also calls. What this function changes is only the DETAIL
+// VIEW read: every id resolved into one store is answered by a single
+// issueops.Reader.GetMany, so a list of a thousand ids costs one query set per
+// chunk instead of ten statements an id (be-2wkz).
+//
+// The output keeps the caller's order and the per-id failure outcome: an id
+// that does not resolve (or that the batch no longer holds) is reported on
+// stderr and named again in error.ids under machine mode, and the ids that did
+// answer are still printed.
+func showIssuesJSON(ctx context.Context, args []string, includeDependents, includeComments, briefDeps bool) error {
+	foundCount := 0
+	var showFailures []idOutcome
+
+	// resolved holds the canonical ids in the order the caller named them, so
+	// the batch answer can be put back into request order however the reads
+	// were grouped.
+	resolved := make([]string, 0, len(args))
+	var groups []showBatchGroup
+	// A routed lookup hands back a store it opened for that id, and only
+	// Close releases it — so the batch read below must happen while the
+	// results are still open. The local store's Close is a no-op, which is
+	// what keeps this from holding anything for the ordinary case.
+	var open []*RoutedResult
+	defer func() {
+		for _, result := range open {
+			result.Close()
+		}
+	}()
+	for _, id := range args {
+		result, err := resolveAndGetIssueWithRouting(ctx, store, id)
+		if err != nil {
+			if result != nil {
+				result.Close()
+			}
+			showFailures = append(showFailures, reportShowFailure(id, err))
+			continue
+		}
+		if result == nil || result.Issue == nil {
+			if result != nil {
+				result.Close()
+			}
+			showFailures = append(showFailures, reportShowMissing(id))
+			continue
+		}
+		open = append(open, result)
+		foundCount++
+		resolved = append(resolved, result.Issue.ID)
+		groups = appendToShowBatchGroup(groups, result.Store, result.Issue.ID)
+	}
+
+	detailsByID := make(map[string]*issueops.IssueDetails, len(resolved))
+	for _, group := range groups {
+		rd, rerr := group.store.IssueReader()
+		if rerr != nil {
+			return HandleErrorRespectJSON("%v", rerr)
+		}
+		answer, rerr := rd.GetMany(ctx, showGetManyRequest(group.ids, includeDependents, includeComments, briefDeps))
+		if rerr != nil {
+			return HandleErrorRespectJSON("%v", rerr)
+		}
+		for _, details := range answer.Details {
+			detailsByID[details.ID] = details
+		}
+	}
+
+	allDetails := make([]interface{}, 0, len(resolved))
+	for _, id := range resolved {
+		details, ok := detailsByID[id]
+		if !ok {
+			// Resolution found this row and the batch did not: it went away
+			// between the two reads. It keeps the per-id miss outcome rather
+			// than failing the ids that did answer.
+			showFailures = append(showFailures, reportShowMissing(id))
+			continue
+		}
+		allDetails = append(allDetails, details)
+	}
+
+	if len(allDetails) > 0 {
+		if jerr := outputJSON(allDetails); jerr != nil {
+			return jerr
+		}
+	} else {
+		if machineModeActive() {
+			return batchError(0, showFailures)
+		}
+		return HandleErrorWithHintRespectJSON("no issues found matching the provided IDs",
+			"some IDs may reference deleted/purged records with no trace left in the live database — try 'bd history <id>' to check")
+	}
+
+	if len(args) > 0 {
+		SetLastTouchedID(args[0])
+	}
+	if machineModeActive() {
+		// Some ids shown, some not: partial, with the misses named.
+		return batchError(foundCount, showFailures)
+	}
+	return nil
+}
+
+// reportShowFailure prints one id's resolution failure and returns its
+// machine-readable outcome. Both `bd show` routes report this way so a miss and
+// a failure cannot read differently depending on which one answered.
+func reportShowFailure(id string, err error) idOutcome {
+	var unreachable *routeUnreachableError
+	switch {
+	case errors.As(err, &unreachable):
+		// UNKNOWN, not a definite negative: say which database could not be
+		// asked (B1-05).
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	case isNotFoundErr(err):
+		fmt.Fprintf(os.Stderr, "Issue %s not found\n", id)
+		fmt.Fprintf(os.Stderr, "Hint: %s\n", showNotFoundHint(id))
+	default:
+		fmt.Fprintf(os.Stderr, "Error fetching %s: %v\n", id, err)
+	}
+	return idOutcome{ID: id, Kind: errorKindOf(err), Message: err.Error()}
+}
+
+// reportShowMissing is a resolver that found NO row and no error — the "not
+// found" outcome in its own right.
+func reportShowMissing(id string) idOutcome {
+	fmt.Fprintf(os.Stderr, "Issue %s not found\n", id)
+	fmt.Fprintf(os.Stderr, "Hint: %s\n", showNotFoundHint(id))
+	return idOutcome{ID: id, Kind: kindNotFound, Message: fmt.Sprintf("issue %s not found", id)}
 }

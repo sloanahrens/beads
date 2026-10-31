@@ -71,21 +71,22 @@ type DoltStorage = storage.DoltStorage
 // capability sub-interfaces; each is aliased so an implementation can be
 // organized (and documented) per capability.
 type (
-	Storage              = storage.Storage
-	IssueLifecycleStore  = storage.IssueLifecycleStore
-	VersionControl       = storage.VersionControl
-	HistoryViewer        = storage.HistoryViewer
-	RemoteStore          = storage.RemoteStore
-	SyncStore            = storage.SyncStore
-	FederationStore      = storage.FederationStore
-	BulkIssueStore       = storage.BulkIssueStore
-	DependencyQueryStore = storage.DependencyQueryStore
-	EventQueryStore      = storage.EventQueryStore
-	AnnotationStore      = storage.AnnotationStore
-	ConfigMetadataStore  = storage.ConfigMetadataStore
-	CompactionStore      = storage.CompactionStore
-	AdvancedQueryStore   = storage.AdvancedQueryStore
-	FastStatisticsStore  = storage.FastStatisticsStore
+	Storage                = storage.Storage
+	IssueLifecycleStore    = storage.IssueLifecycleStore
+	VersionControl         = storage.VersionControl
+	HistoryViewer          = storage.HistoryViewer
+	RemoteStore            = storage.RemoteStore
+	SyncStore              = storage.SyncStore
+	FederationStore        = storage.FederationStore
+	BulkIssueStore         = storage.BulkIssueStore
+	DependencyQueryStore   = storage.DependencyQueryStore
+	EventQueryStore        = storage.EventQueryStore
+	AnnotationStore        = storage.AnnotationStore
+	ConfigMetadataStore    = storage.ConfigMetadataStore
+	CompactionStore        = storage.CompactionStore
+	AdvancedQueryStore     = storage.AdvancedQueryStore
+	FastStatisticsStore    = storage.FastStatisticsStore
+	IssueDetailsBatchStore = storage.IssueDetailsBatchStore
 )
 
 // Transaction types: Storage.RunInTransaction yields a Transaction;
@@ -98,25 +99,27 @@ type (
 
 // Value types reached by the engine interface's method signatures.
 type (
-	BatchCreateOptions      = storage.BatchCreateOptions
-	CloseIssueOptions       = storage.CloseIssueOptions
-	CloseIssueResult        = storage.CloseIssueResult
-	CommentPageCursor       = storage.CommentPageCursor
-	CommitInfo              = storage.CommitInfo
-	Conflict                = storage.Conflict
-	DependencyAddOptions    = storage.DependencyAddOptions
-	DependencyRemoveOptions = storage.DependencyRemoveOptions
-	DiffEntry               = storage.DiffEntry
-	EventCursor             = storage.EventCursor
-	FederationPeer          = storage.FederationPeer
-	HistoryEntry            = storage.HistoryEntry
-	MergeSlotResult         = storage.MergeSlotResult
-	MergeSlotStatus         = storage.MergeSlotStatus
-	RemoteInfo              = storage.RemoteInfo
-	StatusEntry             = storage.StatusEntry
-	SyncResult              = storage.SyncResult
-	SyncStatus              = storage.SyncStatus
-	UpdateIssueOptions      = storage.UpdateIssueOptions
+	BatchCreateOptions       = storage.BatchCreateOptions
+	CloseIssueOptions        = storage.CloseIssueOptions
+	CloseIssueResult         = storage.CloseIssueResult
+	CommentPageCursor        = storage.CommentPageCursor
+	CommitInfo               = storage.CommitInfo
+	Conflict                 = storage.Conflict
+	DependencyAddOptions     = storage.DependencyAddOptions
+	DependencyRemoveOptions  = storage.DependencyRemoveOptions
+	DiffEntry                = storage.DiffEntry
+	EventCursor              = storage.EventCursor
+	FederationPeer           = storage.FederationPeer
+	HistoryEntry             = storage.HistoryEntry
+	IssueDetailsBatch        = storage.IssueDetailsBatch
+	IssueDetailsBatchRequest = storage.IssueDetailsBatchRequest
+	MergeSlotResult          = storage.MergeSlotResult
+	MergeSlotStatus          = storage.MergeSlotStatus
+	RemoteInfo               = storage.RemoteInfo
+	StatusEntry              = storage.StatusEntry
+	SyncResult               = storage.SyncResult
+	SyncStatus               = storage.SyncStatus
+	UpdateIssueOptions       = storage.UpdateIssueOptions
 )
 
 // VCStatus is the version-control status report (storage.Status). Named

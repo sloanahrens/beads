@@ -104,6 +104,9 @@ func TestReaderContract(t *testing.T) {
 	t.Run("GetDetailShapeMatchesTheSeededIssue", func(t *testing.T) {
 		conformance.RunReaderGetDetailShapeMatchesTheSeededIssue(t, ctx, fixture)
 	})
+	t.Run("GetManyAnswersTheBatchLikeGet", func(t *testing.T) {
+		conformance.RunReaderGetManyAnswersTheBatchLikeGet(t, ctx, fixture)
+	})
 	t.Run("DoesNotMutateTheCallerRequest", func(t *testing.T) {
 		conformance.RunReaderDoesNotMutateTheCallerRequest(t, ctx, fixture)
 	})

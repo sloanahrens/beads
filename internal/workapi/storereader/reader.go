@@ -16,6 +16,7 @@ package storereader
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
@@ -141,4 +142,39 @@ func (r *storeReader) Get(ctx context.Context, req issueops.GetRequest) (*issueo
 		IncludeComments:   req.IncludeComments,
 		BriefDeps:         req.BriefDeps,
 	})
+}
+
+// GetMany answers the same detail view for a list of ids out of ONE store read
+// (storage.IssueDetailsBatchStore). The store seam is where the batching has to
+// happen — it owns the transactions and the statement list — so this method is
+// the hop that turns that one read into the views, through the same assembly
+// Get's answer goes through.
+//
+// A batch that fails fails the call: unlike a miss, which the result names, a
+// backend failure over a list must not arrive as a shorter list that reads like
+// "those ids do not exist".
+func (r *storeReader) GetMany(ctx context.Context, req issueops.GetManyRequest) (issueops.GetManyResult, error) {
+	if len(req.IDs) == 0 {
+		return issueops.GetManyResult{}, nil
+	}
+	batch, err := r.store.GetIssueDetailsBatch(ctx, storage.IssueDetailsBatchRequest{
+		IDs:               req.IDs,
+		IncludeDependents: req.IncludeDependents,
+		IncludeComments:   req.IncludeComments,
+	})
+	if err != nil {
+		return issueops.GetManyResult{}, err
+	}
+	if batch == nil {
+		// A store that answers no error and no rows has not answered. Saying so
+		// is the only reading that cannot be mistaken for "those ids do not
+		// exist", which is what an empty batch would look like below.
+		return issueops.GetManyResult{}, fmt.Errorf("GetMany: store returned no batch for %d ids", len(req.IDs))
+	}
+	details, notFound := workapi.BuildIssueDetailsBatch(batch, req.IDs, workapi.DetailOptions{
+		IncludeDependents: req.IncludeDependents,
+		IncludeComments:   req.IncludeComments,
+		BriefDeps:         req.BriefDeps,
+	})
+	return issueops.GetManyResult{Details: details, NotFound: notFound}, nil
 }

@@ -48,3 +48,10 @@ func (r *instrumentedIssueReader) Get(ctx context.Context, request issueops.GetR
 	r.storage.done(ctx, span, started, err)
 	return result, err
 }
+
+func (r *instrumentedIssueReader) GetMany(ctx context.Context, request issueops.GetManyRequest) (result issueops.GetManyResult, err error) {
+	ctx, span, started := r.storage.op(ctx, "IssueReader.GetMany")
+	result, err = r.inner.GetMany(ctx, request)
+	r.storage.done(ctx, span, started, err)
+	return result, err
+}

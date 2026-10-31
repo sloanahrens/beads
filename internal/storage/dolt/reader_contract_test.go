@@ -164,6 +164,12 @@ func TestReaderGetDetailShapeMatchesTheSeededIssue(t *testing.T) {
 	conformance.RunReaderGetDetailShapeMatchesTheSeededIssue(t, ctx, fixture)
 }
 
+func TestReaderGetManyAnswersTheBatchLikeGet(t *testing.T) {
+	fixture, ctx, cleanup := newDoltReaderFixture(t, "rdr")
+	defer cleanup()
+	conformance.RunReaderGetManyAnswersTheBatchLikeGet(t, ctx, fixture)
+}
+
 func TestReaderDoesNotMutateTheCallerRequest(t *testing.T) {
 	fixture, ctx, cleanup := newDoltReaderFixture(t, "rdr")
 	defer cleanup()
