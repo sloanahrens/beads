@@ -225,7 +225,7 @@ var versionChanges = []VersionChange{
 			"NEW: `bd sync` — the federation loop (export, commit, pull, import, push) as one verb.",
 			"NEW: `--brief` on `bd list` / `bd ready --json` and the HTTP listings — omits free-form text fields (~93% smaller payloads on large stores); fields are omitted without a marker, so only the caller that passed the flag knows rows are partial.",
 			"BEHAVIOR: expired dated defers now AUTO-WAKE on ready-front reads and claims (#5386) — a lapsed `--defer` no longer hides an issue forever; stale defers surface on the next `bd ready`.",
-			"PERF: telemetry no longer costs startup time on every invocation (#5646), and the queued-events dir is bounded (7d TTL + drop-oldest caps, #5660) — a backlogged ~/.beads/eventsData self-prunes.",
+			"PERF: telemetry no longer costs startup time on every invocation (#5646).",
 		},
 	},
 	{
