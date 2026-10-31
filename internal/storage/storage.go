@@ -640,6 +640,7 @@ type DoltStorage interface {
 	CompactionStore
 	AdvancedQueryStore
 	FastStatisticsStore
+	IssueDetailsBatchStore
 }
 
 // PruneOrphanDependenciesResult counts the dependency rows `bd dep

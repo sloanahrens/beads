@@ -114,26 +114,22 @@ func BuildIssueDetails(ctx context.Context, src DetailSource, issue *types.Issue
 		return nil, errors.New("build issue details: issue must not be nil")
 	}
 	id := issue.ID
-	details := types.NewIssueDetails(*issue)
+	var rows detailRows
 
-	details.Labels, _ = src.Labels(ctx, id, isWisp)
-	details.Dependencies, _ = src.Dependencies(ctx, id, isWisp)
+	rows.labels, _ = src.Labels(ctx, id, isWisp)
+	rows.dependencies, _ = src.Dependencies(ctx, id, isWisp)
 
 	// Aggregate counts - O(1) queries, no row materialization.
-	dependentCount, _ := src.CountDependents(ctx, id, isWisp)
-	details.DependentCount = &dependentCount
-	dependencyCount, _ := src.CountDependencies(ctx, id, isWisp)
-	details.DependencyCount = &dependencyCount
-	commentCount, _ := src.CountComments(ctx, id, isWisp)
-	details.CommentCount = &commentCount
+	rows.dependentCount, _ = src.CountDependents(ctx, id, isWisp)
+	rows.dependencyCount, _ = src.CountDependencies(ctx, id, isWisp)
+	rows.commentCount, _ = src.CountComments(ctx, id, isWisp)
 
 	if opts.IncludeDependents {
 		dependents, err := collectDependents(ctx, src, id, isWisp)
 		if err != nil {
 			return nil, err
 		}
-		details.Dependents = dependents
-		applyEpicProgress(details, dependents)
+		rows.dependents = dependents
 	}
 
 	if opts.IncludeComments {
@@ -141,8 +137,52 @@ func BuildIssueDetails(ctx context.Context, src DetailSource, issue *types.Issue
 		if err != nil {
 			return nil, err
 		}
-		details.Comments = comments
-	} else if commentCount > 0 {
+		rows.comments = comments
+	}
+
+	return assembleIssueDetails(issue, rows, opts), nil
+}
+
+// detailRows is the raw material ONE detail view is assembled from: what the
+// per-issue reads — or their batch form, storage.IssueDetailsBatch — answered
+// for one id.
+//
+// It is the seam that keeps a single definition of the view: BuildIssueDetails
+// fills it from a DetailSource one id at a time, BuildIssueDetailsBatch fills it
+// from a batch of rows, and both hand it to the same assembly below. A field
+// added to the view is added here once and reaches both callers, which is what
+// `bd show --json` needs: its batch path must answer exactly what its per-id
+// path answers (be-2wkz).
+type detailRows struct {
+	labels          []string
+	dependencies    []*types.IssueWithDependencyMetadata
+	dependentCount  int64
+	dependencyCount int64
+	commentCount    int64
+	dependents      []*types.IssueWithDependencyMetadata // already shallow
+	comments        []*types.Comment
+}
+
+// assembleIssueDetails shapes rows into the detail view. It performs no reads:
+// everything it publishes came in with its arguments.
+func assembleIssueDetails(issue *types.Issue, rows detailRows, opts DetailOptions) *types.IssueDetails {
+	details := types.NewIssueDetails(*issue)
+
+	details.Labels = rows.labels
+	details.Dependencies = rows.dependencies
+
+	details.DependentCount = &rows.dependentCount
+	details.DependencyCount = &rows.dependencyCount
+	details.CommentCount = &rows.commentCount
+
+	if opts.IncludeDependents {
+		details.Dependents = rows.dependents
+		applyEpicProgress(details, rows.dependents)
+	}
+
+	if opts.IncludeComments {
+		details.Comments = rows.comments
+	} else if rows.commentCount > 0 {
 		// ga-clgh: comment_count alone announces content exists without
 		// saying the representation is partial. Flag it explicitly so a
 		// caller reading only `.comments` doesn't read absence as "none".
@@ -171,7 +211,47 @@ func BuildIssueDetails(ctx context.Context, src DetailSource, issue *types.Issue
 		}
 		details.Dependencies = brief
 	}
-	return details, nil
+	return details
+}
+
+// BuildIssueDetailsBatch assembles the detail views for ids out of ONE batch of
+// rows read by a store (storage.IssueDetailsBatch). The answer is in request
+// order, one view per id that was found; an id the batch holds no row for is
+// named in notFound, in request order, rather than failing the whole call.
+//
+// It is the batch caller of assembleIssueDetails, so the view it returns is
+// BuildIssueDetails's — not a second one that happens to agree today.
+func BuildIssueDetailsBatch(batch *storage.IssueDetailsBatch, ids []string, opts DetailOptions) (details []*types.IssueDetails, notFound []string) {
+	for _, id := range ids {
+		issue, ok := batch.Issues[id]
+		if !ok || issue == nil {
+			notFound = append(notFound, id)
+			continue
+		}
+		var dependents []*types.IssueWithDependencyMetadata
+		if opts.IncludeDependents {
+			// The batch projection is already the shallow shape; shallowDep is
+			// applied anyway so this path keeps ONE definition of which fields
+			// a dependent publishes, and a wider projection added later cannot
+			// leak into the batch answer alone.
+			for _, dep := range batch.Dependents[id] {
+				if dep == nil {
+					continue
+				}
+				dependents = append(dependents, shallowDep(dep))
+			}
+		}
+		details = append(details, assembleIssueDetails(issue, detailRows{
+			labels:          issue.Labels,
+			dependencies:    batch.Dependencies[id],
+			dependentCount:  batch.DependentCounts[id],
+			dependencyCount: batch.DependencyCounts[id],
+			commentCount:    batch.CommentCounts[id],
+			dependents:      dependents,
+			comments:        batch.Comments[id],
+		}, opts))
+	}
+	return details, notFound
 }
 
 // shallowDep keeps the identity-and-shape fields callers consume and drops the

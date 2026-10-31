@@ -26,6 +26,10 @@ func (f *fakeIssueReader) Get(context.Context, issueops.GetRequest) (*issueops.I
 	f.calls++
 	return nil, f.err
 }
+func (f *fakeIssueReader) GetMany(context.Context, issueops.GetManyRequest) (issueops.GetManyResult, error) {
+	f.calls++
+	return issueops.GetManyResult{}, f.err
+}
 
 // readerDoltStore is a DoltStorage whose only real method is IssueReader, so a
 // test can see which reader the instrumented layer recursed into.

@@ -2,6 +2,7 @@ package uow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/steveyegge/beads/internal/storage/domain"
@@ -148,4 +149,41 @@ func (r *issueReader) Get(ctx context.Context, req publicops.GetRequest) (*publi
 			BriefDeps:         req.BriefDeps,
 		})
 	})
+}
+
+// GetMany answers the batch detail read ONE ID AT A TIME here, and that is a
+// statement about this seam rather than a shortcut: the domain use cases behind
+// a unit of work expose the detail read per id (IssueUseCase.GetIssue,
+// LabelUseCase.GetLabels, DependencyUseCase.ListWithIssueMetadata, ...), with
+// no batched counterpart to fold the list into. Batching them here would mean a
+// second implementation of the detail SQL inside this package, which is exactly
+// what the store seam's GetIssueDetailsBatch exists to avoid.
+//
+// The consequence is scope, not correctness: `bd show --json` — the caller this
+// method exists for — runs on the DIRECT route through storereader, where the
+// whole list is one query set. A caller on this seam gets the same ANSWER
+// (the same workapi assembly, field for field, which the reader contract test
+// pins on both seams) at the per-id cost.
+//
+// Misses are named in the result, as the contract says; any other failure
+// short-circuits, so a backend error never arrives as a shorter list.
+func (r *issueReader) GetMany(ctx context.Context, req publicops.GetManyRequest) (publicops.GetManyResult, error) {
+	result := publicops.GetManyResult{}
+	for _, id := range req.IDs {
+		details, err := r.Get(ctx, publicops.GetRequest{
+			ID:                id,
+			IncludeDependents: req.IncludeDependents,
+			IncludeComments:   req.IncludeComments,
+			BriefDeps:         req.BriefDeps,
+		})
+		if err != nil {
+			if errors.Is(err, publicops.ErrNotFound) {
+				result.NotFound = append(result.NotFound, id)
+				continue
+			}
+			return publicops.GetManyResult{}, err
+		}
+		result.Details = append(result.Details, details)
+	}
+	return result, nil
 }

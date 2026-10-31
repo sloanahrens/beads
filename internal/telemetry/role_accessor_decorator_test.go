@@ -199,6 +199,9 @@ func (*roleAccessorSentinel) List(context.Context, issueops.ListRequest) (issueo
 func (*roleAccessorSentinel) Get(context.Context, issueops.GetRequest) (*issueops.IssueDetails, error) {
 	return nil, nil
 }
+func (*roleAccessorSentinel) GetMany(context.Context, issueops.GetManyRequest) (issueops.GetManyResult, error) {
+	return issueops.GetManyResult{}, nil
+}
 func (*roleAccessorSentinel) Related(context.Context, issueops.RelatedRequest) ([]*issueops.RelatedIssue, error) {
 	return nil, nil
 }

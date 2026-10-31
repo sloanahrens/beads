@@ -505,6 +505,43 @@ type GetRequest struct {
 	BriefDeps bool
 }
 
+// GetManyRequest is the batch form of GetRequest: the same detail view, for a
+// list of ids, answerable as ONE query set per storage instead of one per id.
+// Every field means exactly what the same-named field of GetRequest means; the
+// detail view is one definition (workapi.BuildIssueDetails), and a batch that
+// answered it differently would be a second definition wearing the first one's
+// name.
+//
+// IDs are exact canonical ids under GetRequest.ID's rules — no fuzzy, prefix
+// or substring resolution, and the issue-to-wisp fallback happens inside.
+// Order is the caller's: the answer is in request order, and a repeated id is
+// answered twice, so a caller that resolves ids itself can hand this the list
+// it already holds.
+type GetManyRequest struct {
+	IDs []string
+
+	IncludeDependents bool
+	IncludeComments   bool
+	BriefDeps         bool
+}
+
+// GetManyResult is the batch answer.
+//
+// MISSES ARE DATA HERE, not an error, and that is the one place this differs
+// from Get. A batch that failed on its first absent id would make one stale id
+// hide every other answer the caller asked for, which is precisely the shape
+// `bd show a b c` must not have. So a miss is NAMED: NotFound lists the
+// requested ids that resolved to neither an issue nor a wisp, in request order,
+// and Details holds an entry for every other requested id, in request order.
+//
+// It is NOT a fail-open: a backend failure is still an error and still
+// short-circuits the whole call, so an unreadable store never arrives as a
+// shorter list that reads like "those ids do not exist".
+type GetManyResult struct {
+	Details  []*IssueDetails
+	NotFound []string
+}
+
 // IssuePage is one page of work. Ready and List share it deliberately: both
 // surfaces of both operations emit IssueWithCounts today, and a leaner page
 // type for ready would drift at the field level the moment anything compared
@@ -633,4 +670,30 @@ type Reader interface {
 	// wisp table — is ErrNotFound; a backend failure passes through unchanged
 	// and never decays into not-found.
 	Get(ctx context.Context, req GetRequest) (*IssueDetails, error)
+	// GetMany returns the SAME detail view for many ids. It is Get's batch
+	// form, which is why it lives here rather than in a role of its own: it is
+	// not a new capability, it is the same read asked once for a list, and the
+	// caller that asks it is the same front door that already owns Get. The
+	// rule above — a new capability gets a new role interface and its own
+	// accessor, never another method here — is about capabilities, and this
+	// adds none; it and Get share one definition of the view
+	// (workapi.BuildIssueDetails) and one set of options.
+	//
+	// The contract is Get's, field for field and id for id — the same detail
+	// view, the same exact-id rules, the same Counts/BriefDeps semantics — with
+	// one deliberate difference: a miss is NAMED IN THE RESULT (see
+	// GetManyResult) rather than being ErrNotFound for the whole call, because
+	// one stale id in a list must not hide every other answer.
+	//
+	// IT EXISTS FOR ONE REASON: `bd show --json` over hundreds of ids used to
+	// run Get's query set per id — about 10 statements each — and under load
+	// that is tens of milliseconds an id. What this contract PROMISES is the
+	// answer, and the answer must not depend on how the list was read. What
+	// the store-backed implementation also owes the command is the COST, and
+	// it pays it by reading the whole list as one query set — chunked IN lists
+	// for the id lists, one aggregate per row kind — which its own
+	// statement-count test pins (internal/storage/dolt). A seam without a
+	// batched read behind it may still answer per id, as long as it answers
+	// the same. A caller wanting a single id asks Get.
+	GetMany(ctx context.Context, req GetManyRequest) (GetManyResult, error)
 }

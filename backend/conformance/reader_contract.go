@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -1434,6 +1435,166 @@ func RunReaderGetDetailShapeMatchesTheSeededIssue(t *testing.T, ctx context.Cont
 	assertReaderCount(t, "DependencyCount", details.DependencyCount, 1)
 	assertReaderCount(t, "DependentCount", details.DependentCount, 0)
 	assertReaderCount(t, "CommentCount", details.CommentCount, 0)
+}
+
+// RunReaderGetManyAnswersTheBatchLikeGet pins GetMany against Get, id for id
+// and option for option: the batch form of the detail view must answer exactly
+// what the per-issue read answers, in REQUEST ORDER, and name the ids it could
+// not find instead of failing the whole call.
+//
+// THE COMPARISON IS ON THE PUBLISHED JSON, not on a field list, and that choice
+// is the point. be-2wkz replaced `bd show --json`'s per-id detail read with one
+// batch read and made byte-identical output the condition for doing it; a field
+// the batch path forgets (a label, the comments-omitted flag, an epic tally) is
+// precisely the failure a hand-written field list would miss, and precisely
+// what a caller of the CLI would see. The fixture therefore carries the awkward
+// cases on purpose: a labeled and an unlabeled issue, a wisp, an outgoing
+// edge with a full body, an incoming edge, and comments on both planes.
+func RunReaderGetManyAnswersTheBatchLikeGet(t *testing.T, ctx context.Context, fixture ReaderFixture) {
+	t.Helper()
+	subject := readerID(fixture, "getmany", "subject")
+	dependent := readerID(fixture, "getmany", "dependent")
+	blocker := readerID(fixture, "getmany", "blocker")
+	unlabelled := readerID(fixture, "getmany", "unlabelled")
+	wisp := readerID(fixture, "getmany", "wisp")
+
+	label := readerLabel(fixture, "getmany")
+	seeded := readerIssue(subject, types.TypeEpic, label)
+	seeded.Title = "a title the batch view must echo"
+	seeded.Priority = 1
+	seeded.Description = "a body the brief projection must keep on the issue itself"
+	seedReaderIssue(t, ctx, fixture, seeded)
+	seedReaderIssue(t, ctx, fixture, readerIssue(dependent, types.TypeBug, ""))
+	seedReaderIssue(t, ctx, fixture, readerIssue(blocker, types.TypeTask, ""))
+	seedReaderIssue(t, ctx, fixture, readerIssue(unlabelled, types.TypeTask, ""))
+	wispIssue := readerIssue(wisp, types.TypeTask, label)
+	wispIssue.Ephemeral = true
+	seedReaderWisp(t, ctx, fixture, wispIssue)
+
+	for _, edge := range []*types.Dependency{
+		{IssueID: subject, DependsOnID: blocker, Type: types.DepBlocks},
+		{IssueID: dependent, DependsOnID: subject, Type: types.DepParentChild},
+		{IssueID: wisp, DependsOnID: subject, Type: types.DepRelated},
+		{IssueID: subject, DependsOnID: wisp, Type: types.DepRelated},
+	} {
+		if err := fixture.AddDependency(ctx, edge, "seed"); err != nil {
+			t.Fatalf("seed edge %s -> %s: %v", edge.IssueID, edge.DependsOnID, err)
+		}
+	}
+	for _, c := range []struct{ id, text string }{
+		{subject, "one"},
+		{subject, "two"},
+		{wisp, "a wisp comment"},
+	} {
+		if err := fixture.AddComment(ctx, c.id, "seed", c.text); err != nil {
+			t.Fatalf("seed comment on %s: %v", c.id, err)
+		}
+	}
+
+	ids := []string{subject, dependent, wisp, unlabelled}
+	for _, opts := range []struct {
+		name                                          string
+		includeDependents, includeComments, briefDeps bool
+	}{
+		{"default", false, false, false},
+		{"brief deps", false, false, true},
+		{"comments", false, true, false},
+		{"dependents", true, false, false},
+		{"every option", true, true, true},
+	} {
+		t.Run(opts.name, func(t *testing.T) {
+			want := make([]string, 0, len(ids))
+			for _, id := range ids {
+				details, err := fixture.Reader.Get(ctx, publicops.GetRequest{
+					ID:                id,
+					IncludeDependents: opts.includeDependents,
+					IncludeComments:   opts.includeComments,
+					BriefDeps:         opts.briefDeps,
+				})
+				if err != nil {
+					t.Fatalf("Get(%s): %v", id, err)
+				}
+				want = append(want, readerDetailJSON(t, id, details))
+			}
+
+			answer, err := fixture.Reader.GetMany(ctx, publicops.GetManyRequest{
+				IDs:               ids,
+				IncludeDependents: opts.includeDependents,
+				IncludeComments:   opts.includeComments,
+				BriefDeps:         opts.briefDeps,
+			})
+			if err != nil {
+				t.Fatalf("GetMany: %v", err)
+			}
+			if len(answer.NotFound) != 0 {
+				t.Errorf("GetMany named %v as not found; every id was seeded", answer.NotFound)
+			}
+			if len(answer.Details) != len(ids) {
+				t.Fatalf("GetMany answered %d details, want %d", len(answer.Details), len(ids))
+			}
+			for i, details := range answer.Details {
+				if details == nil {
+					t.Errorf("GetMany answered a nil detail for %s", ids[i])
+					continue
+				}
+				if details.ID != ids[i] {
+					t.Errorf("GetMany answered %q in position %d, want request order (%q)", details.ID, i, ids[i])
+				}
+				if got := readerDetailJSON(t, ids[i], details); got != want[i] {
+					t.Errorf("GetMany's view of %s differs from Get's:\n GetMany: %s\n Get:     %s", ids[i], got, want[i])
+				}
+			}
+
+			// The batch must be sensitive to the option it was handed: the
+			// row lists it asks for are the ones the view carries.
+			batchDetails := answer.Details[0]
+			if batchDetails != nil {
+				if opts.includeDependents && len(batchDetails.Dependents) != 2 {
+					t.Errorf("GetMany with IncludeDependents returned %d dependent rows for %s, want 2", len(batchDetails.Dependents), ids[0])
+				}
+				if opts.includeComments && len(batchDetails.Comments) != 2 {
+					t.Errorf("GetMany with IncludeComments returned %d comments for %s, want 2", len(batchDetails.Comments), ids[0])
+				}
+			}
+		})
+	}
+
+	t.Run("a miss is named, not fatal", func(t *testing.T) {
+		missing := readerID(fixture, "getmany", "absent")
+		answer, err := fixture.Reader.GetMany(ctx, publicops.GetManyRequest{
+			IDs: []string{blocker, missing, unlabelled},
+		})
+		if err != nil {
+			t.Fatalf("GetMany with one absent id: %v", err)
+		}
+		if !slices.Equal(answer.NotFound, []string{missing}) {
+			t.Errorf("NotFound = %v, want [%s]: one absent id must not hide the others", answer.NotFound, missing)
+		}
+		got := make([]string, 0, len(answer.Details))
+		for _, details := range answer.Details {
+			got = append(got, details.ID)
+		}
+		if !slices.Equal(got, []string{blocker, unlabelled}) {
+			t.Errorf("Details = %v, want the two found ids in request order", got)
+		}
+		// The per-issue read still answers the absent id with ErrNotFound, so
+		// a caller that prefers one id at a time keeps the same outcome.
+		if _, err := fixture.Reader.Get(ctx, publicops.GetRequest{ID: missing}); !errors.Is(err, publicops.ErrNotFound) {
+			t.Errorf("Get on the absent id = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// readerDetailJSON is the published JSON of one detail view, which is the shape
+// the comparison in RunReaderGetManyAnswersTheBatchLikeGet makes: what a client
+// of `bd show --json` actually receives.
+func readerDetailJSON(t *testing.T, id string, details *publicops.IssueDetails) string {
+	t.Helper()
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		t.Fatalf("marshal the detail view of %s: %v", id, err)
+	}
+	return string(encoded)
 }
 
 // RunReaderDoesNotMutateTheCallerRequest is the role's single request-snapshot
