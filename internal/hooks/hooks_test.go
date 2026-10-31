@@ -331,39 +331,45 @@ func TestRunSync_KillsDescendants(t *testing.T) {
 
 	// RunSync returns only after cmd.Wait saw the hook's stdout pipe close,
 	// and the backgrounded sleep holds that pipe, so it has already exited.
-	// What /proc can still show for a moment under load is a process the group
-	// kill has signalled but has not yet been scheduled to die. Wait for the
-	// state this is about — not running — instead of sampling it once.
-	stopped, err := waitForStopped(
-		func() (bool, error) { return childStopped(pid) },
-		runtime.Gosched,
-		50000,
-	)
+	// What can still be seen under load is a process the group kill has
+	// signalled but the scheduler has not run yet. Wait on the exit itself,
+	// with the kernel: a pidfd becomes readable when the process terminates,
+	// so one poll on it is the whole wait — no spin, and no attempt count
+	// standing in for the child's own progress.
+	wait, closePidfd, err := pidfdExitWait(pid, pidfdExitTimeout)
+	if pidfdUnsupported(err) {
+		t.Skip("pidfd_open is unavailable on this kernel (Linux before 5.3); cannot wait for the child's exit")
+	}
 	if err != nil {
-		t.Fatalf("Failed to read state of child process %d: %v", pid, err)
+		t.Fatalf("Failed to open a pidfd for child %d: %v", pid, err)
+	}
+	defer closePidfd()
+
+	stopped, err := waitForStopped(wait, func() (bool, error) { return childStopped(pid) })
+	if err != nil {
+		t.Fatalf("Failed to wait for child process %d to exit: %v", pid, err)
 	}
 	if !stopped {
-		t.Fatalf("Child process %d still running after timeout", pid)
+		t.Fatalf("Child process %d still running after %v", pid, pidfdExitTimeout)
 	}
 }
 
-// waitForStopped polls step until it reports a stopped child, up to attempts
-// times, pausing between attempts. It returns false with no error when the
-// bound runs out with the child still running, and passes a read error back
-// without retrying it. The pause is injected so its own test can drive a fake
-// state sequence with no clock.
-func waitForStopped(step func() (bool, error), pause func(), attempts int) (bool, error) {
-	for i := 0; i < attempts; i++ {
-		stopped, err := step()
-		if err != nil {
-			return false, err
-		}
-		if stopped {
-			return true, nil
-		}
-		pause()
+// waitForStopped waits for the child to exit and then reports whether its
+// state confirms the child stopped. wait blocks on the child's exit — in the
+// descendants test a pidfd poll — and reports true when the child exited,
+// false when the wait timed out, or an error when the wait failed. state is
+// the single look at the child that the exit buys, and is read only once the
+// wait reports the exit. Both are injected so the rows below drive them with
+// fakes, with no clock and no sleep.
+func waitForStopped(wait func() (bool, error), state func() (bool, error)) (bool, error) {
+	exited, err := wait()
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	if !exited {
+		return false, nil
+	}
+	return state()
 }
 
 // childStopped reports whether the process is no longer running: reaped (gone),
@@ -389,75 +395,102 @@ func childStopped(pid int) (bool, error) {
 	return fields[0] == "Z" || fields[0] == "X", nil
 }
 
-// TestWaitForStopped_WaitsForAStoppedState pins the retry: a child that reads
-// as running twice and then stopped passes on the third read, with no clock.
-func TestWaitForStopped_WaitsForAStoppedState(t *testing.T) {
-	states := []bool{false, false, true}
-	reads, pauses := 0, 0
-	step := func() (bool, error) {
-		if reads >= len(states) {
-			return false, nil
-		}
-		stopped := states[reads]
-		reads++
-		return stopped, nil
-	}
-
-	stopped, err := waitForStopped(step, func() { pauses++ }, 10)
+// TestWaitForStopped_ReportsTheExit pins the wait path: the wait reports the
+// child's exit, and the one state read that follows is what is reported.
+func TestWaitForStopped_ReportsTheExit(t *testing.T) {
+	stateReads := 0
+	stopped, err := waitForStopped(
+		func() (bool, error) { return true, nil },
+		func() (bool, error) {
+			stateReads++
+			return true, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("waitForStopped returned an error: %v", err)
 	}
 	if !stopped {
-		t.Fatal("waitForStopped did not see the sequence reach a stopped state")
+		t.Fatal("waitForStopped did not report a stopped child after its exit")
 	}
-	if reads != 3 {
-		t.Errorf("read the state %d times, want 3", reads)
-	}
-	if pauses != 2 {
-		t.Errorf("paused %d times, want 2 (only between reads)", pauses)
+	if stateReads != 1 {
+		t.Errorf("read the child's state %d times, want 1", stateReads)
 	}
 }
 
-// TestWaitForStopped_GivesUpAfterTheBound pins the other half: a child that
-// never stops fails within the attempt bound instead of polling forever.
-func TestWaitForStopped_GivesUpAfterTheBound(t *testing.T) {
-	reads := 0
-	step := func() (bool, error) {
-		reads++
-		return false, nil
-	}
-
-	stopped, err := waitForStopped(step, func() {}, 5)
+// TestWaitForStopped_TimesOut pins the other half: a wait that times out with
+// the child still running fails the wait, and the state is not read for a child
+// that never exited.
+func TestWaitForStopped_TimesOut(t *testing.T) {
+	stateReads := 0
+	stopped, err := waitForStopped(
+		func() (bool, error) { return false, nil },
+		func() (bool, error) {
+			stateReads++
+			return true, nil
+		},
+	)
 	if err != nil {
 		t.Fatalf("waitForStopped returned an error: %v", err)
 	}
 	if stopped {
-		t.Fatal("a child that never stops was reported stopped")
+		t.Fatal("a wait that timed out was reported as a stopped child")
 	}
-	if reads != 5 {
-		t.Errorf("read the state %d times, want the bound of 5", reads)
+	if stateReads != 0 {
+		t.Errorf("read the child's state %d times after a timeout, want 0", stateReads)
 	}
 }
 
-// TestWaitForStopped_ReportsAReadError pins that an unreadable state fails the
-// wait rather than counting as stopped.
-func TestWaitForStopped_ReportsAReadError(t *testing.T) {
-	wantErr := errors.New("permission denied")
-	reads := 0
-	step := func() (bool, error) {
-		reads++
-		return false, wantErr
-	}
-
-	stopped, err := waitForStopped(step, func() {}, 5)
+// TestWaitForStopped_ReportsAWaitError pins that a failed wait fails the wait
+// rather than counting as stopped or as a timeout.
+func TestWaitForStopped_ReportsAWaitError(t *testing.T) {
+	wantErr := errors.New("pidfd_open: permission denied")
+	stateReads := 0
+	stopped, err := waitForStopped(
+		func() (bool, error) { return false, wantErr },
+		func() (bool, error) {
+			stateReads++
+			return true, nil
+		},
+	)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("waitForStopped error = %v, want %v", err, wantErr)
 	}
 	if stopped {
-		t.Fatal("a read error was reported as a stopped child")
+		t.Fatal("a wait error was reported as a stopped child")
 	}
-	if reads != 1 {
-		t.Errorf("read the state %d times after an error, want 1", reads)
+	if stateReads != 0 {
+		t.Errorf("read the child's state %d times after a wait error, want 0", stateReads)
+	}
+}
+
+// TestWaitForStopped_ReportsAStillRunningChild pins that the wait alone is not
+// the answer: a child whose state still reads as running is reported running.
+func TestWaitForStopped_ReportsAStillRunningChild(t *testing.T) {
+	stopped, err := waitForStopped(
+		func() (bool, error) { return true, nil },
+		func() (bool, error) { return false, nil },
+	)
+	if err != nil {
+		t.Fatalf("waitForStopped returned an error: %v", err)
+	}
+	if stopped {
+		t.Fatal("a child whose state still reads as running was reported stopped")
+	}
+}
+
+// TestWaitForStopped_ReportsAStateError pins that an unreadable state fails the
+// wait rather than counting as stopped.
+func TestWaitForStopped_ReportsAStateError(t *testing.T) {
+	wantErr := errors.New("permission denied")
+	stopped, err := waitForStopped(
+		func() (bool, error) { return true, nil },
+		func() (bool, error) { return false, wantErr },
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("waitForStopped error = %v, want %v", err, wantErr)
+	}
+	if stopped {
+		t.Fatal("a state error was reported as a stopped child")
 	}
 }
 
