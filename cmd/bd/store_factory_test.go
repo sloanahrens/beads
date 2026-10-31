@@ -19,6 +19,7 @@ import (
 // embedded default store to configure. The !cgo build's
 // store_factory_nocgo_test.go covers the same refusal.
 func TestNewDoltStoreFromConfig_NoMetadata(t *testing.T) {
+	clearAmbientDoltServerEnv(t)
 	beadsDir := t.TempDir()
 
 	_, err := newDoltStoreFromConfig(t.Context(), beadsDir)
