@@ -15,7 +15,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/cmd/bd/doctor"
-	"github.com/steveyegge/beads/cmd/bd/setup"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
@@ -338,7 +337,6 @@ has already created the database.
 With --stealth: configures per-repository git settings for invisible beads usage:
   • .git/info/exclude to prevent beads files from being committed
   Perfect for personal use without affecting repo collaborators.
-  To set up a specific AI tool, run: bd setup <claude|cursor|aider|...> --stealth
 
 beads runs against a dolt sql-server (server mode is the default; --server
 is accepted for compatibility). Set connection details with --server-host,
@@ -1906,29 +1904,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			} else {
 				renderOpts := agents.RenderOpts{HasRemote: shouldConfigureInitDoltRemote(syncURL, syncFromRemote, syncURLFromConfig, syncURLFromGitOrigin, isDoltLocalOnly()), NoPush: config.GetBool("no-push")}
 				addAgentsInstructions(resolvedAgentsFile, !quiet, agentsTemplate, agentsProfile, renderOpts)
-			}
-		}
-
-		// Auto-setup Claude hooks, Codex, and Cursor project integration. Skip in
-		// stealth mode or when agents are skipped.
-		if !stealth && !skipAgents && !isBareGitRepo() {
-			if err := setup.InstallClaudeProject(stealth); err != nil {
-				if !quiet {
-					fmt.Fprintf(os.Stderr, "Warning: failed to setup Claude hooks: %v\n", err)
-				}
-				// Non-fatal - continue with init
-			}
-			if err := setup.InstallCodexProject(); err != nil {
-				if !quiet {
-					fmt.Fprintf(os.Stderr, "Warning: failed to setup Codex integration: %v\n", err)
-				}
-				// Non-fatal - continue with init
-			}
-			if err := setup.InstallCursorProject(); err != nil {
-				if !quiet {
-					fmt.Fprintf(os.Stderr, "Warning: failed to setup Cursor integration: %v\n", err)
-				}
-				// Non-fatal - continue with init
 			}
 		}
 
