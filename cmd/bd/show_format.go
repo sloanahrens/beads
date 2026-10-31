@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -11,8 +12,34 @@ import (
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
-	"github.com/steveyegge/beads/internal/uimd"
+	"golang.org/x/term"
 )
+
+// formatShowSection renders one body section of bd show: the bold heading, then
+// the stored text exactly as written. Nothing is rendered as markdown, so what
+// a reader or agent sees is the text that was stored.
+func formatShowSection(heading, body string) string {
+	return fmt.Sprintf("\n%s\n%s\n", ui.RenderBold(heading), body)
+}
+
+// showWrapWidth reports the column width a metadata line may use before it
+// stops fitting on one line, or 0 in agent mode, where nothing is wrapped.
+func showWrapWidth() int {
+	if ui.IsAgentMode() {
+		return 0
+	}
+
+	// Cap at 100 chars for readability; wider lines are harder to scan.
+	const maxReadableWidth = 100
+	wrapWidth := 80
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		wrapWidth = w
+	}
+	if wrapWidth > maxReadableWidth {
+		wrapWidth = maxReadableWidth
+	}
+	return wrapWidth
+}
 
 // formatShortIssue returns a compact one-line representation of an issue
 // Format: STATUS_ICON ID PRIORITY [Type] Title
@@ -163,8 +190,7 @@ func formatIssueMetadata(issue *types.Issue) string {
 			if line := "Close reason: " + reason; fitsMetadataLine(line) {
 				lines = append(lines, ui.RenderMuted(line))
 			} else {
-				closeReasonSection = fmt.Sprintf("\n\n%s\n%s", ui.RenderBold("CLOSE REASON"),
-					strings.TrimRight(uimd.RenderMarkdown(reason), "\n"))
+				closeReasonSection = fmt.Sprintf("\n\n%s\n%s", ui.RenderBold("CLOSE REASON"), reason)
 			}
 		}
 	}
@@ -215,7 +241,7 @@ func fitsMetadataLine(s string) bool {
 	if strings.ContainsAny(s, "\n\r") {
 		return false
 	}
-	width := uimd.WrapWidth()
+	width := showWrapWidth()
 	return width == 0 || ansi.StringWidth(s) <= width
 }
 

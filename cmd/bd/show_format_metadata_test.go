@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/steveyegge/beads/internal/types"
-	"github.com/steveyegge/beads/internal/uimd"
 )
 
 // closedWithReason builds a closed issue whose remaining metadata lines — the
@@ -85,11 +84,9 @@ func TestFormatIssueMetadata_CloseReason(t *testing.T) {
 					t.Errorf("metadata line %q must precede the CLOSE REASON section, got:\n%s", trailing, out)
 				}
 			}
-			// Body text wraps; that is the whole point of promoting it.
-			for _, line := range strings.Split(out[sectionAt:], "\n") {
-				if ansi.StringWidth(line) > uimd.WrapWidth() {
-					t.Errorf("section line exceeds wrap width %d: %q", uimd.WrapWidth(), line)
-				}
+			// The reason prints as stored: no wrapping, no markdown rendering.
+			if want := strings.TrimSpace(reason); !strings.Contains(out[sectionAt:], want) {
+				t.Errorf("%s reason must print verbatim %q, got:\n%s", name, want, out)
 			}
 		})
 	}
