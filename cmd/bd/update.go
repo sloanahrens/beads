@@ -177,7 +177,10 @@ pointless).`,
 			return err
 		}
 		if descChanged {
-			if err := validateDescriptionUpdate(cmd, description, descChanged); err != nil {
+			// Refused before the per-issue loop: an empty description would
+			// silently un-shape every bead named here, and the value is often
+			// a substitution that expanded to nothing (be-neiv).
+			if err := validateUpdateDescription(cmd, args, description, descChanged); err != nil {
 				return HandleErrorRespectJSON("%v", err)
 			}
 			updates["description"] = description
@@ -982,7 +985,7 @@ func init() {
 	updateCmd.Flags().StringP("type", "t", "", "New type (bug|feature|task|epic|chore|decision|spike|story|milestone); custom types require types.custom config; aliases: enhancement/feat→feature, dec/adr→decision")
 	registerCommonIssueFlags(updateCmd)
 	updateCmd.Flags().Lookup("notes").Usage = "Additional notes (replaces existing notes; use --append-notes to append)"
-	updateCmd.Flags().Bool("allow-empty-description", false, "Allow empty description replacement when reading from stdin or file")
+	updateCmd.Flags().Bool("allow-empty-description", false, "Allow an empty or whitespace-only description replacement (refused by default)")
 	updateCmd.Flags().String("spec-id", "", "Link to specification document")
 	updateCmd.Flags().String("acceptance-criteria", "", "DEPRECATED: use --acceptance")
 	_ = updateCmd.Flags().MarkHidden("acceptance-criteria") // Only fails if flag missing (caught in tests)
