@@ -7,27 +7,20 @@ How to use beads with Claude Code.
 
 ## Setup
 
-### Quick Setup
+Two layers cover Claude Code: the [beads plugin](/integrations/claude-code-plugin), which ships the session hook and the `/beads` slash commands, and the `AGENTS.md` instructions `bd init` writes.
+
+### Plugin Setup (Recommended)
 
 ```bash
-bd setup claude
+# In Claude Code
+/plugin marketplace add gastownhall/beads
+/plugin install beads
+# Restart Claude Code
 ```
 
-This installs:
-- **SessionStart hook** - Runs `bd prime --hook-json` when a session starts. SessionStart also fires after context compaction, so the same hook refreshes context automatically.
-- **CLAUDE.md pointer** - A minimal beads section in your project's `CLAUDE.md` (skipped if `CLAUDE.md` is a symlink).
+The plugin's `SessionStart` hook runs `bd prime --hook-json`, so the workflow context loads when a session starts, resumes, or clears — SessionStart fires again after context compaction, which means the same hook refreshes context automatically.
 
-By default the hook is written to the project's `.claude/settings.json`. Variants:
-
-```bash
-bd setup claude --global   # Install to ~/.claude/settings.json instead
-bd setup claude --stealth  # Stealth mode: flush only, no git operations
-bd setup claude --remove   # Remove the hook and the CLAUDE.md section
-```
-
-If the [beads plugin](/integrations/claude-code-plugin) is enabled, `bd setup claude` skips writing hooks - the plugin provides its own, and duplicates would run `bd prime` twice per session.
-
-### Manual Setup
+### Hook Setup Without the Plugin
 
 Add to `.claude/settings.json` (project) or `~/.claude/settings.json` (global):
 
@@ -48,10 +41,21 @@ Add to `.claude/settings.json` (project) or `~/.claude/settings.json` (global):
 
 The `--hook-json` flag wraps the output in the hook JSON envelope Claude Code expects. No `PreCompact` hook is needed - SessionStart fires again after compaction.
 
+### Instructions
+
+Run `bd init` to write the managed beads section into `AGENTS.md`, which Claude Code reads at session start. Pass `--agents-file CLAUDE.md` to write it there instead:
+
+```bash
+bd init
+bd init --agents-file CLAUDE.md
+```
+
+Already initialized? `bd init` refuses to rerun, so use `bd onboard` and paste the snippet it prints into `AGENTS.md` (or `CLAUDE.md`).
+
 ### Verify Setup
 
 ```bash
-bd setup claude --check
+bd prime --hook-json   # Prints the envelope the hook returns
 ```
 
 ## How It Works
@@ -178,8 +182,8 @@ Adds slash commands:
 ### Context not injected
 
 ```bash
-# Check hook setup
-bd setup claude --check
+# Check the hook returns JSON
+bd prime --hook-json
 
 # Manually prime
 bd prime

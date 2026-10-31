@@ -213,13 +213,15 @@ Both are instantiated workflows made of real beads. **Molecules** (`bd mol pour`
 
 ### How do I integrate with my editor?
 
+Integration is three independent layers, and you take the ones your tool supports:
+
 ```bash
-bd setup claude   # Claude Code
-bd setup cursor   # Cursor
-bd setup aider    # Aider
+bd init                  # Instructions: managed section in AGENTS.md
+bd prime --hook-json     # Session context: what a SessionStart hook runs
+bd hooks install --beads # Git hooks (bd init installs them too)
 ```
 
-`bd setup` also supports copilot, gemini, factory, codex, mux, opencode, junie, windsurf, cody, and kilocode. See [IDE Setup](/getting-started/ide-setup) and the [integrations index](/integrations/index).
+Any AGENTS.md-aware tool — Codex, Cursor, Factory Droid, Mux, OpenCode — reads the instruction section with no further setup. Tools with their own instruction file get the same guidance in that file, and tools that can run a session-start hook also get `bd prime` context. See [IDE Setup](/getting-started/ide-setup) for the per-tool pages and the [integrations index](/integrations/index).
 
 ### Can beads import from GitHub Issues?
 

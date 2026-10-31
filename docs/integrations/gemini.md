@@ -1,35 +1,50 @@
 ---
 title: Gemini CLI
-description: Set up beads for Gemini CLI with SessionStart hooks that run bd prime and GEMINI.md workflow guidance
+description: Set up beads for Gemini CLI with a SessionStart hook that runs bd prime and GEMINI.md workflow guidance
 ---
 
-Use Beads with Gemini CLI through SessionStart hooks and `GEMINI.md` guidance.
+Use Beads with Gemini CLI through a `SessionStart` hook and `GEMINI.md`
+guidance.
 
-```bash
-bd setup gemini
-bd setup gemini --check
+Gemini CLI requires hook stdout to be valid JSON, so the hook runs
+`bd prime --hook-json`, which wraps the workflow context in the envelope Gemini
+expects. Add it to your Gemini settings — `~/.gemini/settings.json` for a
+global install, `.gemini/settings.json` for a project-local one:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "bd prime --hook-json" }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-By default, setup installs global hooks in `~/.gemini/settings.json`. For project-local hooks, use:
+Then write the instruction layer. Run `bd init` for the managed `AGENTS.md`
+section and copy it into `GEMINI.md`, or pass the filename directly:
 
 ```bash
-bd setup gemini --project
+bd init --agents-file GEMINI.md
 ```
 
-The hook runs `bd prime --hook-json` so Gemini receives compact Beads workflow context at session start. The setup also writes Beads guidance to `GEMINI.md`.
+Already initialized? `bd init` refuses to rerun, so copy the beads section from
+`AGENTS.md` into `GEMINI.md`, or paste the snippet `bd onboard` prints.
 
-## Stealth Mode
-
-For CI or other environments where setup should avoid git operations:
+## Verify
 
 ```bash
-bd setup gemini --stealth
-bd setup gemini --project --stealth
+bd prime --hook-json    # Prints the JSON envelope the hook returns
 ```
 
-## Remove
+Restart Gemini CLI after changing settings, then start a session and ask what
+work is ready.
 
-```bash
-bd setup gemini --remove
-bd setup gemini --project --remove
-```
+## Related
+
+- [IDE Setup](/getting-started/ide-setup) — the three integration layers

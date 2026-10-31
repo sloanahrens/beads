@@ -279,35 +279,27 @@ The recommended approach for Claude Code, Cursor, Windsurf, and other editors wi
 # 1. Install bd CLI (see Quick Install above)
 brew install beads
 
-# 2. Initialize in your project
+# 2. Initialize in your project: AGENTS.md instructions + git hooks
 cd your-project
 bd init --quiet
 
-# 3. Setup editor integration (choose one)
-bd setup claude   # Claude Code - installs SessionStart hooks
-bd setup copilot  # GitHub Copilot CLI - creates .copilot-plugin/plugin.json + .github/copilot-instructions.md
-bd setup cursor   # Cursor IDE - creates .cursor/rules/beads.mdc
-bd setup aider    # Aider - creates .aider.conf.yml
-bd setup codex    # Codex CLI - installs Beads skill, AGENTS.md guidance, and native hooks
-bd setup factory  # Factory.ai Droid - creates/updates AGENTS.md
-bd setup mux      # Mux - creates/updates AGENTS.md
+# 3. Add session context: wire this command into your tool's SessionStart hook
+bd prime --hook-json
 ```
 
 **How it works:**
-- `bd init` creates or updates `AGENTS.md` and installs project Claude/Codex integrations by default unless you use `--skip-agents` or `--stealth`
-- Editor hooks/rules inject `bd prime` automatically on session start
-- Codex 0.129.0+ uses native `/hooks`: SessionStart injects `bd prime`, compact hooks mark context stale, and the next prompt after compaction refreshes Beads context once
-- `bd prime` provides ~1-2k tokens of workflow context
-- You use `bd` CLI commands directly
-- Git hooks (installed by `bd init`) refresh exports and legacy fallbacks; `bd dolt push/pull` syncs the database
-- `bd onboard` prints the small manual snippet for unsupported agents or custom instruction files
+- `bd init` writes a managed section into `AGENTS.md` and installs git hooks, unless you use `--skip-agents` or `--skip-hooks`
+- Any AGENTS.md-aware tool reads that section with no further setup; tools with their own instruction file need the same guidance there
+- A `SessionStart` hook running `bd prime --hook-json` injects ~1-2k tokens of workflow context at session start; the [Claude Code plugin](/integrations/claude-code-plugin) ships one for Claude Code
+- Git hooks refresh exports and legacy fallbacks; `bd dolt push/pull` syncs the database
+- `bd onboard` prints the small manual snippet for agents that read a different instruction file
 
 **Why this is recommended:**
 - **Context efficient** - ~1-2k tokens vs 10-50k for MCP tool schemas
 - **Lower latency** - Direct CLI calls, no MCP protocol overhead
 - **Universal** - Works with any editor that has shell access
 
-**Verify installation:** every recipe supports a check flag, e.g. `bd setup claude --check` or `bd setup copilot --check`.
+**Verify installation:** `bd prime` prints the workflow context, and `bd hooks list` shows the installed git hooks. [IDE Setup](/getting-started/ide-setup) covers the three layers in full and links every supported tool.
 
 ### Claude Code Plugin (Optional)
 
@@ -330,14 +322,7 @@ See [Claude Code Plugin](/integrations/claude-code-plugin) for complete plugin d
 
 For **VS Code with GitHub Copilot**, install the MCP server (`uv tool install beads-mcp`) and create `.vscode/mcp.json` in your project — or add it to the VS Code user-level MCP config to enable it for all projects. See [GitHub Copilot](/integrations/github-copilot) for the complete setup guide, including the user-level config paths per platform.
 
-For the **GitHub Copilot CLI** terminal integration:
-
-```bash
-bd setup copilot         # Install project Copilot plugin + repository instructions
-bd setup copilot --check # Verify the project integration files exist
-```
-
-This setup is currently project-scoped only. It writes `.copilot-plugin/plugin.json` and `.github/copilot-instructions.md`; there is no separate `--global` or `--project` mode for Copilot today, and it does not manage `~/.copilot/...` paths. See [Copilot CLI](/integrations/copilot-cli) for the full guide.
+For the **GitHub Copilot CLI** terminal integration, copy the shared plugin manifest (`.copilot-plugin/plugin.json`) and the repository instructions (`.github/copilot-instructions.md`) into your project. See [Copilot CLI](/integrations/copilot-cli) for the file contents and the hook behavior.
 
 ### MCP Server (Alternative)
 
@@ -521,5 +506,5 @@ After installation:
 
 1. **Initialize a project**: `cd your-project && bd init`
 2. **Learn the basics**: See [Quick Start](/getting-started/quickstart)
-3. **Configure your agent**: See [IDE Setup](/getting-started/ide-setup), or run `bd setup --list`
+3. **Configure your agent**: See [IDE Setup](/getting-started/ide-setup) for the instructions, session-context, and git-hook layers
 4. **Explore examples**: Check out the [examples/](https://github.com/gastownhall/beads/tree/main/examples) directory

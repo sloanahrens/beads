@@ -15,12 +15,10 @@ This is the shared Claude/Codex plugin package for Beads. Claude and Codex use s
 The Codex plugin exposes native hooks through `.codex-plugin/plugin.json`, which points at `.codex-plugin/hooks/hooks.json`.
 With Codex 0.129.0+, `/hooks` shows these lifecycle handlers:
 
-- `SessionStart` runs `bd codex-hook SessionStart` for `startup|resume|clear` and injects full `bd prime` output.
-- `PreCompact` runs `bd codex-hook PreCompact` for `manual|auto` and warns if `bd prime --memories-only` cannot run.
-- `PostCompact` runs `bd codex-hook PostCompact` for `manual|auto` and records a one-shot refresh marker in the user cache/temp directory.
-- `UserPromptSubmit` runs `bd codex-hook UserPromptSubmit` and, when a refresh marker exists, injects full `bd prime` output once before clearing it.
+- `SessionStart` runs `bd prime` for `startup|resume|clear` and injects full workflow context.
+- `PreCompact` runs `bd prime --memories-only` for `manual|auto` and warns if the memories cannot be read.
 
-If the plugin is not installed, `bd setup codex` writes an equivalent `.codex/hooks.json` fallback and enables `[features].hooks = true`.
+The plugin is the only source of these hooks; there is no fallback installer.
 
 ## Local Development
 
