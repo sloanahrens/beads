@@ -29,7 +29,7 @@ freshness source.
 | `CLI_REFERENCE.md` | Generated from `bd help --all`. |
 | `plugins/beads/skills/beads/resources/CLI_REFERENCE.md` | Pointer-only doc: must link to live CLI help and canonical generated `docs/CLI_REFERENCE.md`; do not duplicate generated command tables. |
 | `reference/configuration.md` | `Last reviewed:` marker tied to `cmd/bd/main.go`, `cmd/bd/config.go`, and `internal/configfile/`. (Mintlify port: absorbed `CONFIG.md`.) |
-| `getting-started/ide-setup.md` | `Last reviewed:` marker tied to `cmd/bd/setup*.go` and `internal/recipes/`. (Mintlify port: absorbed `SETUP.md`.) |
+| `getting-started/ide-setup.md` | `Last reviewed:` marker tied to the `bd init` agent-instructions code, `bd prime`, the AGENTS.md templates, and the Claude Code plugin. (Mintlify port: absorbed `SETUP.md`.) |
 | `reference/json-schema.md` | `Last reviewed:` marker tied to `cmd/bd/output.go`, `cmd/bd/errors.go`, and protocol tests. (Mintlify port: was `JSON_SCHEMA.md`.) |
 | `recovery/init-safety.md` | `Last reviewed:` marker tied to `cmd/bd/init*.go` safety code and tests. (Mintlify port: was `RECOVERY.md`.) |
 | `ERROR_HANDLING.md` | `Last reviewed:` marker tied to current command error exits and JSON error helpers. |
