@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 // Fast CLI tests converted from scripttest suite
@@ -132,19 +135,48 @@ func cliTestDatabaseName(testName, suffix string) string {
 // server database, and the first test's project id then refuses every later
 // test's metadata.json with PROJECT IDENTITY MISMATCH. Other commands, and an
 // init that names its database with --database or --database=, come back as
-// given.
+// given. The command is the first argument that is not a flag, so an init that
+// follows a global flag such as --json is still recognised.
+//
+// When a database is added and a test server is running, the database is dropped
+// in t.Cleanup, so a test run leaves nothing behind on the shared server. The
+// drop is DROP DATABASE IF EXISTS, so an init that failed before creating it is
+// not an error.
 func withUniqueInitDatabase(t *testing.T, args []string) []string {
 	t.Helper()
-	if len(args) == 0 || args[0] != "init" {
+	if !initNamesNoDatabase(args) {
 		return args
 	}
-	for _, a := range args[1:] {
-		if a == "--database" || strings.HasPrefix(a, "--database=") {
-			return args
-		}
+	dbName := newCLITestDatabaseName(t, t.Name())
+	if testDoltServerPort != 0 {
+		t.Cleanup(func() {
+			if err := dropDatabaseOnServer(dbName, testDoltServerPort, false); err != nil {
+				t.Errorf("Failed to drop test database %s: %v", dbName, err)
+			}
+		})
 	}
 	withDB := append([]string(nil), args...)
-	return append(withDB, "--database", newCLITestDatabaseName(t, t.Name()))
+	return append(withDB, "--database", dbName)
+}
+
+// initNamesNoDatabase reports whether args run bd init without --database.
+func initNamesNoDatabase(args []string) bool {
+	cmdAt := -1
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			cmdAt = i
+			break
+		}
+	}
+	if cmdAt < 0 || args[cmdAt] != "init" {
+		return false
+	}
+	for _, a := range args[cmdAt+1:] {
+		if a == "--database" || strings.HasPrefix(a, "--database=") {
+			return false
+		}
+	}
+	return true
 }
 
 func TestWithUniqueInitDatabase(t *testing.T) {
@@ -156,6 +188,12 @@ func TestWithUniqueInitDatabase(t *testing.T) {
 		again := withUniqueInitDatabase(t, []string{"init", "--prefix", "test", "--quiet"})
 		if got[5] == again[5] {
 			t.Fatalf("two inits got the same database %q", got[5])
+		}
+	})
+	t.Run("an init after a global flag is recognised", func(t *testing.T) {
+		got := withUniqueInitDatabase(t, []string{"--json", "init", "--prefix", "test"})
+		if len(got) != 6 || got[4] != "--database" {
+			t.Fatalf("args = %v, want --database added after the init flags", got)
 		}
 	})
 	t.Run("the caller's slice is not written through", func(t *testing.T) {
@@ -178,6 +216,40 @@ func TestWithUniqueInitDatabase(t *testing.T) {
 				t.Fatalf("args = %v, want %v", got, args)
 			}
 		})
+	}
+}
+
+// TestWithUniqueInitDatabaseDropsItsDatabase proves the cleanup the helper
+// registers removes the database an init created: the subtest creates the named
+// database the way bd init would, and the database must be gone once it ends.
+func TestWithUniqueInitDatabaseDropsItsDatabase(t *testing.T) {
+	if testDoltServerPort == 0 {
+		t.Skip("Dolt test server not running")
+	}
+	var dbName string
+	t.Run("init", func(t *testing.T) {
+		args := withUniqueInitDatabase(t, []string{"init", "--prefix", "test"})
+		dbName = args[len(args)-1]
+		db, err := sql.Open("mysql", doltutil.ServerDSN{Host: "127.0.0.1", Port: testDoltServerPort, User: "root"}.String())
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer db.Close()
+		if _, err := db.Exec(fmt.Sprintf("CREATE DATABASE `%s`", dbName)); err != nil {
+			t.Fatalf("create %s: %v", dbName, err)
+		}
+	})
+	db, err := sql.Open("mysql", doltutil.ServerDSN{Host: "127.0.0.1", Port: testDoltServerPort, User: "root"}.String())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?", dbName).Scan(&n); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("database %s still on the server after its test ended", dbName)
 	}
 }
 
