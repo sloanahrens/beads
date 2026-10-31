@@ -126,6 +126,61 @@ func cliTestDatabaseName(testName, suffix string) string {
 	return cliTestDatabaseNamePrefix + readable + "_" + suffix
 }
 
+// withUniqueInitDatabase returns args with a database of its own added when they
+// run bd init and name none. Without --database, bd init takes the database
+// named from the prefix, so every test that inits with --prefix test shares one
+// server database, and the first test's project id then refuses every later
+// test's metadata.json with PROJECT IDENTITY MISMATCH. Other commands, and an
+// init that names its database with --database or --database=, come back as
+// given.
+func withUniqueInitDatabase(t *testing.T, args []string) []string {
+	t.Helper()
+	if len(args) == 0 || args[0] != "init" {
+		return args
+	}
+	for _, a := range args[1:] {
+		if a == "--database" || strings.HasPrefix(a, "--database=") {
+			return args
+		}
+	}
+	withDB := append([]string(nil), args...)
+	return append(withDB, "--database", newCLITestDatabaseName(t, t.Name()))
+}
+
+func TestWithUniqueInitDatabase(t *testing.T) {
+	t.Run("an init that names no database gets a test database of its own", func(t *testing.T) {
+		got := withUniqueInitDatabase(t, []string{"init", "--prefix", "test", "--quiet"})
+		if len(got) != 6 || got[4] != "--database" || !strings.HasPrefix(got[5], cliTestDatabaseNamePrefix) {
+			t.Fatalf("args = %v, want the init flags then --database %s<name>", got, cliTestDatabaseNamePrefix)
+		}
+		again := withUniqueInitDatabase(t, []string{"init", "--prefix", "test", "--quiet"})
+		if got[5] == again[5] {
+			t.Fatalf("two inits got the same database %q", got[5])
+		}
+	})
+	t.Run("the caller's slice is not written through", func(t *testing.T) {
+		in := make([]string, 3, 8)
+		copy(in, []string{"init", "--prefix", "x"})
+		withUniqueInitDatabase(t, in)
+		if got := in[:8][3]; got != "" {
+			t.Fatalf("append wrote %q into the caller's backing array", got)
+		}
+	})
+	for name, args := range map[string][]string{
+		"--database given":    {"init", "--database", "mine"},
+		"--database= given":   {"init", "--database=mine"},
+		"another command":     {"create", "title"},
+		"no arguments at all": nil,
+	} {
+		t.Run(name+" is left as it is", func(t *testing.T) {
+			got := withUniqueInitDatabase(t, args)
+			if strings.Join(got, " ") != strings.Join(args, " ") {
+				t.Fatalf("args = %v, want %v", got, args)
+			}
+		})
+	}
+}
+
 // workspaceEnvVars are the variables that point bd at a workspace or database
 // other than the one in the working directory.
 var workspaceEnvVars = []string{"BEADS_DIR", "BEADS_DB", "BD_DB"}
@@ -1464,7 +1519,7 @@ func init() {
 func runBDExec(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command(testBD, args...)
+	cmd := exec.Command(testBD, withUniqueInitDatabase(t, args)...)
 	cmd.Dir = dir
 	cmd.Env = withoutWorkspaceEnv(os.Environ())
 

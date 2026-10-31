@@ -52,7 +52,7 @@ func initBeadsWorkspace(t *testing.T, binPath, workDir string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binPath, "init", "--prefix", "test")
+	cmd := exec.CommandContext(ctx, binPath, withUniqueInitDatabase(t, []string{"init", "--prefix", "test"})...)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(),
 		"HOME="+t.TempDir(),
