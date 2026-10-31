@@ -57,7 +57,15 @@ func TestReopenIssueInTxRetriesConditionalUpdateWhenLatestStatusIsCustomDone(t *
 	mock.ExpectQuery(`(?s)SELECT id FROM events`).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectExec(`(?s)INSERT INTO events`).WillReturnResult(sqlmock.NewResult(0, 1))
+	// The reopen's derived-state recompute narrows each statement to its
+	// candidates first (be-gxe3), so each UPDATE is preceded by a cheap select.
+	expectBlockedCandidate := func() {
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT i.id FROM issues i")).WithArgs(id).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(id))
+	}
+	expectBlockedCandidate()
 	mock.ExpectExec(`(?s)UPDATE issues i SET`).WillReturnResult(sqlmock.NewResult(0, 0))
+	expectBlockedCandidate()
 	mock.ExpectExec(`(?s)UPDATE issues i SET`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
