@@ -22,7 +22,6 @@ func TestFormulaPrimitiveExamples(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		vars   map[string]string // non-nil enables Step.Condition filtering with formula defaults merged in
 		assert func(t *testing.T, sg *TemplateSubgraph)
 	}{
 		{
@@ -40,32 +39,6 @@ func TestFormulaPrimitiveExamples(t *testing.T) {
 				}
 				if !hasBlockingDep(sg, "children-epic.ship-feature.polish", "children-epic.ship-feature.draft") {
 					t.Errorf("polish must block on draft; deps: %v", allDeps(sg))
-				}
-			},
-		},
-		{
-			name: "condition",
-			vars: map[string]string{}, // trigger filtering with formula's deploy=false default
-			assert: func(t *testing.T, sg *TemplateSubgraph) {
-				children := childIssueIDs(sg, "condition")
-				if len(children) != 2 {
-					t.Errorf("default deploy=false → want 2 child issues, got %d: %v", len(children), children)
-				}
-				if hasIssueID(sg, "condition.deploy") {
-					t.Error("deploy must be excluded when deploy=false")
-				}
-			},
-		},
-		{
-			name: "condition-true",
-			vars: map[string]string{"deploy": "true"},
-			assert: func(t *testing.T, sg *TemplateSubgraph) {
-				children := childIssueIDs(sg, "condition")
-				if len(children) != 3 {
-					t.Errorf("deploy=true → want 3 child issues, got %d: %v", len(children), children)
-				}
-				if !hasIssueID(sg, "condition.deploy") {
-					t.Error("deploy must be included when deploy=true")
 				}
 			},
 		},
@@ -88,14 +61,12 @@ func TestFormulaPrimitiveExamples(t *testing.T) {
 
 	registered := map[string]bool{}
 	for _, c := range cases {
-		// "condition-true" is a second pass on the "condition" fixture.
-		formulaName := strings.TrimSuffix(c.name, "-true")
-		registered[formulaName] = true
+		registered[c.name] = true
 
 		t.Run(c.name, func(t *testing.T) {
-			sg, err := resolveAndCookFormulaWithVars(formulaName, []string{primDir}, c.vars)
+			sg, err := resolveAndCookFormulaWithVars(c.name, []string{primDir}, nil)
 			if err != nil {
-				t.Fatalf("cook %q: %v", formulaName, err)
+				t.Fatalf("cook %q: %v", c.name, err)
 			}
 			c.assert(t, sg)
 		})

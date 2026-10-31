@@ -102,10 +102,12 @@ Output (--persist):
 
 // cookResult holds the result of cooking a formula
 type cookResult struct {
-	ProtoID    string   `json:"proto_id"`
-	Formula    string   `json:"formula"`
-	Created    int      `json:"created"`
-	Variables  []string `json:"variables"`
+	ProtoID   string   `json:"proto_id"`
+	Formula   string   `json:"formula"`
+	Created   int      `json:"created"`
+	Variables []string `json:"variables"`
+	// BondPoints is never set: formulas no longer declare bond points
+	// (be-2gw.8). The field stays so the cook output shape is unchanged.
 	BondPoints []string `json:"bond_points,omitempty"`
 }
 
@@ -195,7 +197,7 @@ func loadAndResolveFormula(formulaPath string, searchPaths []string) (*formula.F
 	resolved.Steps = inlineExpandedSteps
 
 	// Apply expansion operators
-	if resolved.Compose != nil && (len(resolved.Compose.Expand) > 0 || len(resolved.Compose.Map) > 0) {
+	if resolved.Compose != nil && len(resolved.Compose.Expand) > 0 {
 		expandedSteps, err := formula.ApplyExpansions(resolved.Steps, resolved.Compose, parser)
 		if err != nil {
 			return nil, fmt.Errorf("applying expansions: %w", err)
@@ -247,7 +249,7 @@ func loadFormulaByNameOrPath(parser *formula.Parser, nameOrPath string) (*formul
 }
 
 // outputCookDryRun displays a dry-run preview of what would be cooked
-func outputCookDryRun(resolved *formula.Formula, protoID string, runtimeMode bool, inputVars map[string]string, vars, bondPoints []string) {
+func outputCookDryRun(resolved *formula.Formula, protoID string, runtimeMode bool, inputVars map[string]string, vars []string) {
 	modeLabel := "compile-time"
 	if runtimeMode {
 		modeLabel = "runtime"
@@ -280,10 +282,6 @@ func outputCookDryRun(resolved *formula.Formula, protoID string, runtimeMode boo
 		for name, value := range inputVars {
 			fmt.Printf("  {{%s}} = %s\n", name, value)
 		}
-	}
-
-	if len(bondPoints) > 0 {
-		fmt.Printf("Bond points: %s\n", strings.Join(bondPoints, ", "))
 	}
 
 	// Show variable definitions (more useful in compile-time mode)
@@ -338,7 +336,7 @@ func outputCookEphemeral(resolved *formula.Formula, runtimeMode bool, inputVars 
 }
 
 // persistCookFormula creates a proto bead in the database (persist mode)
-func persistCookFormula(ctx context.Context, resolved *formula.Formula, protoID string, force bool, vars, bondPoints []string) error {
+func persistCookFormula(ctx context.Context, resolved *formula.Formula, protoID string, force bool, vars []string) error {
 	// Check if proto already exists
 	existingProto, err := store.GetIssue(ctx, protoID)
 	if err == nil && existingProto != nil {
@@ -359,11 +357,10 @@ func persistCookFormula(ctx context.Context, resolved *formula.Formula, protoID 
 
 	if jsonOutput {
 		return outputJSON(cookResult{
-			ProtoID:    result.ProtoID,
-			Formula:    resolved.Formula,
-			Created:    result.Created,
-			Variables:  vars,
-			BondPoints: bondPoints,
+			ProtoID:   result.ProtoID,
+			Formula:   resolved.Formula,
+			Created:   result.Created,
+			Variables: vars,
 		})
 	}
 
@@ -371,9 +368,6 @@ func persistCookFormula(ctx context.Context, resolved *formula.Formula, protoID 
 	fmt.Printf("  Created %d issues\n", result.Created)
 	if len(vars) > 0 {
 		fmt.Printf("  Variables: %s\n", strings.Join(vars, ", "))
-	}
-	if len(bondPoints) > 0 {
-		fmt.Printf("  Bond points: %s\n", strings.Join(bondPoints, ", "))
 	}
 	fmt.Printf("\nTo use: bd mol pour %s --var <name>=<value>\n", result.ProtoID)
 	return nil
@@ -419,15 +413,9 @@ func runCook(cmd *cobra.Command, args []string) error {
 	}
 
 	vars := formula.ExtractVariables(resolved)
-	var bondPoints []string
-	if resolved.Compose != nil {
-		for _, bp := range resolved.Compose.BondPoints {
-			bondPoints = append(bondPoints, bp.ID)
-		}
-	}
 
 	if flags.dryRun {
-		outputCookDryRun(resolved, protoID, flags.runtimeMode, flags.inputVars, vars, bondPoints)
+		outputCookDryRun(resolved, protoID, flags.runtimeMode, flags.inputVars, vars)
 		return nil
 	}
 
@@ -438,7 +426,7 @@ func runCook(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := persistCookFormula(rootCtx, resolved, protoID, flags.force, vars, bondPoints); err != nil {
+	if err := persistCookFormula(rootCtx, resolved, protoID, flags.force, vars); err != nil {
 		return HandleError("%v", err)
 	}
 	return nil
@@ -720,9 +708,8 @@ func resolveAndCookFormula(formulaName string, searchPaths []string) (*TemplateS
 	return resolveAndCookFormulaWithVars(formulaName, searchPaths, nil)
 }
 
-// resolveAndCookFormulaWithVars loads a formula and optionally filters steps by condition.
-// If conditionVars is provided, steps with conditions that evaluate to false are excluded.
-// Pass nil for conditionVars to include all steps (condition filtering skipped).
+// resolveAndCookFormulaWithVars loads a formula and, when conditionVars is
+// non-nil, validates the vars against it. Pass nil to skip var validation.
 func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, conditionVars map[string]string) (*TemplateSubgraph, error) {
 	// Create parser with search paths
 	parser := formula.NewParser(searchPaths...)
@@ -753,9 +740,8 @@ func resolveAndCookFormulaWithVars(formulaName string, searchPaths []string, con
 // and the beads bd pours the same steps.
 //
 // Order: extends, --var validation, control flow, advice, inline expansion,
-// compose expand/map, aspects, the overlay from overlayDir (if any), step
-// conditions, standalone expansion templates. conditionVars nil skips var
-// validation and condition filtering.
+// compose expand, aspects, the overlay from overlayDir (if any), standalone
+// expansion templates. conditionVars nil skips var validation.
 func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[string]string, overlayDir string) (*formula.Formula, cookedExtras, error) {
 	var none cookedExtras
 	formulaName := f.Formula
@@ -792,7 +778,7 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 	resolved.Steps = inlineExpandedSteps
 
 	// Apply expansion operators
-	if resolved.Compose != nil && (len(resolved.Compose.Expand) > 0 || len(resolved.Compose.Map) > 0) {
+	if resolved.Compose != nil && len(resolved.Compose.Expand) > 0 {
 		expandedSteps, err := formula.ApplyExpansions(resolved.Steps, resolved.Compose, parser)
 		if err != nil {
 			return nil, none, fmt.Errorf("applying expansions to %q: %w", formulaName, err)
@@ -823,27 +809,6 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 		return nil, none, err
 	}
 	extras := cookedExtras{overlay: overlay, warnings: formula.ApplyOverlay(resolved, overlay)}
-
-	// Apply step condition filtering if vars provided (bd-7zka.1)
-	// This filters out steps whose conditions evaluate to false
-	if conditionVars != nil {
-		// Merge with formula defaults for complete evaluation
-		mergedVars := make(map[string]string)
-		for name, def := range resolved.Vars {
-			if def != nil && def.Default != nil {
-				mergedVars[name] = *def.Default
-			}
-		}
-		for k, v := range conditionVars {
-			mergedVars[k] = v
-		}
-
-		filteredSteps, err := formula.FilterStepsByCondition(resolved.Steps, mergedVars)
-		if err != nil {
-			return nil, none, fmt.Errorf("filtering steps by condition: %w", err)
-		}
-		resolved.Steps = filteredSteps
-	}
 
 	// Handle standalone expansion formulas (bd-qzb).
 	// Expansion formulas store content in Template, not Steps. Materialize

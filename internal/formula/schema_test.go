@@ -30,7 +30,6 @@ func TestPrimitiveByName_SuffixStripFallback(t *testing.T) {
 		want  string
 	}{
 		{"compose", "ComposeRules"},
-		{"map", "MapRule"},
 		{"expand", "ExpandRule"},
 		{"advice", "AdviceRule"},
 	}

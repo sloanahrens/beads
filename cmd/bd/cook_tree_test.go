@@ -100,7 +100,7 @@ func issuePaths(steps []cookTreeStep, prefix string) []string {
 func TestCookTree_MatchesPourSubgraph(t *testing.T) {
 	dir, _ := filepath.Abs(cookFormulaDir)
 	vars := map[string]string{"component": "api"}
-	for _, name := range []string{"wf-basic", "wf-child", "wf-expanded", "wf-aspected", "wf-children", "wf-conditional", "exp-draft"} {
+	for _, name := range []string{"wf-basic", "wf-child", "wf-expanded", "wf-aspected", "wf-children", "exp-draft"} {
 		tree, err := cookTreeFor(name, []string{dir}, vars, false, false, "")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

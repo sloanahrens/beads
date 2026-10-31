@@ -100,73 +100,15 @@ Examples: "*.implement", "design", "shiny.*"`,
 		},
 	},
 	{
-		Name: "BondPoint",
-		Doc:  `BondPoint is a named attachment site for composition.`,
-		Fields: []FieldDoc{
-			{
-				Name:     "ID",
-				Type:     "string",
-				JSONName: "id",
-				Required: true,
-				Doc:      `ID is the unique identifier for this bond point.`,
-			},
-			{
-				Name:     "Description",
-				Type:     "string",
-				JSONName: "description",
-				Doc:      `Description explains what should be attached here.`,
-			},
-			{
-				Name:     "AfterStep",
-				Type:     "string",
-				JSONName: "after_step",
-				Doc: `AfterStep is the step ID after which to attach.
-Mutually exclusive with BeforeStep.`,
-			},
-			{
-				Name:     "BeforeStep",
-				Type:     "string",
-				JSONName: "before_step",
-				Doc: `BeforeStep is the step ID before which to attach.
-Mutually exclusive with AfterStep.`,
-			},
-			{
-				Name:     "Parallel",
-				Type:     "bool",
-				JSONName: "parallel",
-				Doc:      `Parallel makes attached steps run in parallel with the anchor step.`,
-			},
-		},
-	},
-	{
 		Name: "ComposeRules",
-		Doc:  `ComposeRules define how formulas can be bonded together.`,
+		Doc:  `ComposeRules define how a formula composes expansions and aspects.`,
 		Fields: []FieldDoc{
-			{
-				Name:     "BondPoints",
-				Type:     "[]*BondPoint",
-				JSONName: "bond_points",
-				Doc:      `BondPoints are named locations where other formulas can attach.`,
-			},
-			{
-				Name:     "Hooks",
-				Type:     "[]*Hook",
-				JSONName: "hooks",
-				Doc:      `Hooks are automatic attachments triggered by labels or conditions.`,
-			},
 			{
 				Name:     "Expand",
 				Type:     "[]*ExpandRule",
 				JSONName: "expand",
 				Doc: `Expand applies an expansion template to a single target step.
 The target step is replaced by the expanded template steps.`,
-			},
-			{
-				Name:     "Map",
-				Type:     "[]*MapRule",
-				JSONName: "map",
-				Doc: `Map applies an expansion template to all steps matching a pattern.
-Each matching step is replaced by the expanded template steps.`,
 			},
 			{
 				Name:     "Aspects",
@@ -359,66 +301,6 @@ formula authors because it maps directly to Issue.AwaitID.`,
 		},
 	},
 	{
-		Name: "Hook",
-		Doc:  `Hook defines automatic formula attachment based on conditions.`,
-		Fields: []FieldDoc{
-			{
-				Name:     "Trigger",
-				Type:     "string",
-				JSONName: "trigger",
-				Required: true,
-				Doc: `Trigger is what activates this hook.
-Formats: "label:security", "type:bug", "priority:0-1".`,
-			},
-			{
-				Name:     "Attach",
-				Type:     "string",
-				JSONName: "attach",
-				Required: true,
-				Doc:      `Attach is the formula to attach when triggered.`,
-			},
-			{
-				Name:     "At",
-				Type:     "string",
-				JSONName: "at",
-				Doc:      `At is the bond point to attach at (default: end).`,
-			},
-			{
-				Name:     "Vars",
-				Type:     "map[string]string",
-				JSONName: "vars",
-				Doc:      `Vars are variable overrides for the attached formula.`,
-			},
-		},
-	},
-	{
-		Name: "MapRule",
-		Doc:  `MapRule applies an expansion template to all matching steps.`,
-		Fields: []FieldDoc{
-			{
-				Name:     "Select",
-				Type:     "string",
-				JSONName: "select",
-				Required: true,
-				Doc: `Select is a glob pattern matching step IDs to expand.
-Examples: "*.implement", "shiny.*"`,
-			},
-			{
-				Name:     "With",
-				Type:     "string",
-				JSONName: "with",
-				Required: true,
-				Doc:      `With is the name of the expansion formula to apply.`,
-			},
-			{
-				Name:     "Vars",
-				Type:     "map[string]string",
-				JSONName: "vars",
-				Doc:      `Vars are variable overrides for the expansion.`,
-			},
-		},
-	},
-	{
 		Name: "Pointcut",
 		Doc: `Pointcut defines a target pattern for advice application.
 Used in aspect formulas to specify which steps the advice applies to.`,
@@ -455,7 +337,7 @@ Examples: "task", "bug", "epic"`,
 				JSONName: "id",
 				Required: true,
 				Doc: `ID is the unique identifier within this formula.
-Used for dependency references and bond points.`,
+Used for dependency references.`,
 			},
 			{
 				Name:     "Title",
@@ -539,14 +421,6 @@ See ApplyInlineExpansions in expand.go for implementation.`,
 				JSONName: "expand_vars",
 				Doc: `ExpandVars are variable overrides for the expansion.
 Merged with the expansion formula's default vars during inline expansion.`,
-			},
-			{
-				Name:     "Condition",
-				Type:     "string",
-				JSONName: "condition",
-				Doc: `Condition makes this step optional based on a variable.
-Format: "{{var}}" (truthy), "!{{var}}" (negated), "{{var}} == value", "{{var}} != value".
-Evaluated at cook/pour time via FilterStepsByCondition.`,
 			},
 			{
 				Name:     "Children",

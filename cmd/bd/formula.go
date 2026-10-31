@@ -308,36 +308,15 @@ func runFormulaShow(cmd *cobra.Command, args []string) error {
 
 	// Print compose rules
 	if f.Compose != nil {
-		hasCompose := len(f.Compose.BondPoints) > 0 || len(f.Compose.Expand) > 0 ||
-			len(f.Compose.Map) > 0 || len(f.Compose.Aspects) > 0
+		hasCompose := len(f.Compose.Expand) > 0 || len(f.Compose.Aspects) > 0
 
 		if hasCompose {
 			fmt.Printf("\n%s Composition:\n", ui.RenderAccent("🔗"))
-
-			if len(f.Compose.BondPoints) > 0 {
-				fmt.Printf("   Bond Points:\n")
-				for _, bp := range f.Compose.BondPoints {
-					loc := ""
-					if bp.AfterStep != "" {
-						loc = fmt.Sprintf("after %s", bp.AfterStep)
-					} else if bp.BeforeStep != "" {
-						loc = fmt.Sprintf("before %s", bp.BeforeStep)
-					}
-					fmt.Printf("     - %s (%s)\n", bp.ID, loc)
-				}
-			}
 
 			if len(f.Compose.Expand) > 0 {
 				fmt.Printf("   Expansions:\n")
 				for _, e := range f.Compose.Expand {
 					fmt.Printf("     - %s → %s\n", e.Target, e.With)
-				}
-			}
-
-			if len(f.Compose.Map) > 0 {
-				fmt.Printf("   Maps:\n")
-				for _, m := range f.Compose.Map {
-					fmt.Printf("     - %s → %s\n", m.Select, m.With)
 				}
 			}
 
