@@ -112,7 +112,7 @@ bd dolt push
 2. **Push regularly** - Run `bd dolt push` after significant changes
 3. **Use discovered-from** - Track issues found during work
 4. **Document context** - Include descriptions in issues
-5. **Aider commits, bd syncs** - Aider auto-commits your code changes; issue data moves separately with `bd dolt push`
+5. **Aider commits, bd pushes** - Aider auto-commits your code changes; issue data moves separately with `bd dolt push`
 
 ## Example Workflow
 
