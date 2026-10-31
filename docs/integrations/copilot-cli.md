@@ -19,24 +19,23 @@ For **VS Code + MCP**, see [GitHub Copilot](/integrations/github-copilot).
 - Higher context overhead from tool schemas
 - Use when you want editor-native tool access instead of terminal-first workflow
 
-## Why Plugin + Instructions Over Custom Setup Code?
+## Why Plugin + Instructions?
 
 **The plugin manifest already models the behavior we want:**
 
 1. **Hooks belong in the tool's native format**
    - Copilot CLI understands plugin manifests directly
-   - `SessionStart` and `PreCompact` can be declared as data instead of custom Go logic
+   - `SessionStart` and `PreCompact` are declared as data rather than custom logic
    - This keeps beads core smaller and easier to maintain
 
 2. **Instructions stay explicit and reviewable**
-   - Repository guidance still lives in `.github/copilot-instructions.md`
+   - Repository guidance lives in `.github/copilot-instructions.md`
    - Teams can review the instructions like any other project documentation
    - The hook behavior and the human-readable guidance stay separate
 
-3. **Lower maintenance burden**
-   - No Copilot-specific install/check/remove implementation in core
-   - No Copilot-specific doctor checks
-   - The recipe just writes the native plugin file and the instruction file
+3. **Nothing tool-specific lives in core**
+   - Both files are plain data you copy into your repository
+   - Beads ships no Copilot-specific installer or doctor check
 
 ## Why Copilot CLI Over MCP for Terminal Work?
 
@@ -54,30 +53,22 @@ For **VS Code + MCP**, see [GitHub Copilot](/integrations/github-copilot).
 
 ## Installation
 
+Copy two files into your repository:
+
+- `.copilot-plugin/plugin.json` — copy from `plugins/beads/.copilot-plugin/plugin.json`. It declares the `SessionStart` hook (runs `bd prime` when Copilot CLI starts a session) and the `PreCompact` hook (runs `bd prime` before context compaction).
+- `.github/copilot-instructions.md` — the repository workflow guidance. Run `bd init` to get the canonical beads section in `AGENTS.md`, then copy that section into this file.
+
 ```bash
-# Install the Copilot CLI plugin manifest + repository instructions
-bd setup copilot
-
-# Check installation status
-bd setup copilot --check
-
-# Remove the integration
-bd setup copilot --remove
+mkdir -p .copilot-plugin .github
+# copy the manifest from the beads repository into .copilot-plugin/plugin.json
+# then add the beads section of AGENTS.md to .github/copilot-instructions.md
 ```
 
-**What it installs:**
-- `.copilot-plugin/plugin.json`
-  - `SessionStart` hook: Runs `bd prime` when Copilot CLI starts a session
-  - `PreCompact` hook: Runs `bd prime` before context compaction
-- `.github/copilot-instructions.md`
-  - Repository workflow guidance for Copilot CLI
+To remove the integration, delete both files.
 
 ## Related Files
 
 - `plugins/beads/.copilot-plugin/plugin.json` - Source plugin manifest for the shared plugin package
-- `plugins/beads/copilot_manifest.go` - Embedded manifest source used by `bd setup copilot`
-- `internal/recipes/recipes.go` - Lightweight `copilot` recipe definition
-- `internal/recipes/template.go` - Static Copilot instructions template used by `bd setup`
 - [GitHub Copilot integration](/integrations/github-copilot) - VS Code MCP integration
 
 ## References

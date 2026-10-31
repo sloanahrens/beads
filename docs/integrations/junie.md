@@ -9,18 +9,38 @@ How to use beads with Junie (JetBrains AI Agent).
 
 ### Quick Setup
 
-```bash
-bd setup junie
+Two files give Junie the beads workflow. First, `.junie/guidelines.md` — the agent instructions Junie reads automatically. Run `bd init` for the canonical section in `AGENTS.md` and copy it in, or use this minimal version:
+
+```markdown
+This project uses bd (beads) for issue tracking.
+
+- Run `bd prime` for workflow context and command guidance.
+- Use `bd ready`, `bd show <id>`, `bd update <id> --claim`, and `bd close <id>`.
+- Use `bd remember "insight"` for persistent project memory.
+- Do not use markdown TODO lists for task tracking.
 ```
 
-This creates:
-- **`.junie/guidelines.md`** - Agent instructions for beads workflow
-- **`.junie/mcp/mcp.json`** - MCP server configuration
+Second, `.junie/mcp/mcp.json` — the MCP server configuration. Point it at the
+standalone `beads-mcp` server:
+
+```json
+{
+  "mcpServers": {
+    "beads": {
+      "command": "uvx",
+      "args": ["beads-mcp"]
+    }
+  }
+}
+```
 
 ### Verify Setup
 
+Confirm both files exist, then start a Junie session and ask what work is ready.
+
 ```bash
-bd setup junie --check
+cat .junie/guidelines.md
+cat .junie/mcp/mcp.json
 ```
 
 ## How It Works
@@ -42,23 +62,8 @@ Contains workflow instructions that Junie reads automatically:
 
 ### MCP Config (`.junie/mcp/mcp.json`)
 
-<Warning>
-`bd setup junie` currently writes an MCP config that invokes `bd mcp`, a
-command that does not exist in current bd builds — that config will not
-start a server. Until the recipe is fixed, point Junie at the standalone
-`beads-mcp` server instead:
-</Warning>
-
-```json
-{
-  "mcpServers": {
-    "beads": {
-      "command": "uvx",
-      "args": ["beads-mcp"]
-    }
-  }
-}
-```
+Junie reads this file at startup and starts the `beads-mcp` server, which
+gives the agent the beads tool catalog directly.
 
 See [MCP Server](/integrations/mcp-server) for the server's tool catalog
 and other install options (pip/pipx).
@@ -156,12 +161,11 @@ bd dolt push
 ### Guidelines not loaded
 
 ```bash
-# Check setup
-bd setup junie --check
-
-# Reinstall if needed
-bd setup junie
+# Check the guidelines file exists and holds the beads section
+cat .junie/guidelines.md
 ```
+
+Junie reads the file at startup, so restart it after editing.
 
 ### MCP tools not available
 
@@ -192,14 +196,8 @@ bd init --quiet
 
 ## Removing Integration
 
-```bash
-bd setup junie --remove
-```
-
-This removes:
-- `.junie/guidelines.md`
-- `.junie/mcp/mcp.json`
-- Empty `.junie/mcp/` and `.junie/` directories
+Delete `.junie/guidelines.md` and `.junie/mcp/mcp.json`, along with the
+`.junie/mcp/` and `.junie/` directories if they are now empty.
 
 ## See Also
 

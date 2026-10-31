@@ -34,19 +34,16 @@ curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/inst
 cd your-project
 bd init
 
-# Optional: refresh or install richer instructions for your agent
-bd setup codex    # Codex CLI - installs skill, AGENTS.md guidance, and hooks
-bd setup claude   # Claude Code - installs hooks/settings
-bd setup factory  # Factory.ai Droid - creates/updates AGENTS.md
+# Optional: give your agent the full workflow at session start.
+# Wire this command into your tool's SessionStart hook:
+bd prime --hook-json
 ```
 
 **Note:** Beads is a CLI tool you install once and use everywhere. You don't need to clone this repository into your project.
 
-`bd init` creates or updates `AGENTS.md` by default so agents can discover the beads workflow, and also installs project Claude/Codex integrations unless you pass `--skip-agents` or `--stealth`. Use `bd setup --list` to see supported integrations, including `bd setup codex`, `bd setup factory`, `bd setup claude`, `bd setup mux`, `bd setup cursor`, and more. See [Agent and IDE setup](docs/getting-started/ide-setup.md).
+`bd init` writes a managed section into `AGENTS.md` so any AGENTS.md-aware agent — Codex, Cursor, Factory Droid, Mux, OpenCode — discovers the beads workflow with no further setup. Pass `--agents-profile full` for a complete command reference instead of the default pointer to `bd prime`, `--agents-file` for a different instruction file, or `--skip-agents` to leave instruction files alone. [Agent and IDE setup](docs/getting-started/ide-setup.md) covers the three layers — instructions, `bd prime` session context, and git hooks — and how each tool uses them.
 
-Manual copy-paste is only for unsupported agents, existing projects where you cannot rerun `bd init`/`bd setup`, or custom instruction files. In those cases, run `bd onboard` and paste the printed snippet into the file your agent reads.
-
-If your agent is not covered by `bd setup`, add this minimal `AGENTS.md` section:
+If your agent reads a different instruction file, run `bd onboard` and paste the printed snippet into the file your agent reads, or add this minimal section:
 
 ```markdown
 This project uses bd (beads) for issue tracking.

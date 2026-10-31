@@ -5,7 +5,7 @@ description: Use beads from Copilot Chat in VS Code via the beads-mcp server to 
 
 Beads gives Copilot a persistent, structured memory for tracking work: with the MCP server configured, you create, update, and track issues in natural language without leaving the editor.
 
-This page covers **Copilot Chat in VS Code via MCP**. For the terminal-based Copilot CLI plugin installed by `bd setup copilot`, see [Copilot CLI](/integrations/copilot-cli).
+This page covers **Copilot Chat in VS Code via MCP**. For the terminal-based Copilot CLI plugin manifest, see [Copilot CLI](/integrations/copilot-cli).
 
 ## Prerequisites
 

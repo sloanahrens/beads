@@ -1,39 +1,34 @@
 ---
 title: Mux
-description: Set up beads for Mux with a managed AGENTS.md section, optional layered instruction files, and Mux hooks
+description: Set up beads for Mux with a managed AGENTS.md section and optional layered instruction files
 ---
 
-Use Beads with Mux through `AGENTS.md`, optional layered Mux instruction files, and Mux hooks.
+Use Beads with Mux through `AGENTS.md`, with optional layered Mux instruction
+files for workspace and global scope.
+
+Run `bd init` to write the managed Beads section to the root `AGENTS.md`:
 
 ```bash
-bd setup mux
-bd setup mux --check
+bd init                       # Root AGENTS.md
+bd init --agents-profile full # Complete command reference instead of a pointer
 ```
 
-The default setup writes a managed Beads section to root `AGENTS.md`.
+Already initialized? `bd init` refuses to rerun, so use `bd onboard` and paste
+the snippet it prints into `AGENTS.md`.
 
 ## Workspace and Global Layers
 
-Mux also supports workspace and global instruction layers:
+Mux also reads deeper instruction layers. Copy the same Beads section into each
+layer where you want it to apply:
 
-```bash
-bd setup mux --project
-bd setup mux --global
-bd setup mux --project --global
-```
+| Layer | File |
+|-------|------|
+| Workspace | `.mux/AGENTS.md` |
+| Global | `~/.mux/AGENTS.md` |
 
-Project setup writes `.mux/AGENTS.md` and installs Mux hook files under `.mux/`:
+The root `AGENTS.md` covers a single project; the workspace and global layers
+cover every project Mux opens from that directory or from your home directory.
 
-- `.mux/init`
-- `.mux/tool_post`
-- `.mux/tool_env`
+## Related
 
-Global setup writes `~/.mux/AGENTS.md`.
-
-## Remove
-
-```bash
-bd setup mux --remove
-bd setup mux --project --remove
-bd setup mux --global --remove
-```
+- [IDE Setup](/getting-started/ide-setup) — the three integration layers
