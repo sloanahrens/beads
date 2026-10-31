@@ -193,3 +193,40 @@ func TestCycleReachabilityQueryMultipleTablesTraversesUniqueNodes(t *testing.T) 
 		t.Fatalf("query does not resolve depends_on_id via DepTargetExpr:\n%s", query)
 	}
 }
+
+// TestCycleAndAncestorQueriesExpandOnlyTheWalkedNode pins the latency fix in
+// be-zbnm: each recursion step must seek the walked node's own edges by
+// issue_id, not join a derived UNION of every edge in every dependency table
+// (which Dolt materialized again at every step).
+func TestCycleAndAncestorQueriesExpandOnlyTheWalkedNode(t *testing.T) {
+	tables := []string{"dependencies", "wisp_dependencies"}
+	tests := []struct {
+		name  string
+		query string
+		walk  string
+	}{
+		{
+			name:  "cycle",
+			query: cycleReachabilityQuery(tables),
+			walk:  "reachable",
+		},
+		{
+			name:  "ancestor",
+			query: ancestorReachabilityQuery(tables),
+			walk:  "ancestors",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if strings.Contains(tt.query, "JOIN (SELECT") {
+				t.Fatalf("query still joins a derived union of whole tables:\n%s", tt.query)
+			}
+			for _, table := range tables {
+				want := "FROM " + table + " d JOIN " + tt.walk + " w ON d.issue_id = w.node"
+				if !strings.Contains(tt.query, want) {
+					t.Fatalf("query does not seek %s edges from the walked node (%q):\n%s", table, want, tt.query)
+				}
+			}
+		})
+	}
+}
