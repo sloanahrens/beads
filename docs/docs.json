@@ -124,6 +124,10 @@
       "destination": "/multi-agent/federation"
     },
     {
+      "source": "/cli-reference/metrics",
+      "destination": "/cli-reference/index"
+    },
+    {
       "source": "/PLUGIN",
       "destination": "/integrations/claude-code-plugin"
     },
