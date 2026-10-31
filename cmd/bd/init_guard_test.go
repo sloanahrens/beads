@@ -141,10 +141,28 @@ func TestInitGuardDBCheck_ServerUnreachable(t *testing.T) {
 	// Key assertion: no panic occurred — FR-030 satisfied.
 }
 
+// clearAmbientDoltServerEnv blanks the Dolt host, port and mode variables that
+// IsDoltServerMode and GetDoltServerPort read ahead of the workspace metadata.
+// An inherited non-local BEADS_DOLT_SERVER_HOST makes a metadata-embedded
+// workspace look like a server one, so these tests pin their own mode.
+func clearAmbientDoltServerEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"BEADS_DOLT_SERVER_HOST",
+		"BEADS_DOLT_SERVER_PORT",
+		"BEADS_DOLT_PORT",
+		"BEADS_DOLT_SHARED_SERVER",
+		"BEADS_DOLT_SERVER_MODE",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestInitGuard_FreshCloneWithMetadataJSON(t *testing.T) {
 	// GH#2433: On a fresh clone, metadata.json is committed (tracked by git)
 	// but dolt/ directory is gitignored. The init guard should recognize this
 	// as a fresh clone and allow init to proceed.
+	clearAmbientDoltServerEnv(t)
 
 	t.Run("server_mode_metadata_no_dolt_dir_allows_init", func(t *testing.T) {
 		// Switch to server mode for this subtest

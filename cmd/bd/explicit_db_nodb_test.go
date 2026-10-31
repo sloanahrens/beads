@@ -311,6 +311,16 @@ func TestDoltShowUsesExplicitDBFlagForNoDBCommand(t *testing.T) {
 	repoB := filepath.Join(root, "repo-b")
 	writeServerRepo(t, repoA, "repo_a_db", "10.0.0.1", "origin-a", 3311)
 	beadsDirB := writeServerRepo(t, repoB, "repo_b_db", "10.0.0.2", "origin-b", 3312)
+	// DefaultConfig discards the local port file for a non-local host (GH#3545),
+	// so repo B's remote port has to come from an authoritative source.
+	cfgB, err := configfile.Load(beadsDirB)
+	if err != nil {
+		t.Fatalf("load repo B metadata: %v", err)
+	}
+	cfgB.DoltServerPort = 3312
+	if err := cfgB.Save(beadsDirB); err != nil {
+		t.Fatalf("save repo B metadata: %v", err)
+	}
 
 	out := runBDCommand(t, binPath, repoA, nil, "--db", filepath.Join(beadsDirB, "dolt"), "dolt", "show", "--json")
 
