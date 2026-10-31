@@ -38,12 +38,6 @@ any user-supplied text.
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("metrics")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
 		runMetricsStatus(cmd)
 		return nil
 	},
@@ -55,12 +49,6 @@ var metricsOnCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("metrics-on")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
 		if err := setMetricsDisabled(false); err != nil {
 			return HandleError("failed to update metrics setting: %v", err)
 		}
@@ -102,12 +90,6 @@ var metricsExampleCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("metrics-example")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
 		runMetricsExample(cmd)
 		return nil
 	},

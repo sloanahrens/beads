@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage/kvkeys"
 )
 
@@ -172,13 +171,6 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		CheckReadonly("kv set")
 
-		evt := metrics.NewCommandEvent("kv-set")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		key := args[0]
 		if err := validateKVKey(key); err != nil {
 			return HandleErrorRespectJSON("invalid key: %v", err)
@@ -213,13 +205,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("kv-get")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		key := args[0]
 
 		if err := ensureDirectMode("kv get requires direct database access"); err != nil {
@@ -253,13 +238,6 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		CheckReadonly("kv clear")
 
-		evt := metrics.NewCommandEvent("kv-clear")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		key := args[0]
 		if err := validateKVKey(key); err != nil {
 			return HandleErrorRespectJSON("invalid key: %v", err)
@@ -292,13 +270,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("kv-list")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		if err := ensureDirectMode("kv list requires direct database access"); err != nil {
 			return HandleError("%v", err)
 		}

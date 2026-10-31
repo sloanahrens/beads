@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 )
 
@@ -44,13 +43,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		evt := metrics.NewCommandEvent("flatten")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		if !flattenDryRun {
 			CheckReadonly("flatten")
 		}

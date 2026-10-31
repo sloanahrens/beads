@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/ui"
 )
@@ -116,13 +115,6 @@ func init() {
 func runMergeSlotCreate(cmd *cobra.Command, args []string) error {
 	CheckReadonly("merge-slot create")
 
-	evt := metrics.NewCommandEvent("merge-slot-create")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
-
 	issue, err := store.MergeSlotCreate(rootCtx, actor)
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
@@ -145,13 +137,6 @@ func runMergeSlotCreate(cmd *cobra.Command, args []string) error {
 }
 
 func runMergeSlotCheck(cmd *cobra.Command, args []string) error {
-	evt := metrics.NewCommandEvent("merge-slot-check")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
-
 	status, err := store.MergeSlotCheck(rootCtx)
 	if err != nil {
 		if isNotFoundErr(err) {
@@ -203,13 +188,6 @@ func runMergeSlotCheck(cmd *cobra.Command, args []string) error {
 
 func runMergeSlotAcquire(cmd *cobra.Command, args []string) error {
 	CheckReadonly("merge-slot acquire")
-
-	evt := metrics.NewCommandEvent("merge-slot-acquire")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
 
 	holder := mergeSlotHolder
 	if holder == "" {
@@ -285,13 +263,6 @@ func runMergeSlotAcquire(cmd *cobra.Command, args []string) error {
 
 func runMergeSlotRelease(cmd *cobra.Command, args []string) error {
 	CheckReadonly("merge-slot release")
-
-	evt := metrics.NewCommandEvent("merge-slot-release")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
 
 	if err := store.MergeSlotRelease(rootCtx, mergeSlotHolder, actor); err != nil {
 		return HandleErrorRespectJSON("%v", err)

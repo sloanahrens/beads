@@ -20,7 +20,6 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/git"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/storage/schema"
@@ -408,13 +407,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		if cmd.Flags().Changed("proxied-server") || cmd.Flags().Changed("team-server") || os.Getenv("BEADS_DOLT_PROXIED_SERVER") == "1" {
 			return errProxiedServerModeRemoved()
 		}
-
-		initEvt := metrics.NewCommandEvent("init-" + resolveInitDoltMode(sharedServer, initServerMode))
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(initEvt)
-			}
-		}()
 
 		// Backend selection: Dolt is the only supported backend.
 		if !configfile.IsSupportedBackend(backendFlag) {
@@ -2839,10 +2831,9 @@ func resolveRemoteHasDoltDataProbe(syncURL string, hasData bool, err error) (boo
 // when the caller should clone/bootstrap from the remote, and err is a non-nil
 // *exitError when init must abort with a specific exit code.
 //
-// It must NOT call os.Exit: this runs inside the init RunE body, whose deferred
-// metrics CloseEventAndAdd only fires on a normal return. Every refusal path
-// returns an *exitError so the caller can propagate it up through RunE and keep
-// the usage-metrics close intact (see errors.go).
+// It must NOT call os.Exit: this runs inside the init RunE body, and every
+// refusal path returns an *exitError so the caller can propagate it up through
+// RunE (see errors.go).
 func handleRemoteSafetyDecision(decision RemoteSafetyDecision, prefix, syncURL, destroyToken string, remoteHasDoltData func() (bool, error), observedRemoteHasDoltData bool, confirmed *bool) (bool, error) {
 	switch decision.Action {
 	case ActionRefuseDivergence, ActionRequireDestroyToken:

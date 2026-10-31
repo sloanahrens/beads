@@ -4,8 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	"github.com/steveyegge/beads/internal/metrics"
 )
 
 // initSafetyHelpCmd documents the init flag surface and the destroy-token
@@ -88,13 +86,6 @@ RECOVERY
   playbooks for each exit code.
 `,
 	Run: func(cmd *cobra.Command, _ []string) {
-		evt := metrics.NewCommandEvent("init-safety")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		fmt.Print(cmd.Long)
 	},
 }
