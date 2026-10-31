@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -87,21 +86,6 @@ func TestJSONFromConfigOutsideMachineMode(t *testing.T) {
 	withMachineMode(t, false)
 	if jsonFromConfig(false) || !jsonFromConfig(true) {
 		t.Fatal("outside machine mode jsonFromConfig must return the configured value")
-	}
-}
-
-func TestMachineModeDisablesMetrics(t *testing.T) {
-	// TestMain disables metrics through the env; clear that so the machine
-	// check is what is being measured.
-	for _, k := range []string{"BD_DISABLE_METRICS", "DO_NOT_TRACK"} {
-		if v, ok := os.LookupEnv(k); ok {
-			_ = os.Unsetenv(k)
-			t.Cleanup(func() { _ = os.Setenv(k, v) })
-		}
-	}
-	withMachineMode(t, true)
-	if resolveMetricsEnabled() {
-		t.Fatal("metrics resolved enabled under machine mode")
 	}
 }
 

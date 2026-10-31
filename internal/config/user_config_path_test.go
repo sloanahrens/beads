@@ -134,16 +134,16 @@ func TestRelativeUserRootsNeverReachImplicitOrExplicitFilesystemPaths(t *testing
 		t.Fatalf("UserConfigYamlPath() returned unsafe path %q with error %v", path, err)
 	}
 
-	if got := GetUserYamlConfig("metrics.disabled"); got != "" {
+	if got := GetUserYamlConfig("node_id"); got != "" {
 		t.Fatalf("implicit read = %q, want absent value on resolution failure", got)
 	}
 	if err := Initialize(); err != nil {
 		t.Fatalf("Initialize should skip unsafe user roots, got: %v", err)
 	}
-	if err := SetUserYamlConfig("metrics.disabled", "true"); err == nil {
+	if err := SetUserYamlConfig("node_id", "mini"); err == nil {
 		t.Fatal("SetUserYamlConfig returned nil error for unsafe roots")
 	}
-	if err := UnsetUserYamlConfig("metrics.disabled"); err == nil {
+	if err := UnsetUserYamlConfig("node_id"); err == nil {
 		t.Fatal("UnsetUserYamlConfig returned nil error for unsafe roots")
 	}
 

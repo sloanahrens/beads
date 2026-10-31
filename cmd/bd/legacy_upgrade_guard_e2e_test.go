@@ -158,8 +158,6 @@ func TestLegacyNoStoreCommandExemptions(t *testing.T) {
 		{name: "root", cmd: rootCmd},
 		{name: "version", cmd: versionCmd},
 		{name: "schema", cmd: schemaCmd},
-		{name: "metrics", cmd: metricsCmd},
-		{name: "metrics subcommand", cmd: metricsOffCmd},
 		{name: "doctor", cmd: doctorCmd},
 		{name: "init", cmd: initCmd},
 		{name: "bootstrap", cmd: bootstrapCmd},
