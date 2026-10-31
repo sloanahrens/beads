@@ -583,10 +583,9 @@ func enrichClaudePlugin(dc DoctorCheck) agentEnrichment {
 func enrichCursor(dc DoctorCheck) agentEnrichment {
 	return agentEnrichment{
 		severity:    "advisory",
-		explanation: fmt.Sprintf("Cursor integration: %s. Beads integrates with Cursor via agent hooks in .cursor/hooks.json (or ~/.cursor/hooks.json) that inject bd prime on sessionStart and recover context after compaction.", dc.Message),
+		explanation: fmt.Sprintf("Cursor integration: %s. Beads integrates with Cursor via agent hooks in .cursor/hooks.json (or ~/.cursor/hooks.json). Create that file by hand with sessionStart, preCompact and postToolUse entries that run 'bd prime --hook-json'; no bd command writes it.", dc.Message),
 		observed:    dc.Message + "\n" + dc.Detail,
 		expected:    "Cursor hooks configured for beads (sessionStart/preCompact/postToolUse)",
-		commands:    []string{"bd prime --hook-json"},
 		sourceFiles: []string{"cmd/bd/doctor/cursor.go:CheckCursor"},
 	}
 }

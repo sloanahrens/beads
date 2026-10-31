@@ -83,3 +83,27 @@ func TestCursorSettingsEnrichmentDoesNotSuggestNonRepairCommand(t *testing.T) {
 		}
 	}
 }
+
+// TestCursorIntegrationEnrichmentDescribesManualHookStep pins the Cursor
+// integration advice to the manual step: no surviving bd command writes
+// .cursor/hooks.json, so offering 'bd prime --hook-json' as the fix would
+// claim an install that command cannot perform. The explanation must name the
+// file the check reads, the hooks it expects, and the command each hook runs.
+func TestCursorIntegrationEnrichmentDescribesManualHookStep(t *testing.T) {
+	ad := EnrichForAgent(DoctorCheck{
+		Name:    "Cursor Integration",
+		Message: "hooks not configured",
+	})
+
+	if len(ad.Commands) != 0 {
+		t.Errorf("Cursor integration enrichment must not print a command that cannot write the hooks file, got %#v", ad.Commands)
+	}
+	for _, want := range []string{".cursor/hooks.json", "~/.cursor/hooks.json", "sessionStart", "preCompact", "postToolUse", "bd prime --hook-json", "by hand"} {
+		if !strings.Contains(ad.Explanation, want) {
+			t.Errorf("Expected Cursor integration explanation to mention %q, got %q", want, ad.Explanation)
+		}
+	}
+	if strings.Contains(ad.Explanation, "bd setup") {
+		t.Errorf("Cursor integration explanation suggests deleted 'bd setup': %q", ad.Explanation)
+	}
+}
