@@ -789,7 +789,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&quietFlag, "quiet", "q", false, "Suppress non-essential output (errors only)")
 	rootCmd.PersistentFlags().BoolVar(&ignoreSchemaSkew, "ignore-schema-skew", false, "Proceed despite forward schema drift (some queries may fail)")
 	rootCmd.PersistentFlags().BoolVar(&noColorFlag, "no-color", false, "Disable color output (also: NO_COLOR=1 or CLICOLOR=0)")
-	rootCmd.PersistentFlags().BoolVar(&machineFlag, "machine", false, "Machine mode for programs (also: BD_MACHINE=1): implies --json, never prompts, never reads stdin unless an argument is '-', no colors, metrics or tips")
+	rootCmd.PersistentFlags().BoolVar(&machineFlag, "machine", false, "Machine mode for programs (also: BD_MACHINE=1): implies --json, never prompts, never reads stdin unless an argument is '-', no colors or tips")
 
 	// Add --version flag to root command (same behavior as version subcommand)
 	rootCmd.Flags().BoolP("version", "V", false, "Print version information")
