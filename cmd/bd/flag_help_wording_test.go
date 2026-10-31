@@ -23,6 +23,24 @@ func TestIncludeInfraHelpNamesEphemeralAndWisp(t *testing.T) {
 	}
 }
 
+// be-ayek: the usage-metrics subsystem was deleted (be-xu2.21), so --machine
+// turns nothing metrics-related off. Its help must not promise that effect, and
+// must still list the ones machine mode has.
+func TestMachineFlagHelpDoesNotPromiseMetrics(t *testing.T) {
+	flag := rootCmd.PersistentFlags().Lookup("machine")
+	if flag == nil {
+		t.Fatal("--machine is not a persistent flag")
+	}
+	if strings.Contains(strings.ToLower(flag.Usage), "metric") {
+		t.Errorf("--machine help %q still promises it disables metrics", flag.Usage)
+	}
+	for _, phrase := range []string{"--json", "no colors", "tips"} {
+		if !strings.Contains(strings.ToLower(flag.Usage), phrase) {
+			t.Errorf("--machine help %q lacks %q", flag.Usage, phrase)
+		}
+	}
+}
+
 // be-3qk: --repo takes a filesystem PATH, not a rig/repository name; the
 // wording that said "Target repository" sent an agent's bead into a
 // bootstrapped local database named after a rig (be-z03).
