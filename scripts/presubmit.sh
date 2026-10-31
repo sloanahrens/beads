@@ -77,9 +77,11 @@ fi
 
 # A changed file's package is the directory that holds it, so no `go list` (and
 # no compilation) is needed to name the packages. `.` is the module root. -z
-# keeps a path with a space or a quote in it one record long.
+# keeps a path with a space or a quote in it one record long. --diff-filter=d
+# drops deleted paths: a branch that removes a whole package leaves its
+# directory with nothing to test, and naming it would fail the gate.
 changed_go_dirs() {
-    git diff --name-only -z "$base_ref" -- '*.go' | while IFS= read -r -d '' path; do
+    git diff --name-only --diff-filter=d -z "$base_ref" -- '*.go' | while IFS= read -r -d '' path; do
         [[ -n "$path" ]] || continue
         dirname "$path"
     done | sort -u

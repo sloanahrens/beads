@@ -227,6 +227,27 @@ func TestPresubmitFailsWhenDependentTestsBreak(t *testing.T) {
 	}
 }
 
+// TestPresubmitSkipsPackageDeletedOnTheBranch is the branch that removes a whole
+// package directory. Its files are gone, so there is nothing to test there, and
+// presubmit must neither select the directory nor fail on it. The rest of the
+// change still gets tested.
+func TestPresubmitSkipsPackageDeletedOnTheBranch(t *testing.T) {
+	repo := newPresubmitFixtureRepo(t, presubmitFixtureDeletesPackage)
+	fakeBin, logPath := presubmitFakeTools(t)
+	out, err := runPresubmit(t, repo, presubmitFakeEnv(fakeBin, logPath))
+	if err != nil {
+		t.Fatalf("presubmit failed on a branch that deletes a package: %v\n%s", err, out)
+	}
+
+	calls := readPresubmitCalls(t, logPath)
+	if strings.Contains(out, "./gone") || strings.Contains(calls, "gone") {
+		t.Errorf("presubmit selected the deleted package gone:\n%s\n%s", out, calls)
+	}
+	if !strings.Contains(calls, "go test -tags gms_pure_go . ./alpha ./integpkg ./deep ./depender ./testonly\n") {
+		t.Errorf("presubmit did not test the packages the branch still has:\n%s", calls)
+	}
+}
+
 type presubmitFixtureMode int
 
 const (
@@ -238,6 +259,9 @@ const (
 	presubmitFixtureMergeBase
 	// presubmitFixtureDocsOnly changes a non-Go file and nothing else.
 	presubmitFixtureDocsOnly
+	// presubmitFixtureDeletesPackage is the normal change set plus a commit
+	// that deletes the whole gone package directory.
+	presubmitFixtureDeletesPackage
 )
 
 // presubmitChangedFiles are the second-commit edits: two packages that can be
@@ -293,6 +317,11 @@ var presubmitBaseFiles = map[string]string{
 	"beta/notes.md":       "# notes\n",
 	"doltpkg/main.go":     "package doltpkg\n",
 	"integpkg/main.go":    "package integpkg\n",
+
+	// A package the deletes-package mode removes whole. Nothing imports it, so
+	// its removal changes no dependent.
+	"gone/gone.go":      "package gone\n",
+	"gone/gone_test.go": "package gone\n\nimport \"testing\"\n\nfunc TestGone(t *testing.T) {}\n",
 
 	"examples/demo/go.mod":  "module example.com/demo\n\ngo 1.21\n",
 	"examples/demo/demo.go": "package demo\n",
@@ -353,6 +382,9 @@ func newPresubmitFixtureRepo(t *testing.T, mode presubmitFixtureMode) string {
 	for _, path := range changed {
 		full := filepath.Join(repo, filepath.FromSlash(path))
 		writePresubmitFile(t, full, readPresubmitFile(t, full)+"// changed\n")
+	}
+	if mode == presubmitFixtureDeletesPackage {
+		runPresubmitGit(t, repo, "rm", "-r", "-q", "gone")
 	}
 	runPresubmitGit(t, repo, "add", "-A")
 	runPresubmitGit(t, repo, "commit", "-m", "change")
