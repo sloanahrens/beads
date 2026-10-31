@@ -158,6 +158,7 @@ func TestCheckConfigValues_WorktreeFallbackUsesSharedConfig(t *testing.T) {
 }
 
 func TestCheckMetadataConfigValues(t *testing.T) {
+	isolateDoltServerEnv(t)
 	// Create a temporary directory for testing
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")

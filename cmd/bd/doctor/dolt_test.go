@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+// isolateDoltServerEnv clears the server-selection variables that outrank the
+// metadata.json a test writes. A shell that exports BEADS_DOLT_SERVER_HOST (or
+// the mode variables) flips the host and mode these tests expect from their
+// fixtures, so the tests would pass or fail with the caller's environment.
+func isolateDoltServerEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"BEADS_DOLT_SERVER_HOST",
+		"BEADS_DOLT_SERVER_MODE",
+		"BEADS_DOLT_SHARED_SERVER",
+		"BEADS_DOLT_AUTO_START",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 // TestRunDoltHealthChecks_NonDoltBackend was removed: SQLite backend no longer
 // exists. GetBackend() always returns "dolt" after the dolt-native cleanup.
 // (bd-yqpwy)
@@ -16,6 +32,7 @@ func TestRunDoltHealthChecks_DoltBackendNoServer(t *testing.T) {
 	// they outrank the metadata port; clear them so this test sees no server.
 	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
 	t.Setenv("BEADS_DOLT_PORT", "")
+	isolateDoltServerEnv(t)
 
 	// GH#2722: In owned/embedded mode (non-external), when no server is
 	// running, server-dependent checks should be skipped gracefully (StatusOK)

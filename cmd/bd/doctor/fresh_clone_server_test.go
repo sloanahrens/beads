@@ -117,6 +117,7 @@ func TestCheckFreshClone_ServerModeUnreachable(t *testing.T) {
 	// they outrank the metadata port; clear them so port 1 is the server this test reaches.
 	t.Setenv("BEADS_DOLT_SERVER_PORT", "")
 	t.Setenv("BEADS_DOLT_PORT", "")
+	isolateDoltServerEnv(t)
 
 	// GH#35 + bd-tzo9: When metadata.json declares dolt_mode=server but the
 	// server is unreachable, CheckFreshClone must:
