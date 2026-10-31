@@ -146,9 +146,9 @@ var secretKeySegments = map[string]bool{
 //
 // IT IS A SECURITY CONTROL, not only a lint. Two callers depend on it: the
 // `bd config set` guard that refuses to write a credential into a git-tracked
-// file, and — since the settings surface went on the wire — the redaction in
-// internal/httpapi that decides whether GET /v0/beads/config publishes a
-// value. Redaction is the whole control there: a `bd serve` bearer is optional
+// file, and the redaction that decided whether GET /v0/beads/config published
+// a value (the HTTP API that did so was deleted in be-xu2.3). Redaction is the
+// whole control there: a `bd serve` bearer is optional
 // and, where configured, shared and surface-wide, so it cannot withhold one
 // value from one caller — and there is no TLS either. A spelling missing from
 // this predicate is a credential served in cleartext.

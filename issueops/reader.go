@@ -599,16 +599,11 @@ type IssuePage struct {
 // on it and shares instead the request types above, the two builders in
 // internal/workapi that their golden files pin, and workapi.FinishPage on its
 // proxied route only. ENFORCED,
-// and by what: depguard (httpapi-transport-boundary) denies internal/workapi
-// from every non-test file of internal/httpapi, so no builder is callable
-// there, and a forbidigo rule denies naming types.IssueFilter or
-// types.WorkFilter there at all, so no filter is writable there either — both
-// are directory-scoped with no per-file exception, so a file added to that
-// package tomorrow is covered the moment it exists. That same forbidigo rule
-// covers cmd/bd deny-by-default with 59 named exceptions, so the files
-// implementing `bd list` and `bd show` cannot write a filter, and neither can
-// a file they are split or renamed into unless the new name lands on that
-// list. NOT ENFORCED: the rule forbids NAMING those types, not holding a
+// and by what: a forbidigo rule denies naming types.IssueFilter or
+// types.WorkFilter across cmd/bd, deny-by-default, with 59 named exceptions,
+// so the files implementing `bd list` and `bd show` cannot write a filter, and
+// neither can a file they are split or renamed into unless the new name lands
+// on that list. NOT ENFORCED: the rule forbids NAMING those types, not holding a
 // value, so the property is "no filter is written there", not "every filter
 // there came from a builder"; test files are exempt from both rules, because
 // the oracles hold filters in order to inspect them; `bd ready`'s files are

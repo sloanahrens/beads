@@ -154,7 +154,7 @@ func TestBuildQueryPlanRefusals(t *testing.T) {
 }
 
 // TestAQueryExpressionRefusalNamesItselfForTheWire pins the message prefix
-// internal/httpapi matches to turn an unparseable expression into a 400 on `q`
+// an HTTP front door matches to turn an unparseable expression into a 400 on `q`
 // rather than a 500, written down here so a reword fails beside the sentence it
 // rewords.
 func TestAQueryExpressionRefusalNamesItselfForTheWire(t *testing.T) {
@@ -164,7 +164,7 @@ func TestAQueryExpressionRefusalNamesItselfForTheWire(t *testing.T) {
 	}
 	const prefix = "invalid query expression"
 	if got := err.Error(); len(got) < len(prefix) || got[:len(prefix)] != prefix {
-		t.Errorf("error = %q, want it to start with %q (internal/httpapi maps that prefix to param `q`)", got, prefix)
+		t.Errorf("error = %q, want it to start with %q (an HTTP front door maps that prefix to param `q`)", got, prefix)
 	}
 }
 
