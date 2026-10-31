@@ -63,3 +63,23 @@ func TestPruneEnrichmentsRecommendRealCommand(t *testing.T) {
 		}
 	}
 }
+
+// TestCursorSettingsEnrichmentDoesNotSuggestNonRepairCommand pins the malformed
+// hooks.json advice to its diagnostic: `bd setup cursor` was deleted, and
+// `bd prime --hook-json` prints context rather than repairing the file, so the
+// enrichment must not offer either as a repair command.
+func TestCursorSettingsEnrichmentDoesNotSuggestNonRepairCommand(t *testing.T) {
+	enrichment := enrichCursorSettings(DoctorCheck{
+		Name:    "Cursor Settings Health",
+		Message: "1 malformed hooks file(s)",
+	})
+
+	if !strings.Contains(enrichment.explanation, "by hand") {
+		t.Errorf("Expected explanation to say the JSON is fixed by hand, got %q", enrichment.explanation)
+	}
+	for _, cmd := range enrichment.commands {
+		if strings.Contains(cmd, "bd setup") || strings.Contains(cmd, "bd prime") {
+			t.Errorf("Cursor settings enrichment claims a command that does not repair the hooks file: %q", cmd)
+		}
+	}
+}

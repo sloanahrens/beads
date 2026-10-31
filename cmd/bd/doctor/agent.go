@@ -594,10 +594,10 @@ func enrichCursor(dc DoctorCheck) agentEnrichment {
 func enrichCursorSettings(dc DoctorCheck) agentEnrichment {
 	return agentEnrichment{
 		severity:    "blocking",
-		explanation: fmt.Sprintf("Cursor hooks file is malformed: %s. A corrupted .cursor/hooks.json prevents Cursor from loading any hooks, which silently breaks beads context injection and post-compaction recovery.", dc.Message),
+		explanation: fmt.Sprintf("Cursor hooks file is malformed: %s. A corrupted .cursor/hooks.json prevents Cursor from loading any hooks, which silently breaks beads context injection and post-compaction recovery. Fix the JSON syntax by hand; no bd command rewrites this file any more.", dc.Message),
 		observed:    dc.Message + "\n" + dc.Detail,
 		expected:    ".cursor/hooks.json (and ~/.cursor/hooks.json) are valid JSON",
-		commands:    []string{"cat .cursor/hooks.json | python3 -m json.tool", "bd prime --hook-json"},
+		commands:    []string{"cat .cursor/hooks.json | python3 -m json.tool"},
 		sourceFiles: []string{"cmd/bd/doctor/cursor.go:CheckCursorSettingsHealth"},
 	}
 }

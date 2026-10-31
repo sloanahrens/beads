@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -749,6 +750,12 @@ func TestClaudeSetupTipRegistered(t *testing.T) {
 			}
 			if tip.Probability != 0.6 {
 				t.Errorf("Expected claude_setup probability 0.6, got %v", tip.Probability)
+			}
+			if !strings.Contains(tip.Message, "bd prime --hook-json") {
+				t.Errorf("Expected claude_setup tip to name the SessionStart hook command, got %q", tip.Message)
+			}
+			if strings.Contains(tip.Message, "bd setup") {
+				t.Errorf("Expected claude_setup tip to name no deleted verb, got %q", tip.Message)
 			}
 			break
 		}

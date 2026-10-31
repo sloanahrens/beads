@@ -566,6 +566,15 @@ func TestCheckAgentDocDivergence(t *testing.T) {
 		if !strings.Contains(check.Fix, "bd init") {
 			t.Error("expected fix to point at the bd init managed section")
 		}
+		if !strings.Contains(check.Fix, "diff ") {
+			t.Error("expected fix to suggest diffing the files for a manual merge")
+		}
+		if strings.Contains(check.Fix, "cp ") {
+			t.Error("expected fix not to suggest copying one file over the other")
+		}
+		if !strings.Contains(check.Fix, "do not copy one") {
+			t.Error("expected fix to warn against overwriting a file")
+		}
 		if strings.Contains(check.Fix, "bd setup") {
 			t.Error("expected fix to suggest no deleted verb")
 		}

@@ -260,7 +260,9 @@ func sameInode(a, b string) (bool, error) {
 // independent regular files whose user-authored regions (everything outside
 // the BEGIN/END BEADS INTEGRATION markers) have drifted apart. Hand-edits to
 // only one of the pair are a common source of inconsistency; the warning
-// recommends symlinking, copying one over the other, or reconciling manually.
+// recommends symlinking, merging the user-authored content by hand, or opting
+// out. Overwriting one file with the other is not suggested: it discards that
+// file's hand edits.
 //
 // Skipped when:
 //   - Either file is missing
@@ -350,15 +352,13 @@ func CheckAgentDocDivergence(repoPath string) DoctorCheck {
 			"  (a) Symlink one to the other so future edits stay in sync:\n" +
 			"      ln -sf " + agentsFile + " CLAUDE.md\n" +
 			"\n" +
-			"  (b) Copy one file over the other, keeping the managed beads\n" +
-			"      section that bd init generates identical on both sides:\n" +
-			"      cp " + agentsFile + " CLAUDE.md\n" +
-			"\n" +
-			"  (c) Reconcile manually — diff the files and copy the intended\n" +
-			"      user-authored content into both:\n" +
+			"  (b) Merge the user-authored content by hand — diff the files and\n" +
+			"      copy the intended text into both. Leave the managed beads\n" +
+			"      section (the block bd init writes) alone, and do not copy one\n" +
+			"      whole file over the other: that discards its hand edits.\n" +
 			"      diff " + agentsFile + " CLAUDE.md\n" +
 			"\n" +
-			"  (d) If the divergence is intentional (e.g. distinct audiences for\n" +
+			"  (c) If the divergence is intentional (e.g. distinct audiences for\n" +
 			"      each file), opt out by adding this HTML comment anywhere in\n" +
 			"      either file:\n" +
 			"      <!-- bd-doctor-divergence: ok -->",

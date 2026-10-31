@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -697,6 +698,12 @@ func TestCheckClaudeHookCompleteness(t *testing.T) {
 		if check.Status != StatusWarning {
 			t.Errorf("Expected warning for missing SessionStart, got %s", check.Status)
 		}
+		if !strings.Contains(check.Fix, "bd prime --hook-json") {
+			t.Errorf("Expected fix to name the SessionStart hook command, got %q", check.Fix)
+		}
+		if strings.Contains(check.Fix, "bd setup") {
+			t.Errorf("Expected fix to name no deleted verb, got %q", check.Fix)
+		}
 	})
 
 	t.Run("stealth mode hooks detected", func(t *testing.T) {
@@ -900,4 +907,68 @@ func TestCheckClaude_ClaudeCodeWithoutClaude(t *testing.T) {
 	if check.Message != "CLI-only mode" {
 		t.Errorf("Expected message %q, got %q", "CLI-only mode", check.Message)
 	}
+	if !strings.Contains(check.Detail, "bd prime --hook-json") {
+		t.Errorf("Expected CLI-only detail to name the SessionStart hook command, got %q", check.Detail)
+	}
+	if strings.Contains(check.Detail, "bd setup") {
+		t.Errorf("Expected CLI-only detail to name no deleted verb, got %q", check.Detail)
+	}
+}
+
+// TestCheckClaude_RemediationUsesSurvivingCommands pins the Claude integration
+// warning fixes to commands that survive the deletion of `bd setup`: a
+// SessionStart hook running `bd prime --hook-json`, or the beads plugin.
+func TestCheckClaude_RemediationUsesSurvivingCommands(t *testing.T) {
+	t.Run("MCP installed without hooks", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Chdir(tmpDir)
+		t.Setenv("HOME", tmpDir)
+		t.Setenv("USERPROFILE", tmpDir)
+		t.Setenv("CLAUDECODE", "")
+
+		if err := os.MkdirAll(filepath.Join(tmpDir, ".claude"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := `{"mcpServers":{"beads":{}}}`
+		if err := os.WriteFile(filepath.Join(tmpDir, ".claude", "settings.json"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		check := CheckClaude(tmpDir)
+		if check.Status != "warning" {
+			t.Fatalf("Expected warning for MCP-only mode, got %q: %s", check.Status, check.Message)
+		}
+		if !strings.Contains(check.Fix, "bd prime --hook-json") {
+			t.Errorf("Expected fix to name the SessionStart hook command, got %q", check.Fix)
+		}
+		if !strings.Contains(check.Fix, "beads plugin") {
+			t.Errorf("Expected fix to name the beads plugin, got %q", check.Fix)
+		}
+		if strings.Contains(check.Fix, "bd setup") {
+			t.Errorf("Expected fix to name no deleted verb, got %q", check.Fix)
+		}
+	})
+
+	t.Run("Claude present without plugin", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Chdir(tmpDir)
+		t.Setenv("HOME", tmpDir)
+		t.Setenv("USERPROFILE", tmpDir)
+		t.Setenv("CLAUDECODE", "1")
+
+		if err := os.MkdirAll(filepath.Join(tmpDir, ".claude"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		check := CheckClaude(tmpDir)
+		if check.Status != "warning" {
+			t.Fatalf("Expected warning when plugin is not installed, got %q: %s", check.Status, check.Message)
+		}
+		if !strings.Contains(check.Fix, "bd prime --hook-json") {
+			t.Errorf("Expected fix to name the SessionStart hook command, got %q", check.Fix)
+		}
+		if strings.Contains(check.Fix, "bd setup") {
+			t.Errorf("Expected fix to name no deleted verb, got %q", check.Fix)
+		}
+	})
 }
