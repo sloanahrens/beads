@@ -1202,8 +1202,8 @@ func TestSetAndUnsetYamlConfig_WithBEADS_DIR_FromOutsideRepo(t *testing.T) {
 // report the user-global value that actually governs runtime behavior, not the
 // merged value a repository's project/BEADS_DIR config (highest viper
 // precedence) can shadow. GetUserYamlConfig backs the config get / config show
-// user-global path. node_id stands in for the metrics keys this used to cover,
-// since it is the remaining per-machine key in userGlobalExactKeys.
+// user-global path. node_id is the key used here because it is the per-machine
+// key in userGlobalExactKeys.
 func TestGetUserYamlConfigIgnoresProjectOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
