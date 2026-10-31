@@ -194,8 +194,8 @@ func TestCheckLegacyBeadsSlashCommands(t *testing.T) {
 				if check.Fix == "" {
 					t.Error("Expected fix message for warning, got empty string")
 				}
-				if !strings.Contains(check.Fix, "bd setup claude") {
-					t.Error("Expected fix message to mention 'bd setup claude'")
+				if !strings.Contains(check.Fix, "bd prime --hook-json") {
+					t.Error("Expected fix message to mention 'bd prime --hook-json'")
 				}
 				if !strings.Contains(check.Fix, "token") {
 					t.Error("Expected fix message to mention token savings")
@@ -313,8 +313,8 @@ func TestCheckLegacyMCPToolReferences(t *testing.T) {
 				if check.Fix == "" {
 					t.Error("Expected fix message for warning, got empty string")
 				}
-				if !strings.Contains(check.Fix, "bd setup claude") {
-					t.Error("Expected fix message to mention 'bd setup claude'")
+				if !strings.Contains(check.Fix, "bd prime --hook-json") {
+					t.Error("Expected fix message to mention 'bd prime --hook-json'")
 				}
 				if !strings.Contains(check.Fix, "token") {
 					t.Error("Expected fix message to mention token savings")
@@ -563,8 +563,20 @@ func TestCheckAgentDocDivergence(t *testing.T) {
 		if !strings.Contains(check.Fix, "ln -sf") {
 			t.Error("expected fix to suggest symlink option")
 		}
-		if !strings.Contains(check.Fix, "bd setup claude") {
-			t.Error("expected fix to suggest bd setup claude")
+		if !strings.Contains(check.Fix, "bd init") {
+			t.Error("expected fix to point at the bd init managed section")
+		}
+		if !strings.Contains(check.Fix, "diff ") {
+			t.Error("expected fix to suggest diffing the files for a manual merge")
+		}
+		if strings.Contains(check.Fix, "cp ") {
+			t.Error("expected fix not to suggest copying one file over the other")
+		}
+		if !strings.Contains(check.Fix, "do not copy one") {
+			t.Error("expected fix to warn against overwriting a file")
+		}
+		if strings.Contains(check.Fix, "bd setup") {
+			t.Error("expected fix to suggest no deleted verb")
 		}
 	})
 

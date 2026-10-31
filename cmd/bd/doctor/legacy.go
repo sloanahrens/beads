@@ -74,7 +74,8 @@ func CheckLegacyBeadsSlashCommands(repoPath string) DoctorCheck {
 		Fix: "Migrate to bd prime hooks for better token efficiency:\n" +
 			"\n" +
 			"Migration Steps:\n" +
-			"  1. Run 'bd setup claude' to add SessionStart hooks\n" +
+			"  1. Add a SessionStart hook that runs 'bd prime --hook-json'\n" +
+			"     (or install the beads plugin, which includes the hooks)\n" +
 			"  2. Update " + config.AgentsFile() + "/CLAUDE.md:\n" +
 			"     - Remove /beads:* slash command references\n" +
 			"     - Add: \"Run 'bd prime' for workflow context\" (for users without hooks)\n" +
@@ -84,7 +85,7 @@ func CheckLegacyBeadsSlashCommands(repoPath string) DoctorCheck {
 			"  • CLI mode: ~1-2k tokens with automatic context recovery\n" +
 			"  • Hooks auto-refresh context on session start and before compaction\n" +
 			"\n" +
-			"See: bd setup claude --help",
+			"See: bd prime --help",
 	}
 }
 
@@ -136,7 +137,8 @@ func CheckLegacyMCPToolReferences(repoPath string) DoctorCheck {
 		Fix: "Migrate to bd prime hooks for better token efficiency:\n" +
 			"\n" +
 			"Migration Steps:\n" +
-			"  1. Run 'bd setup claude' to add SessionStart hooks\n" +
+			"  1. Add a SessionStart hook that runs 'bd prime --hook-json'\n" +
+			"     (or install the beads plugin, which includes the hooks)\n" +
 			"  2. Replace MCP tool references with CLI commands:\n" +
 			"     - mcp__beads_beads__list  → bd list\n" +
 			"     - mcp__beads_beads__show  → bd show <id>\n" +
@@ -147,12 +149,12 @@ func CheckLegacyMCPToolReferences(repoPath string) DoctorCheck {
 			"  • bd prime + hooks: ~50-2k tokens vs ~10.5k for MCP tool scan\n" +
 			"  • Automatic context recovery on session start and compaction\n" +
 			"\n" +
-			"See: bd setup claude --help",
+			"See: bd prime --help",
 	}
 }
 
 // CheckAgentDocumentation checks if agent documentation (AGENTS.md or CLAUDE.md) exists
-// and recommends adding it if missing, suggesting bd onboard or bd setup claude.
+// and recommends adding it if missing, suggesting bd onboard or bd init.
 // Also supports local-only variants (claude.local.md) that are gitignored.
 func CheckAgentDocumentation(repoPath string) DoctorCheck {
 	docFiles := agentDocFiles(repoPath)
@@ -180,7 +182,7 @@ func CheckAgentDocumentation(repoPath string) DoctorCheck {
 			"  Documenting workflow helps AI agents work more effectively",
 		Fix: "Add agent documentation:\n" +
 			"  • Run 'bd onboard' to create " + config.AgentsFile() + " with workflow guidance\n" +
-			"  • Or run 'bd setup claude' to add Claude-specific documentation\n" +
+			"  • Or run 'bd init --agents-profile=full' to embed the complete command reference\n" +
 			"\n" +
 			"For local-only documentation (not committed to repo):\n" +
 			"  • Create claude.local.md or .claude/claude.local.md\n" +
@@ -258,7 +260,9 @@ func sameInode(a, b string) (bool, error) {
 // independent regular files whose user-authored regions (everything outside
 // the BEGIN/END BEADS INTEGRATION markers) have drifted apart. Hand-edits to
 // only one of the pair are a common source of inconsistency; the warning
-// recommends symlinking, regenerating via bd setup, or reconciling manually.
+// recommends symlinking, merging the user-authored content by hand, or opting
+// out. Overwriting one file with the other is not suggested: it discards that
+// file's hand edits.
 //
 // Skipped when:
 //   - Either file is missing
@@ -348,15 +352,13 @@ func CheckAgentDocDivergence(repoPath string) DoctorCheck {
 			"  (a) Symlink one to the other so future edits stay in sync:\n" +
 			"      ln -sf " + agentsFile + " CLAUDE.md\n" +
 			"\n" +
-			"  (b) Regenerate the managed sections (preserves user-authored content\n" +
-			"      from AGENTS.md as the source of truth):\n" +
-			"      bd setup claude && bd setup codex\n" +
-			"\n" +
-			"  (c) Reconcile manually — diff the files and copy the intended\n" +
-			"      user-authored content into both:\n" +
+			"  (b) Merge the user-authored content by hand — diff the files and\n" +
+			"      copy the intended text into both. Leave the managed beads\n" +
+			"      section (the block bd init writes) alone, and do not copy one\n" +
+			"      whole file over the other: that discards its hand edits.\n" +
 			"      diff " + agentsFile + " CLAUDE.md\n" +
 			"\n" +
-			"  (d) If the divergence is intentional (e.g. distinct audiences for\n" +
+			"  (c) If the divergence is intentional (e.g. distinct audiences for\n" +
 			"      each file), opt out by adding this HTML comment anywhere in\n" +
 			"      either file:\n" +
 			"      <!-- bd-doctor-divergence: ok -->",

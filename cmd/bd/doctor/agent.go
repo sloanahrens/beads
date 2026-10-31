@@ -583,10 +583,9 @@ func enrichClaudePlugin(dc DoctorCheck) agentEnrichment {
 func enrichCursor(dc DoctorCheck) agentEnrichment {
 	return agentEnrichment{
 		severity:    "advisory",
-		explanation: fmt.Sprintf("Cursor integration: %s. Beads integrates with Cursor via agent hooks in .cursor/hooks.json (or ~/.cursor/hooks.json) that inject bd prime on sessionStart and recover context after compaction.", dc.Message),
+		explanation: fmt.Sprintf("Cursor integration: %s. Beads integrates with Cursor via agent hooks in .cursor/hooks.json (or ~/.cursor/hooks.json). Create that file by hand with sessionStart, preCompact and postToolUse entries that run 'bd prime --hook-json'; no bd command writes it.", dc.Message),
 		observed:    dc.Message + "\n" + dc.Detail,
 		expected:    "Cursor hooks configured for beads (sessionStart/preCompact/postToolUse)",
-		commands:    []string{"bd setup cursor"},
 		sourceFiles: []string{"cmd/bd/doctor/cursor.go:CheckCursor"},
 	}
 }
@@ -594,10 +593,10 @@ func enrichCursor(dc DoctorCheck) agentEnrichment {
 func enrichCursorSettings(dc DoctorCheck) agentEnrichment {
 	return agentEnrichment{
 		severity:    "blocking",
-		explanation: fmt.Sprintf("Cursor hooks file is malformed: %s. A corrupted .cursor/hooks.json prevents Cursor from loading any hooks, which silently breaks beads context injection and post-compaction recovery.", dc.Message),
+		explanation: fmt.Sprintf("Cursor hooks file is malformed: %s. A corrupted .cursor/hooks.json prevents Cursor from loading any hooks, which silently breaks beads context injection and post-compaction recovery. Fix the JSON syntax by hand; no bd command rewrites this file any more.", dc.Message),
 		observed:    dc.Message + "\n" + dc.Detail,
 		expected:    ".cursor/hooks.json (and ~/.cursor/hooks.json) are valid JSON",
-		commands:    []string{"cat .cursor/hooks.json | python3 -m json.tool", "bd setup cursor"},
+		commands:    []string{"cat .cursor/hooks.json | python3 -m json.tool"},
 		sourceFiles: []string{"cmd/bd/doctor/cursor.go:CheckCursorSettingsHealth"},
 	}
 }
