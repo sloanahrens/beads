@@ -60,8 +60,8 @@ This boundary is mechanically enforced for non-test code by a `depguard`
 rule in `.golangci.yml` that denies `github.com/dolthub/` imports outside
 `internal/storage/` and `internal/doltserver/` (the linter config does not
 analyze `_test.go` files). The rule's `files` list documents the only
-justified exceptions (the proxied-server surface and DoltHub's `eventkit`
-telemetry client) alongside why each one is allowed.
+justified exceptions (the proxied-server surface) alongside why each one is
+allowed.
 
 ## Schema Boundary
 
