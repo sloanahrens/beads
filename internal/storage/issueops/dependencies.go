@@ -481,14 +481,19 @@ func WouldCreateSchedulingCycleInTx(ctx context.Context, tx DBTX, issueID, depen
 	return reachable > 0, nil
 }
 
+// cycleSchedulingTypes is the edge set the cycle walk follows. Parent-child is
+// included because a blocked parent propagates its blocked state to its
+// children in the ready-work computation, so a chain mixing blocks and
+// parent-child edges can form a logical livelock that prevents anything from
+// being ready.
+const cycleSchedulingTypes = "d.type IN ('blocks', 'conditional-blocks', 'parent-child')"
+
 // cycleReachabilityQuery uses UNION distinct recursion so cyclic and diamond
 // graphs terminate by unique reachable node instead of enumerating paths.
 //
-// The walked edge set is the union of scheduling-relevant edges: blocks,
-// conditional-blocks, and parent-child. Parent-child is included because a
-// blocked parent propagates its blocked state to its children in the
-// ready-work computation, so a chain mixing blocks and parent-child edges
-// can form a logical livelock that prevents anything from being ready.
+// A single depTable already expands one node's edges with a direct join; the
+// multi-table form walks the same way, one recursive term per table, rather
+// than joining a derived UNION of whole tables (see depExpansionTerms).
 func cycleReachabilityQuery(depTables []string) string {
 	if len(depTables) == 1 {
 		return fmt.Sprintf(`
@@ -503,21 +508,37 @@ func cycleReachabilityQuery(depTables []string) string {
 		`, DepTargetExpr, depTables[0])
 	}
 
-	var unions []string
-	for _, t := range depTables {
-		unions = append(unions, fmt.Sprintf("SELECT issue_id, %s AS depends_on_id FROM %s WHERE type IN ('blocks', 'conditional-blocks', 'parent-child')", DepTargetExpr, t))
-	}
-	unionQuery := strings.Join(unions, " UNION ")
 	return fmt.Sprintf(`
 		WITH RECURSIVE reachable(node) AS (
 			SELECT ?
 			UNION
-			SELECT d.depends_on_id
-			FROM reachable r
-			JOIN (%s) d ON d.issue_id = r.node
+			%s
 		)
 		SELECT COUNT(*) FROM reachable WHERE node = ?
-	`, unionQuery)
+	`, strings.Join(depExpansionTerms("reachable", depTables, cycleSchedulingTypes), " UNION "))
+}
+
+// depExpansionTerms returns one recursive term per dependency table. Each term
+// expands only the edges whose source is the node the walk just reached, so
+// every recursion step seeks the table's (issue_id, depends_on_id) primary key
+// instead of materializing a derived UNION of every edge in every table.
+//
+// A UNION of one term per table (rather than a join against a derived UNION of
+// both tables) keeps the walk at one recursive reference while still reading
+// only the expanded node's edges: a derived table in the FROM clause cannot
+// reference the recursive CTE, so the node predicate has to sit in each
+// branch.
+func depExpansionTerms(cteName string, depTables []string, typePredicate string) []string {
+	terms := make([]string, 0, len(depTables))
+	for _, t := range depTables {
+		// DepTargetExpr is unqualified on purpose: one dependency table is in
+		// scope per term, so its bare target columns are unambiguous.
+		//nolint:gosec // G201: depTables are fixed dependency table names from cycleDetectionTables/opts.
+		terms = append(terms, fmt.Sprintf(
+			"SELECT %s FROM %s d JOIN %s w ON d.issue_id = w.node AND %s",
+			DepTargetExpr, t, cteName, typePredicate))
+	}
+	return terms
 }
 
 func cycleDetectionTables() []string {
@@ -563,26 +584,25 @@ func CheckBlockingHierarchyInTx(ctx context.Context, tx DBTX, dep *types.Depende
 // and cousins in the same hierarchy do not match). Uses UNION distinct
 // recursion so diamond/cyclic parentage terminates by unique reachable node.
 func isAncestorInTx(ctx context.Context, tx DBTX, node, candidate string, depTables []string) (bool, error) {
-	var unions []string
-	for _, t := range depTables {
-		unions = append(unions, fmt.Sprintf("SELECT issue_id, %s AS parent_id FROM %s WHERE type = 'parent-child'", DepTargetExpr, t))
-	}
-	//nolint:gosec // G201: depTables are fixed dependency table names from cycleDetectionTables/opts.
-	query := fmt.Sprintf(`
-		WITH RECURSIVE ancestors(node) AS (
-			SELECT ?
-			UNION
-			SELECT d.parent_id
-			FROM ancestors a
-			JOIN (%s) d ON d.issue_id = a.node
-		)
-		SELECT COUNT(*) FROM ancestors WHERE node = ?
-	`, strings.Join(unions, " UNION "))
 	var n int
-	if err := tx.QueryRowContext(ctx, query, node, candidate).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, ancestorReachabilityQuery(depTables), node, candidate).Scan(&n); err != nil {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// ancestorReachabilityQuery walks parent-child edges upward from the start
+// node. Like cycleReachabilityQuery it expands only the walked node's edges
+// (see depExpansionTerms) instead of joining a derived UNION of whole tables.
+func ancestorReachabilityQuery(depTables []string) string {
+	return fmt.Sprintf(`
+		WITH RECURSIVE ancestors(node) AS (
+			SELECT ?
+			UNION
+			%s
+		)
+		SELECT COUNT(*) FROM ancestors WHERE node = ?
+	`, strings.Join(depExpansionTerms("ancestors", depTables, "d.type = 'parent-child'"), " UNION "))
 }
 
 func DeleteWispFromDependenciesInTx(ctx context.Context, tx *sql.Tx, wispID string) error {

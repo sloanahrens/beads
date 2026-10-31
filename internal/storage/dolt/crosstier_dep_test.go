@@ -237,6 +237,45 @@ func TestRunInTransactionCrossTierCycleRejected(t *testing.T) {
 	}
 }
 
+// A committed cycle that crosses the wisp tier mid-walk must still be found.
+// The cycle walk now expands one node's edges per recursion step in either
+// table (be-zbnm), so it has to follow A -> W (a dependencies row whose target
+// is a wisp) and then W -> B (a wisp_dependencies row) to close A -> W -> B -> A.
+func TestCycleThroughWispEdgeIsFound(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx, cancel := testContext(t)
+	defer cancel()
+
+	regularA := crossTierRegularIssue("test-wisp-cycle-regular-a", "regular A blocked by a wisp")
+	wispW := crossTierWispIssue("test-wisp-cycle-wisp-w", "wisp W in the middle of a cycle")
+	regularB := crossTierRegularIssue("test-wisp-cycle-regular-b", "regular B that closes the cycle")
+	for _, issue := range []*types.Issue{regularA, wispW, regularB} {
+		if err := store.CreateIssue(ctx, issue, "tester"); err != nil {
+			t.Fatalf("CreateIssue(%s): %v", issue.ID, err)
+		}
+	}
+
+	for _, dep := range []*types.Dependency{
+		{IssueID: regularA.ID, DependsOnID: wispW.ID, Type: types.DepBlocks},
+		{IssueID: wispW.ID, DependsOnID: regularB.ID, Type: types.DepBlocks},
+	} {
+		if err := store.AddDependency(ctx, dep, "tester"); err != nil {
+			t.Fatalf("add %s -> %s: %v", dep.IssueID, dep.DependsOnID, err)
+		}
+	}
+
+	err := store.AddDependency(ctx, &types.Dependency{
+		IssueID:     regularB.ID,
+		DependsOnID: regularA.ID,
+		Type:        types.DepBlocks,
+	}, "tester")
+	if !errors.Is(err, domain.ErrDependencyCycle) {
+		t.Fatalf("closing a cycle through a wisp edge: error = %v, want errors.Is(domain.ErrDependencyCycle)", err)
+	}
+}
+
 // A scheduling cycle whose CLOSING edge is same-tier must still be rejected when
 // an earlier edge in the same logical transaction is cross-tier and pending on
 // the other session. This is the create-time batch
