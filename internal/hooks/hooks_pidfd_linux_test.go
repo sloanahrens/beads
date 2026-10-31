@@ -17,10 +17,19 @@ import (
 // not one worth waiting on longer.
 const pidfdExitTimeout = 10 * time.Second
 
-// pidfdOpen is the syscall, in a variable so a row can drive the wait through
-// a pipe in an environment where pidfd_open is unavailable (a container's
-// seccomp policy answers ENOSYS on a kernel that has the call).
-var pidfdOpen = unix.PidfdOpen
+// pidfdKernel is the three calls the exit wait makes, passed in as a value so
+// a row drives them with fakes while the descendants test passes the host
+// kernel. Nothing here is package state a test could swap.
+type pidfdKernel struct {
+	open  func(pid, flags int) (int, error)
+	poll  func(fd int, timeout time.Duration) (bool, error)
+	close func(fd int) error
+}
+
+// realPidfdKernel is the host kernel's pidfd_open, poll and close.
+func realPidfdKernel() pidfdKernel {
+	return pidfdKernel{open: unix.PidfdOpen, poll: pollPidfd, close: unix.Close}
+}
 
 // pidfdUnsupported reports whether err means the kernel has no pidfd_open
 // (Linux before 5.3). That must skip the test with a message: the wait cannot
@@ -29,13 +38,13 @@ func pidfdUnsupported(err error) bool {
 	return errors.Is(err, unix.ENOSYS)
 }
 
-// pidfdExitWait waits on pid's exit with the kernel instead of a spin. A pidfd
-// becomes readable when the process terminates, so one poll on it is the whole
-// wait; the kernel carries it, not a Gosched loop in this process. A pid that
-// is already gone — exited and reaped before the fd could be opened — reports
-// exited at once. The returned close releases the pidfd.
-func pidfdExitWait(pid int, timeout time.Duration) (wait func() (bool, error), closePidfd func(), err error) {
-	fd, err := pidfdOpen(pid, 0)
+// waitForChildExit opens a pidfd for pid and returns the wait on the child's
+// exit. A pid that is already gone — exited and reaped before the fd could be
+// opened — is reported by the wait as exited at once. closePidfd releases the
+// descriptor. An open failure is returned, with ENOSYS left for the caller to
+// recognise as an unsupported kernel.
+func waitForChildExit(k pidfdKernel, pid int, timeout time.Duration) (wait func() (bool, error), closePidfd func(), err error) {
+	fd, err := k.open(pid, 0)
 	if err != nil {
 		if errors.Is(err, unix.ESRCH) {
 			// The process does not exist: it has already exited and been reaped.
@@ -44,19 +53,29 @@ func pidfdExitWait(pid int, timeout time.Duration) (wait func() (bool, error), c
 		return nil, nil, fmt.Errorf("pidfd_open %d: %w", pid, err)
 	}
 	return func() (bool, error) {
-		return pollPidfd(fd, timeout)
-	}, func() { _ = unix.Close(fd) }, nil
+		return k.poll(fd, timeout)
+	}, func() { _ = k.close(fd) }, nil
 }
 
-// pollPidfd is the single kernel wait: one poll for pid's exit notification.
-// It reports true when the fd is readable (the process exited), false when the
-// timeout expires with the process still running, and an error when poll
-// itself fails. EINTR means a signal interrupted the wait before the timeout,
-// so the wait is resumed: an interruption is neither an exit nor a timeout.
+// pollPidfd is the single kernel wait: one poll for the child's exit
+// notification.
 func pollPidfd(fd int, timeout time.Duration) (bool, error) {
+	return pollForReadiness(unix.Poll, fd, int(timeout.Milliseconds()))
+}
+
+// pollFunc is the poll syscall, passed in so a row can interrupt a wait
+// without a signal and without a clock.
+type pollFunc func(fds []unix.PollFd, timeoutMs int) (int, error)
+
+// pollForReadiness reports whether fd became readable within timeoutMs: true
+// when it is readable (the process exited), false when the timeout expires
+// with the fd still silent, and an error when poll itself fails. EINTR means a
+// signal interrupted the wait before the timeout, so the wait is resumed: an
+// interruption is neither readability nor a timeout.
+func pollForReadiness(poll pollFunc, fd int, timeoutMs int) (bool, error) {
 	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	for {
-		n, err := unix.Poll(fds, int(timeout.Milliseconds()))
+		n, err := poll(fds, timeoutMs)
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}
@@ -67,17 +86,217 @@ func pollPidfd(fd int, timeout time.Duration) (bool, error) {
 	}
 }
 
-// TestPidfdUnsupported_SkipsOlderKernels pins the skip condition: a kernel
-// without pidfd_open is told apart from a real open failure, so the descendants
-// test skips with a message instead of passing without having waited.
-func TestPidfdUnsupported_SkipsOlderKernels(t *testing.T) {
+// TestAwaitChildExit pins every way the descendants test reads the wait it
+// opened: the child exited, it was still running at the timeout, the wait
+// failed, the kernel has no pidfd_open (the skip), the child was already
+// reaped, and the open failed. Every call is injected, so no row uses a clock
+// or a sleep.
+func TestAwaitChildExit(t *testing.T) {
+	errPoll := errors.New("poll failed")
+	opened := func(int, int) (int, error) { return 7, nil }
+	exited := func() (bool, error) { return true, nil }
+	running := func() (bool, error) { return false, nil }
+
+	tests := []struct {
+		name        string
+		open        func(pid, flags int) (int, error)
+		poll        func(fd int, timeout time.Duration) (bool, error)
+		state       func() (bool, error)
+		wantStopped bool
+		wantSkip    bool
+		wantErr     error
+		wantCloses  int
+	}{
+		{
+			name:        "child exited",
+			open:        opened,
+			poll:        func(int, time.Duration) (bool, error) { return true, nil },
+			state:       exited,
+			wantStopped: true,
+			wantCloses:  1,
+		},
+		{
+			name:       "still running at the timeout",
+			open:       opened,
+			poll:       func(int, time.Duration) (bool, error) { return false, nil },
+			state:      running,
+			wantCloses: 1,
+		},
+		{
+			name:       "wait failed",
+			open:       opened,
+			poll:       func(int, time.Duration) (bool, error) { return false, errPoll },
+			state:      exited,
+			wantErr:    errPoll,
+			wantCloses: 1,
+		},
+		{
+			name:       "state still reads running",
+			open:       opened,
+			poll:       func(int, time.Duration) (bool, error) { return true, nil },
+			state:      running,
+			wantCloses: 1,
+		},
+		{
+			name:       "state unreadable",
+			open:       opened,
+			poll:       func(int, time.Duration) (bool, error) { return true, nil },
+			state:      func() (bool, error) { return false, errPoll },
+			wantErr:    errPoll,
+			wantCloses: 1,
+		},
+		{
+			name:     "kernel without pidfd_open skips",
+			open:     func(int, int) (int, error) { return -1, unix.ENOSYS },
+			wantSkip: true,
+		},
+		{
+			name:        "child already reaped",
+			open:        func(int, int) (int, error) { return -1, unix.ESRCH },
+			state:       exited,
+			wantStopped: true,
+		},
+		{
+			name:    "open failed",
+			open:    func(int, int) (int, error) { return -1, unix.EACCES },
+			wantErr: unix.EACCES,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			closed := 0
+			k := pidfdKernel{
+				open:  tt.open,
+				poll:  tt.poll,
+				close: func(int) error { closed++; return nil },
+			}
+
+			res := awaitChildExit(k, 42, time.Second, tt.state)
+
+			if tt.wantSkip {
+				if res.SkipReason == "" {
+					t.Fatal("an unsupported kernel was not reported as a skip")
+				}
+				if res.Err != nil || res.Stopped {
+					t.Errorf("skip result = %+v, want only a skip reason", res)
+				}
+				return
+			}
+			if res.SkipReason != "" {
+				t.Fatalf("skip reason = %q, want none", res.SkipReason)
+			}
+			if tt.wantErr != nil {
+				if !errors.Is(res.Err, tt.wantErr) {
+					t.Fatalf("error = %v, want %v", res.Err, tt.wantErr)
+				}
+			} else if res.Err != nil {
+				t.Fatalf("error = %v, want nil", res.Err)
+			}
+			if res.Stopped != tt.wantStopped {
+				t.Errorf("stopped = %v, want %v", res.Stopped, tt.wantStopped)
+			}
+			if closed != tt.wantCloses {
+				t.Errorf("closed the pidfd %d times, want %d", closed, tt.wantCloses)
+			}
+		})
+	}
+}
+
+// TestPollForReadiness pins the one kernel wait's mapping: readable, timed out,
+// interrupted and resumed, and failed — through an injected poll, with no
+// signal, no clock and no sleep.
+func TestPollForReadiness(t *testing.T) {
+	errPoll := errors.New("poll failed")
+
+	tests := []struct {
+		name      string
+		poll      func(calls int) (int, error)
+		wantRead  bool
+		wantErr   error
+		wantCalls int
+	}{
+		{
+			name:      "readable",
+			poll:      func(int) (int, error) { return 1, nil },
+			wantRead:  true,
+			wantCalls: 1,
+		},
+		{
+			name:      "timed out",
+			poll:      func(int) (int, error) { return 0, nil },
+			wantRead:  false,
+			wantCalls: 1,
+		},
+		{
+			name: "interrupted then readable",
+			poll: func(calls int) (int, error) {
+				if calls == 1 {
+					return -1, unix.EINTR
+				}
+				return 1, nil
+			},
+			wantRead:  true,
+			wantCalls: 2,
+		},
+		{
+			name:      "poll failed",
+			poll:      func(int) (int, error) { return -1, errPoll },
+			wantRead:  false,
+			wantErr:   errPoll,
+			wantCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			var polled []unix.PollFd
+			polledTimeout := -1
+			poll := func(fds []unix.PollFd, timeoutMs int) (int, error) {
+				calls++
+				polled = fds
+				polledTimeout = timeoutMs
+				return tt.poll(calls)
+			}
+
+			read, err := pollForReadiness(poll, 7, 1000)
+
+			if calls != tt.wantCalls {
+				t.Errorf("polled %d times, want %d", calls, tt.wantCalls)
+			}
+			if len(polled) != 1 || polled[0].Fd != 7 || polled[0].Events != unix.POLLIN {
+				t.Errorf("polled %+v, want one descriptor 7 for POLLIN", polled)
+			}
+			if polledTimeout != 1000 {
+				t.Errorf("poll timeout = %d, want 1000", polledTimeout)
+			}
+			if read != tt.wantRead {
+				t.Errorf("readable = %v, want %v", read, tt.wantRead)
+			}
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestPidfdUnsupported pins the skip condition the descendants test relies on:
+// a kernel without pidfd_open is told apart from every other open failure, so
+// the test skips with a message instead of passing without having waited.
+func TestPidfdUnsupported(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
 		{"kernel without pidfd_open", fmt.Errorf("pidfd_open 42: %w", unix.ENOSYS), true},
-		{"other open failure", fmt.Errorf("pidfd_open 42: %w", unix.EPERM), false},
+		{"permission denied", fmt.Errorf("pidfd_open 42: %w", unix.EACCES), false},
+		{"no process", fmt.Errorf("pidfd_open 42: %w", unix.ESRCH), false},
 		{"no failure", nil, false},
 	}
 	for _, tt := range tests {
@@ -89,130 +308,26 @@ func TestPidfdUnsupported_SkipsOlderKernels(t *testing.T) {
 	}
 }
 
-// TestPidfdExitWait_ReportsTheExit pins the readable-means-exited mapping the
-// descendants test relies on, through the opener seam so it runs without a
-// pidfd: the fd becomes readable, so the wait reports the child's exit.
-func TestPidfdExitWait_ReportsTheExit(t *testing.T) {
-	readFd := readablePipe(t)
-	pidfdOpener(t, readFd, nil)
-
-	wait, closePidfd, err := pidfdExitWait(42, time.Second)
-	if err != nil {
-		t.Fatalf("pidfdExitWait error = %v, want nil", err)
-	}
-	defer closePidfd()
-
-	exited, err := wait()
-	if err != nil {
-		t.Fatalf("wait error = %v, want nil", err)
-	}
-	if !exited {
-		t.Fatal("a readable fd — the child's exit — was reported as still running")
-	}
-}
-
-// TestPidfdExitWait_TimesOut pins the other side: an fd that never becomes
-// readable (the child still running) is reported as a timeout, not as an exit.
-func TestPidfdExitWait_TimesOut(t *testing.T) {
-	readFd := openPipe(t)
-	pidfdOpener(t, readFd, nil)
-
-	wait, closePidfd, err := pidfdExitWait(42, 20*time.Millisecond)
-	if err != nil {
-		t.Fatalf("pidfdExitWait error = %v, want nil", err)
-	}
-	defer closePidfd()
-
-	exited, err := wait()
-	if err != nil {
-		t.Fatalf("wait error = %v, want nil", err)
-	}
-	if exited {
-		t.Fatal("a wait that timed out was reported as the child's exit")
-	}
-}
-
-// TestPidfdExitWait_ReportsAProcessAlreadyGone pins the race the descendants
-// test can lose: the child exited and was reaped before its pidfd could be
-// opened, which the kernel reports as ESRCH and which is an exit, not a
-// failure to wait.
-func TestPidfdExitWait_ReportsAProcessAlreadyGone(t *testing.T) {
-	pidfdOpener(t, -1, unix.ESRCH)
-
-	wait, closePidfd, err := pidfdExitWait(42, time.Second)
-	if err != nil {
-		t.Fatalf("pidfdExitWait error = %v, want nil", err)
-	}
-	defer closePidfd()
-
-	exited, err := wait()
-	if err != nil {
-		t.Fatalf("wait error = %v, want nil", err)
-	}
-	if !exited {
-		t.Fatal("a pid already gone — exited and reaped — was reported as still running")
-	}
-}
-
-// TestPidfdExitWait_ReportsAnOpenFailure pins that a real open failure is
-// returned rather than read as an exit or as an unsupported kernel.
-func TestPidfdExitWait_ReportsAnOpenFailure(t *testing.T) {
-	pidfdOpener(t, -1, unix.EACCES)
-
-	wait, closePidfd, err := pidfdExitWait(42, time.Second)
-	if !errors.Is(err, unix.EACCES) {
-		t.Fatalf("pidfdExitWait error = %v, want EACCES", err)
-	}
-	if pidfdUnsupported(err) {
-		t.Fatal("a permission failure was reported as an unsupported kernel")
-	}
-	if wait != nil || closePidfd != nil {
-		t.Fatal("a failed open returned a wait or a close")
-	}
-}
-
-// pidfdOpener points the opener seam at fakeFd for one test, reporting err
-// (with fakeFd -1 for an error). It restores the real syscall when the test
-// ends.
-func pidfdOpener(t *testing.T, fakeFd int, err error) {
-	t.Helper()
-	previous := pidfdOpen
-	pidfdOpen = func(int, int) (int, error) { return fakeFd, err }
-	t.Cleanup(func() { pidfdOpen = previous })
-}
-
-// readablePipe returns a pipe whose read end is already readable — a byte
-// written and the writer released — so a poll on it returns at once.
-func readablePipe(t *testing.T) int {
-	t.Helper()
-	readFd, writeFd := pipeEnds(t)
-	if _, err := unix.Write(writeFd, []byte{1}); err != nil {
-		t.Fatalf("write pipe: %v", err)
-	}
-	return readFd
-}
-
-// openPipe returns a pipe's read end whose writer is still open and silent, so
-// a poll on it can only time out.
-func openPipe(t *testing.T) int {
-	t.Helper()
-	readFd, _ := pipeEnds(t)
-	return readFd
-}
-
-// pipeEnds creates a pipe and releases both ends when the test ends. A row
-// that hands the read end to the wait also closes it through closePidfd; that
-// second close returns EBADF and touches nothing else, so the cleanup is safe
-// whether or not the row got that far.
-func pipeEnds(t *testing.T) (readFd, writeFd int) {
-	t.Helper()
+// TestPollPidfd_ReportsAReadableDescriptor drives pollPidfd's real binding:
+// a pipe whose read end is already readable is reported readable at once, with
+// no wait. Each end is closed exactly once, by this test.
+func TestPollPidfd_ReportsAReadableDescriptor(t *testing.T) {
 	var fds [2]int
 	if err := unix.Pipe(fds[:]); err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = unix.Close(fds[0])
-		_ = unix.Close(fds[1])
-	})
-	return fds[0], fds[1]
+	t.Cleanup(func() { _ = unix.Close(fds[0]) })
+	t.Cleanup(func() { _ = unix.Close(fds[1]) })
+
+	if _, err := unix.Write(fds[1], []byte{1}); err != nil {
+		t.Fatalf("write pipe: %v", err)
+	}
+
+	read, err := pollPidfd(fds[0], time.Second)
+	if err != nil {
+		t.Fatalf("pollPidfd error = %v, want nil", err)
+	}
+	if !read {
+		t.Fatal("a readable descriptor was reported as still silent")
+	}
 }

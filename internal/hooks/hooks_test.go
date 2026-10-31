@@ -336,22 +336,49 @@ func TestRunSync_KillsDescendants(t *testing.T) {
 	// with the kernel: a pidfd becomes readable when the process terminates,
 	// so one poll on it is the whole wait — no spin, and no attempt count
 	// standing in for the child's own progress.
-	wait, closePidfd, err := pidfdExitWait(pid, pidfdExitTimeout)
-	if pidfdUnsupported(err) {
-		t.Skip("pidfd_open is unavailable on this kernel (Linux before 5.3); cannot wait for the child's exit")
+	res := awaitChildExit(realPidfdKernel(), pid, pidfdExitTimeout,
+		func() (bool, error) { return childStopped(pid) })
+	if res.SkipReason != "" {
+		t.Skip(res.SkipReason)
 	}
+	if res.Err != nil {
+		t.Fatalf("Failed to wait for child process %d to exit: %v", pid, res.Err)
+	}
+	if !res.Stopped {
+		t.Fatalf("Child process %d still running after %v", pid, pidfdExitTimeout)
+	}
+}
+
+// childExit is the outcome of waiting on the hook child's exit.
+type childExit struct {
+	// Stopped reports that the child exited and its state confirms it stopped.
+	Stopped bool
+	// SkipReason is set when the kernel has no pidfd_open: the wait cannot be
+	// made, so the descendants test must skip rather than pass without having
+	// waited.
+	SkipReason string
+	// Err is a failed open, wait or state read.
+	Err error
+}
+
+// awaitChildExit waits on pid's exit with the kernel and reads the state the
+// exit buys. It turns an unsupported kernel into a skip reason, so its caller
+// skips with a message instead of asserting without having waited. The kernel
+// and the state read are injected, so its rows run with fake waits, with no
+// clock and no sleep.
+func awaitChildExit(k pidfdKernel, pid int, timeout time.Duration, state func() (bool, error)) childExit {
+	wait, closePidfd, err := waitForChildExit(k, pid, timeout)
 	if err != nil {
-		t.Fatalf("Failed to open a pidfd for child %d: %v", pid, err)
+		if pidfdUnsupported(err) {
+			return childExit{SkipReason: fmt.Sprintf(
+				"pidfd_open is unavailable (Linux before 5.3, or not Linux); cannot wait for the child's exit: %v", err)}
+		}
+		return childExit{Err: err}
 	}
 	defer closePidfd()
 
-	stopped, err := waitForStopped(wait, func() (bool, error) { return childStopped(pid) })
-	if err != nil {
-		t.Fatalf("Failed to wait for child process %d to exit: %v", pid, err)
-	}
-	if !stopped {
-		t.Fatalf("Child process %d still running after %v", pid, pidfdExitTimeout)
-	}
+	stopped, err := waitForStopped(wait, state)
+	return childExit{Stopped: stopped, Err: err}
 }
 
 // waitForStopped waits for the child to exit and then reports whether its
