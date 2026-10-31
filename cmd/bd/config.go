@@ -275,11 +275,10 @@ var configGetCmd = &cobra.Command{
 		}
 
 		if config.IsYamlOnlyKey(key) {
-			// User-global keys (e.g. metrics.*) must be read from the user-global
-			// config.yaml only — the same source the runtime uses for metrics
-			// consent and endpoint. Reading the merged value here would let a
-			// project's .beads/config.yaml shadow the effective value and report the
-			// opposite of what `bd metrics` actually honors.
+			// User-global keys (node_id) are per-machine settings written to the
+			// user-global config.yaml; report that value and its location rather
+			// than a project .beads/config.yaml value, which must never stand in
+			// for a per-machine answer.
 			if config.IsUserGlobalKey(key) {
 				value := config.GetUserYamlConfig(key)
 				location := config.UserConfigYamlDisplayPath()
@@ -937,7 +936,7 @@ var recognizedConfigPrefixes = []string{
 	"export.", "import.", "dolt.", "custom.",
 	"status.", "types.", "doctor.suppress.", "routing.", "sync.", "git.",
 	"directory.", "repos.", "external_projects.", "validation.",
-	"lint.", "hierarchy.", "ai.", "backup.", "federation.", "metrics.",
+	"lint.", "hierarchy.", "ai.", "backup.", "federation.",
 	"agent.", "claim.", "storage-class.",
 }
 
