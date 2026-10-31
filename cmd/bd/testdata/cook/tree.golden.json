@@ -34,7 +34,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "exp-draft",
@@ -53,7 +52,6 @@
         "needs": [
           "main.draft"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "exp-draft",
@@ -84,7 +82,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-parent",
@@ -101,7 +98,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-parent",
@@ -121,7 +117,6 @@
           "plan",
           "audit-implement"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-parent",
@@ -193,7 +188,6 @@
           "design"
         ],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-basic",
@@ -212,7 +206,6 @@
         "needs": [
           "design"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {
           "owner": "ci",
@@ -234,7 +227,6 @@
         "needs": [
           "build"
         ],
-        "waits_for": "",
         "gate": {
           "type": "gh:run",
           "await_id": "ci.yml",
@@ -269,7 +261,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-child",
@@ -288,7 +279,6 @@
         "needs": [
           "plan"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-parent",
@@ -307,7 +297,6 @@
         "needs": [
           "implement"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-child",
@@ -338,7 +327,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-children",
@@ -357,7 +345,6 @@
         "needs": [
           "prep"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-children",
@@ -373,7 +360,6 @@
             "assignee": "",
             "labels": [],
             "needs": [],
-            "waits_for": "",
             "gate": null,
             "metadata": {},
             "source_formula": "wf-children",
@@ -390,7 +376,6 @@
             "assignee": "",
             "labels": [],
             "needs": [],
-            "waits_for": "",
             "gate": null,
             "metadata": {},
             "source_formula": "wf-children",
@@ -411,7 +396,6 @@
         "needs": [
           "fanout"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-children",
@@ -454,7 +438,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-conditional",
@@ -485,7 +468,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-expanded",
@@ -504,7 +486,6 @@
         "needs": [
           "spec"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "exp-draft",
@@ -523,7 +504,6 @@
         "needs": [
           "code.draft"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "exp-draft",
@@ -558,7 +538,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-overlaid",
@@ -577,7 +556,6 @@
         "needs": [
           "prepare"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-overlaid",
@@ -608,7 +586,6 @@
         "assignee": "",
         "labels": [],
         "needs": [],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-parent",
@@ -627,7 +604,6 @@
         "needs": [
           "plan"
         ],
-        "waits_for": "",
         "gate": null,
         "metadata": {},
         "source_formula": "wf-parent",

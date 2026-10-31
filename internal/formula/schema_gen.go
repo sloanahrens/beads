@@ -139,37 +139,6 @@ Mutually exclusive with AfterStep.`,
 		},
 	},
 	{
-		Name: "BranchRule",
-		Doc: `BranchRule defines parallel execution paths that rejoin.
-Creates a fork-join pattern: from -> [parallel steps] -> join.`,
-		Fields: []FieldDoc{
-			{
-				Name:     "From",
-				Type:     "string",
-				JSONName: "from",
-				Required: true,
-				Doc: `From is the step ID that precedes the parallel paths.
-All branch steps will depend on this step.`,
-			},
-			{
-				Name:     "Steps",
-				Type:     "[]string",
-				JSONName: "steps",
-				Required: true,
-				Doc: `Steps are the step IDs that run in parallel.
-These steps will all depend on From.`,
-			},
-			{
-				Name:     "Join",
-				Type:     "string",
-				JSONName: "join",
-				Required: true,
-				Doc: `Join is the step ID that follows all parallel paths.
-This step will depend on all Steps completing.`,
-			},
-		},
-	},
-	{
 		Name: "ComposeRules",
 		Doc:  `ComposeRules define how formulas can be bonded together.`,
 		Fields: []FieldDoc{
@@ -198,20 +167,6 @@ The target step is replaced by the expanded template steps.`,
 				JSONName: "map",
 				Doc: `Map applies an expansion template to all steps matching a pattern.
 Each matching step is replaced by the expanded template steps.`,
-			},
-			{
-				Name:     "Branch",
-				Type:     "[]*BranchRule",
-				JSONName: "branch",
-				Doc: `Branch defines fork-join parallel execution patterns.
-Each rule creates dependencies for parallel paths that rejoin.`,
-			},
-			{
-				Name:     "Gate",
-				Type:     "[]*GateRule",
-				JSONName: "gate",
-				Doc: `Gate defines conditional waits before steps.
-Each rule adds a condition that must be satisfied at runtime.`,
 			},
 			{
 				Name:     "Aspects",
@@ -404,29 +359,6 @@ formula authors because it maps directly to Issue.AwaitID.`,
 		},
 	},
 	{
-		Name: "GateRule",
-		Doc: `GateRule defines a condition that must be satisfied before a step proceeds.
-Gates are evaluated at runtime by the patrol executor.`,
-		Fields: []FieldDoc{
-			{
-				Name:     "Before",
-				Type:     "string",
-				JSONName: "before",
-				Required: true,
-				Doc: `Before is the step ID that the gate applies to.
-The condition must be satisfied before this step can start.`,
-			},
-			{
-				Name:     "Condition",
-				Type:     "string",
-				JSONName: "condition",
-				Required: true,
-				Doc: `Condition is the expression to evaluate.
-Format matches condition evaluator syntax (e.g., "tests.status == 'complete'").`,
-			},
-		},
-	},
-	{
 		Name: "Hook",
 		Doc:  `Hook defines automatic formula attachment based on conditions.`,
 		Fields: []FieldDoc{
@@ -483,64 +415,6 @@ Examples: "*.implement", "shiny.*"`,
 				Type:     "map[string]string",
 				JSONName: "vars",
 				Doc:      `Vars are variable overrides for the expansion.`,
-			},
-		},
-	},
-	{
-		Name: "OnCompleteSpec",
-		Doc: `OnCompleteSpec defines actions triggered when a step completes.
-Used for runtime expansion over step output (the for-each construct).
-
-Example YAML:
-
-	step: survey-workers
-	on_complete:
-	  for_each: output.workers
-	  bond: mol-worker-arm
-	  vars:
-	    worker_name: "{item.name}"
-	    rig: "{item.rig}"
-	  parallel: true`,
-		Fields: []FieldDoc{
-			{
-				Name:     "ForEach",
-				Type:     "string",
-				JSONName: "for_each",
-				Doc: `ForEach is the path to the iterable collection in step output.
-Format: "output.<field>" or "output.<field>.<nested>"
-The collection must be an array at runtime.`,
-			},
-			{
-				Name:     "Bond",
-				Type:     "string",
-				JSONName: "bond",
-				Doc: `Bond is the formula to instantiate for each item.
-A new molecule is created for each element in the ForEach collection.`,
-			},
-			{
-				Name:     "Vars",
-				Type:     "map[string]string",
-				JSONName: "vars",
-				Doc: `Vars are variable bindings for each iteration.
-Supports placeholders:
-  - {item} - the current item value (for primitives)
-  - {item.field} - a field from the current item (for objects)
-  - {index} - the zero-based iteration index`,
-			},
-			{
-				Name:     "Parallel",
-				Type:     "bool",
-				JSONName: "parallel",
-				Doc: `Parallel runs all bonded molecules concurrently (default behavior).
-Set to true to make this explicit.`,
-			},
-			{
-				Name:     "Sequential",
-				Type:     "bool",
-				JSONName: "sequential",
-				Doc: `Sequential runs bonded molecules one at a time.
-Each molecule starts only after the previous one completes.
-Mutually exclusive with Parallel.`,
 			},
 		},
 	},
@@ -646,14 +520,6 @@ without a post-pour compose step.`,
 Either Needs or DependsOn can be used; they are merged during cooking.`,
 			},
 			{
-				Name:     "WaitsFor",
-				Type:     "string",
-				JSONName: "waits_for",
-				Doc: `WaitsFor specifies a fanout gate type for this step.
-Values: "all-children" (wait for all dynamic children) or "any-children" (wait for first).
-When set, the cooked issue gets a "gate:<value>" label.`,
-			},
-			{
 				Name:     "Assignee",
 				Type:     "string",
 				JSONName: "assignee",
@@ -695,13 +561,6 @@ Evaluated at cook/pour time via FilterStepsByCondition.`,
 				Doc: `Gate defines an async wait condition for this step.
 When set, bd cook creates a gate issue that blocks this step.
 Close the gate issue (bd close bd-xxx.gate-stepid) to unblock.`,
-			},
-			{
-				Name:     "OnComplete",
-				Type:     "*OnCompleteSpec",
-				JSONName: "on_complete",
-				Doc: `OnComplete defines actions triggered when this step completes.
-Used for runtime expansion over step output (the for-each construct).`,
 			},
 		},
 	},
@@ -746,27 +605,6 @@ Non-nil (including &"") means the variable has an explicit default.`,
 				Type:     "string",
 				JSONName: "type",
 				Doc:      `Type is the expected value type: string (default), int, bool.`,
-			},
-		},
-	},
-	{
-		Name: "WaitsForSpec",
-		Doc:  `WaitsForSpec holds the parsed waits_for field.`,
-		Fields: []FieldDoc{
-			{
-				Name:     "Gate",
-				Type:     "string",
-				JSONName: "Gate",
-				Required: true,
-				Doc:      `Gate is the gate type: "all-children" or "any-children"`,
-			},
-			{
-				Name:     "SpawnerID",
-				Type:     "string",
-				JSONName: "SpawnerID",
-				Required: true,
-				Doc: `SpawnerID is the step ID whose children to wait for.
-Empty means infer from context (typically first step in needs).`,
 			},
 		},
 	},

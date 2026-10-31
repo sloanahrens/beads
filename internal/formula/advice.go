@@ -199,26 +199,7 @@ func cloneStep(s *Step) *Step {
 		clone.Labels = make([]string, len(s.Labels))
 		copy(clone.Labels, s.Labels)
 	}
-	// Deep copy OnComplete if present
-	if s.OnComplete != nil {
-		clone.OnComplete = cloneOnComplete(s.OnComplete)
-	}
 	// Don't deep copy children here - ApplyAdvice handles that recursively
-	return &clone
-}
-
-// cloneOnComplete creates a deep copy of an OnCompleteSpec.
-func cloneOnComplete(oc *OnCompleteSpec) *OnCompleteSpec {
-	if oc == nil {
-		return nil
-	}
-	clone := *oc
-	if len(oc.Vars) > 0 {
-		clone.Vars = make(map[string]string, len(oc.Vars))
-		for k, v := range oc.Vars {
-			clone.Vars[k] = v
-		}
-	}
 	return &clone
 }
 

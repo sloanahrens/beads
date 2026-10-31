@@ -47,6 +47,49 @@ gate = { type = "gh:run", await_id = "ci", timeout = "1h" }
 	}
 }
 
+// The engine cut (be-2gw.4) removed these keys. A formula that still uses one
+// must be refused by strict decode, not silently run without it.
+func TestDecodeTOMLStrict_RefusesRemovedEngineKeys(t *testing.T) {
+	src := `formula = "mol-cut"
+version = 1
+
+[[steps]]
+id = "a"
+title = "A"
+waits_for = "all-children"
+on_complete = { for_each = "output.items", bond = "mol-arm" }
+
+[[steps]]
+id = "b"
+title = "B"
+needs = ["a"]
+
+[[compose.branch]]
+from = "a"
+steps = ["b"]
+join = "b"
+
+[[compose.gate]]
+before = "b"
+condition = "a.status == 'complete'"
+`
+	_, problems, err := DecodeTOMLStrict([]byte(src))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range problems {
+		if p.Kind == ProblemUnknownKey {
+			got[p.Key] = true
+		}
+	}
+	for _, want := range []string{"steps.waits_for", "steps.on_complete", "compose.branch", "compose.gate"} {
+		if !got[want] {
+			t.Errorf("removed key %s not refused; problems: %+v", want, problems)
+		}
+	}
+}
+
 func TestDecodeTOMLStrict_UnknownKeysWithLines(t *testing.T) {
 	src := `formula = "mol-bad"
 version = 1

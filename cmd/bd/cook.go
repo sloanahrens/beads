@@ -182,13 +182,6 @@ func loadAndResolveFormula(formulaPath string, searchPaths []string) (*formula.F
 		return nil, fmt.Errorf("resolving formula: %w", err)
 	}
 
-	// Apply control flow operators - branches and gates
-	controlFlowSteps, err := formula.ApplyControlFlow(resolved.Steps, resolved.Compose)
-	if err != nil {
-		return nil, fmt.Errorf("applying control flow: %w", err)
-	}
-	resolved.Steps = controlFlowSteps
-
 	// Apply advice transformations
 	if len(resolved.Advice) > 0 {
 		resolved.Steps = formula.ApplyAdvice(resolved.Steps, resolved.Advice)
@@ -588,7 +581,7 @@ func gateAwaitID(gate *formula.Gate) string {
 }
 
 // processStepToIssue converts a formula.Step to a types.Issue.
-// The issue includes all fields including Labels populated from step.Labels and waits_for.
+// The issue includes all fields including Labels populated from step.Labels.
 // This is the shared core logic used by both DB-persisted and in-memory cooking.
 func processStepToIssue(step *formula.Step, parentID string) *types.Issue {
 	// Generate issue ID (formula-name.step-id)
@@ -627,12 +620,6 @@ func processStepToIssue(step *formula.Step, parentID string) *types.Issue {
 
 	// Populate labels from step
 	issue.Labels = append(issue.Labels, step.Labels...)
-
-	// Add gate label for waits_for field
-	if step.WaitsFor != "" {
-		gateLabel := fmt.Sprintf("gate:%s", step.WaitsFor)
-		issue.Labels = append(issue.Labels, gateLabel)
-	}
 
 	// Carry step metadata through to the issue (GH#3341).
 	if len(step.Metadata) > 0 {
@@ -791,13 +778,6 @@ func cookPipeline(parser *formula.Parser, f *formula.Formula, conditionVars map[
 			return nil, none, fmt.Errorf("formula %q: %w", formulaName, err)
 		}
 	}
-
-	// Apply control flow operators - branches and gates
-	controlFlowSteps, err := formula.ApplyControlFlow(resolved.Steps, resolved.Compose)
-	if err != nil {
-		return nil, none, fmt.Errorf("applying control flow to %q: %w", formulaName, err)
-	}
-	resolved.Steps = controlFlowSteps
 
 	// Apply advice transformations
 	if len(resolved.Advice) > 0 {
@@ -1047,46 +1027,13 @@ func cookFormula(ctx context.Context, s storage.DoltStorage, f *formula.Formula,
 	}, nil
 }
 
-// collectDependencies collects blocking dependencies from depends_on, needs, and waits_for fields.
+// collectDependencies collects blocking dependencies from depends_on and needs fields.
 // This is the shared implementation used by both DB-persisted and in-memory subgraph cooking.
 func collectDependencies(step *formula.Step, idMapping map[string]string, deps *[]*types.Dependency) {
 	issueID := idMapping[step.ID]
 
-	// Pre-compute the waits_for spawner so we can dedupe against depends_on
-	// and needs below. When waits_for has no explicit `from:`, it infers its
-	// spawner from needs[0] — and `depends_on`/`needs` would otherwise emit a
-	// DepBlocks edge on the same (source, target) pair that `waits_for`
-	// emits a DepWaitsFor edge on. Storage rejects the duplicate. The
-	// DepWaitsFor edge subsumes the blocking semantics, so we skip the
-	// redundant DepBlocks for that specific target (GH#3783).
-	var waitsForSpec *formula.WaitsForSpec
-	var waitsForSpawnerStepID string
-	if step.WaitsFor != "" {
-		waitsForSpec = formula.ParseWaitsFor(step.WaitsFor)
-		if waitsForSpec != nil {
-			waitsForSpawnerStepID = waitsForSpec.SpawnerID
-			if waitsForSpawnerStepID == "" && len(step.Needs) > 0 {
-				waitsForSpawnerStepID = step.Needs[0]
-			}
-		}
-	}
-
-	// waitsForCollapsedBlocks records whether we actually skipped emitting a
-	// DepBlocks edge for the waits_for spawner below (i.e. the spawner step ID
-	// really did appear in depends_on/needs and resolve to a known issue). If
-	// so, the DepWaitsFor edge emitted below must carry also_blocks so it
-	// does not silently drop the blocking semantics that edge collapsed away
-	// (GH#3783 review gap).
-	var waitsForCollapsedBlocks bool
-
 	// Process depends_on field
 	for _, depID := range step.DependsOn {
-		if depID == waitsForSpawnerStepID {
-			// This target is also the waits_for spawner; the DepWaitsFor edge
-			// emitted below subsumes the blocking semantics for this pair.
-			waitsForCollapsedBlocks = true
-			continue
-		}
 		depIssueID, ok := idMapping[depID]
 		if !ok {
 			continue // Will be caught during validation
@@ -1101,12 +1048,6 @@ func collectDependencies(step *formula.Step, idMapping map[string]string, deps *
 
 	// Process needs field - simpler alias for sibling dependencies
 	for _, needID := range step.Needs {
-		if needID == waitsForSpawnerStepID {
-			// This target is also the waits_for spawner; the DepWaitsFor edge
-			// emitted below subsumes the blocking semantics for this pair.
-			waitsForCollapsedBlocks = true
-			continue
-		}
 		needIssueID, ok := idMapping[needID]
 		if !ok {
 			continue // Will be caught during validation
@@ -1117,26 +1058,6 @@ func collectDependencies(step *formula.Step, idMapping map[string]string, deps *
 			DependsOnID: needIssueID,
 			Type:        types.DepBlocks,
 		})
-	}
-
-	// Process waits_for field - fanout gate dependency
-	if waitsForSpec != nil && waitsForSpawnerStepID != "" {
-		if spawnerIssueID, ok := idMapping[waitsForSpawnerStepID]; ok {
-			// Spawner identity is the depends_on_id; metadata carries
-			// the gate. A collapsed needs/depends_on edge additionally marks
-			// also_blocks so the gate blocks while the spawner itself is
-			// open, not only while it has an open child (GH#3783).
-			var dep *types.Dependency
-			var err error
-			if waitsForCollapsedBlocks {
-				dep, err = types.NewWaitsForBlockingDependency(issueID, spawnerIssueID, waitsForSpec.Gate)
-			} else {
-				dep, err = types.NewWaitsForDependency(issueID, spawnerIssueID, waitsForSpec.Gate)
-			}
-			if err == nil {
-				*deps = append(*deps, dep)
-			}
-		}
 	}
 
 	// Recursively handle children
@@ -1181,10 +1102,6 @@ func printFormulaSteps(steps []*formula.Step, indent string) {
 		if len(step.Needs) > 0 {
 			depParts = append(depParts, fmt.Sprintf("needs: %s", strings.Join(step.Needs, ", ")))
 		}
-		if step.WaitsFor != "" {
-			depParts = append(depParts, fmt.Sprintf("waits_for: %s", step.WaitsFor))
-		}
-
 		depStr := ""
 		if len(depParts) > 0 {
 			depStr = fmt.Sprintf(" [%s]", strings.Join(depParts, ", "))

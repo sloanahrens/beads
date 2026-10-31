@@ -86,7 +86,7 @@ Displays:
   - Composition rules (extends, aspects, expansions)
   - Bond points for external composition
 
-To inspect the structure of an individual primitive (e.g. Gate, OnCompleteSpec)
+To inspect the structure of an individual primitive (e.g. Gate, ExpandRule)
 rather than a user-authored formula, use 'bd formula schema <primitive>'.
 
 Examples:
@@ -461,10 +461,6 @@ func printFormulaStepsTree(steps []*formula.Step, indent string) {
 		if len(step.Needs) > 0 {
 			depParts = append(depParts, fmt.Sprintf("needs: %s", strings.Join(step.Needs, ", ")))
 		}
-		if step.WaitsFor != "" {
-			depParts = append(depParts, fmt.Sprintf("waits_for: %s", step.WaitsFor))
-		}
-
 		depStr := ""
 		if len(depParts) > 0 {
 			depStr = fmt.Sprintf(" [%s]", strings.Join(depParts, ", "))

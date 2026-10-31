@@ -990,125 +990,8 @@ func TestValidate_NeedsField(t *testing.T) {
 	}
 }
 
-// TestValidate_WaitsForField tests validation of the waits_for field (bd-j4cr)
-func TestValidate_WaitsForField(t *testing.T) {
-	// Valid waits_for value
-	formula := &Formula{
-		Formula: "mol-waits-for",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{ID: "fanout", Title: "Fanout"},
-			{ID: "aggregate", Title: "Aggregate", Needs: []string{"fanout"}, WaitsFor: "all-children"},
-		},
-	}
-
-	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed for valid waits_for: %v", err)
-	}
-
-	// Invalid waits_for value
-	formulaBad := &Formula{
-		Formula: "mol-bad-waits-for",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{ID: "step1", Title: "Step 1", WaitsFor: "invalid-gate"},
-		},
-	}
-
-	err := formulaBad.Validate()
-	if err == nil {
-		t.Error("Validate should fail for invalid waits_for value")
-	}
-}
-
-// TestValidate_WaitsForChildrenOf tests the children-of(step) syntax (gt-8tmz.38)
-func TestValidate_WaitsForChildrenOf(t *testing.T) {
-	// Valid children-of() syntax
-	formula := &Formula{
-		Formula: "mol-children-of",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{ID: "survey-workers", Title: "Survey Workers"},
-			{ID: "aggregate", Title: "Aggregate", Needs: []string{"survey-workers"}, WaitsFor: "children-of(survey-workers)"},
-		},
-	}
-
-	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed for valid children-of(): %v", err)
-	}
-
-	// Invalid: reference to unknown step
-	formulaBad := &Formula{
-		Formula: "mol-bad-children-of",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{ID: "step1", Title: "Step 1", WaitsFor: "children-of(unknown-step)"},
-		},
-	}
-
-	if err := formulaBad.Validate(); err == nil {
-		t.Error("Validate should fail for children-of() with unknown step")
-	}
-
-	// Invalid: empty step ID
-	formulaEmpty := &Formula{
-		Formula: "mol-empty-children-of",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{ID: "step1", Title: "Step 1", WaitsFor: "children-of()"},
-		},
-	}
-
-	if err := formulaEmpty.Validate(); err == nil {
-		t.Error("Validate should fail for children-of() with empty step ID")
-	}
-}
-
-// TestParseWaitsFor tests the ParseWaitsFor helper function (gt-8tmz.38)
-func TestParseWaitsFor(t *testing.T) {
-	tests := []struct {
-		input     string
-		wantGate  string
-		wantSpawn string
-		wantNil   bool
-	}{
-		{"", "", "", true},
-		{"all-children", "all-children", "", false},
-		{"any-children", "any-children", "", false},
-		{"children-of(survey)", "all-children", "survey", false},
-		{"children-of(my-step)", "all-children", "my-step", false},
-		{"invalid", "", "", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			spec := ParseWaitsFor(tt.input)
-			if tt.wantNil {
-				if spec != nil {
-					t.Errorf("ParseWaitsFor(%q) = %+v, want nil", tt.input, spec)
-				}
-				return
-			}
-			if spec == nil {
-				t.Fatalf("ParseWaitsFor(%q) = nil, want non-nil", tt.input)
-			}
-			if spec.Gate != tt.wantGate {
-				t.Errorf("ParseWaitsFor(%q).Gate = %q, want %q", tt.input, spec.Gate, tt.wantGate)
-			}
-			if spec.SpawnerID != tt.wantSpawn {
-				t.Errorf("ParseWaitsFor(%q).SpawnerID = %q, want %q", tt.input, spec.SpawnerID, tt.wantSpawn)
-			}
-		})
-	}
-}
-
-// TestValidate_ChildNeedsAndWaitsFor tests needs and waits_for in child steps
-func TestValidate_ChildNeedsAndWaitsFor(t *testing.T) {
+// TestValidate_ChildNeeds tests needs in child steps
+func TestValidate_ChildNeeds(t *testing.T) {
 	formula := &Formula{
 		Formula: "mol-child-fields",
 		Version: 1,
@@ -1119,14 +1002,14 @@ func TestValidate_ChildNeedsAndWaitsFor(t *testing.T) {
 				Title: "Epic 1",
 				Children: []*Step{
 					{ID: "child1", Title: "Child 1"},
-					{ID: "child2", Title: "Child 2", Needs: []string{"child1"}, WaitsFor: "any-children"},
+					{ID: "child2", Title: "Child 2", Needs: []string{"child1"}},
 				},
 			},
 		},
 	}
 
 	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed for valid child needs/waits_for: %v", err)
+		t.Errorf("Validate failed for valid child needs: %v", err)
 	}
 
 	// Invalid child needs
@@ -1148,30 +1031,10 @@ func TestValidate_ChildNeedsAndWaitsFor(t *testing.T) {
 	if err := formulaBadNeeds.Validate(); err == nil {
 		t.Error("Validate should fail for child with invalid needs reference")
 	}
-
-	// Invalid child waits_for
-	formulaBadWaitsFor := &Formula{
-		Formula: "mol-bad-child-waits-for",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "epic1",
-				Title: "Epic 1",
-				Children: []*Step{
-					{ID: "child1", Title: "Child 1", WaitsFor: "bad-value"},
-				},
-			},
-		},
-	}
-
-	if err := formulaBadWaitsFor.Validate(); err == nil {
-		t.Error("Validate should fail for child with invalid waits_for")
-	}
 }
 
-// TestParse_NeedsAndWaitsFor tests JSON parsing of needs and waits_for fields
-func TestParse_NeedsAndWaitsFor(t *testing.T) {
+// TestParse_Needs tests JSON parsing of the needs field
+func TestParse_Needs(t *testing.T) {
 	jsonData := `{
   "formula": "mol-deacon",
   "version": 1,
@@ -1179,7 +1042,7 @@ func TestParse_NeedsAndWaitsFor(t *testing.T) {
   "steps": [
     {"id": "inbox-check", "title": "Check inbox"},
     {"id": "health-scan", "title": "Check health", "needs": ["inbox-check"]},
-    {"id": "aggregate", "title": "Aggregate results", "needs": ["health-scan"], "waits_for": "all-children"}
+    {"id": "aggregate", "title": "Aggregate results", "needs": ["health-scan"]}
   ]
 }`
 	p := NewParser()
@@ -1198,251 +1061,6 @@ func TestParse_NeedsAndWaitsFor(t *testing.T) {
 		t.Errorf("Steps[1].Needs = %v, want [inbox-check]", formula.Steps[1].Needs)
 	}
 
-	// Check waits_for field
-	if formula.Steps[2].WaitsFor != "all-children" {
-		t.Errorf("Steps[2].WaitsFor = %q, want 'all-children'", formula.Steps[2].WaitsFor)
-	}
-}
-
-// gt-8tmz.8: Tests for on_complete/for-each runtime expansion
-
-func TestParse_OnComplete(t *testing.T) {
-	jsonData := `{
-  "formula": "mol-patrol",
-  "version": 1,
-  "type": "workflow",
-  "steps": [
-    {
-      "id": "survey-workers",
-      "title": "Survey workers",
-      "on_complete": {
-        "for_each": "output.polecats",
-        "bond": "mol-polecat-arm",
-        "vars": {
-          "polecat_name": "{item.name}",
-          "rig": "{item.rig}"
-        },
-        "parallel": true
-      }
-    },
-    {
-      "id": "aggregate",
-      "title": "Aggregate results",
-      "needs": ["survey-workers"],
-      "waits_for": "all-children"
-    }
-  ]
-}`
-	p := NewParser()
-	formula, err := p.Parse([]byte(jsonData))
-	if err != nil {
-		t.Fatalf("Parse failed: %v", err)
-	}
-
-	// Validate parsed formula
-	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed: %v", err)
-	}
-
-	// Check on_complete field
-	oc := formula.Steps[0].OnComplete
-	if oc == nil {
-		t.Fatal("Steps[0].OnComplete is nil")
-	}
-	if oc.ForEach != "output.polecats" {
-		t.Errorf("ForEach = %q, want 'output.polecats'", oc.ForEach)
-	}
-	if oc.Bond != "mol-polecat-arm" {
-		t.Errorf("Bond = %q, want 'mol-polecat-arm'", oc.Bond)
-	}
-	if len(oc.Vars) != 2 {
-		t.Errorf("len(Vars) = %d, want 2", len(oc.Vars))
-	}
-	if oc.Vars["polecat_name"] != "{item.name}" {
-		t.Errorf("Vars[polecat_name] = %q, want '{item.name}'", oc.Vars["polecat_name"])
-	}
-	if !oc.Parallel {
-		t.Error("Parallel should be true")
-	}
-}
-
-func TestValidate_OnComplete_Valid(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-valid",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "survey",
-				Title: "Survey",
-				OnComplete: &OnCompleteSpec{
-					ForEach: "output.items",
-					Bond:    "mol-item",
-				},
-			},
-		},
-	}
-
-	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed for valid on_complete: %v", err)
-	}
-}
-
-func TestValidate_OnComplete_MissingBond(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-invalid",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "survey",
-				Title: "Survey",
-				OnComplete: &OnCompleteSpec{
-					ForEach: "output.items",
-					// Bond is missing
-				},
-			},
-		},
-	}
-
-	err := formula.Validate()
-	if err == nil {
-		t.Error("expected validation error for missing bond")
-	}
-	if !strings.Contains(err.Error(), "bond is required") {
-		t.Errorf("expected 'bond is required' error, got: %v", err)
-	}
-}
-
-func TestValidate_OnComplete_MissingForEach(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-invalid",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "survey",
-				Title: "Survey",
-				OnComplete: &OnCompleteSpec{
-					Bond: "mol-item",
-					// ForEach is missing
-				},
-			},
-		},
-	}
-
-	err := formula.Validate()
-	if err == nil {
-		t.Error("expected validation error for missing for_each")
-	}
-	if !strings.Contains(err.Error(), "for_each is required") {
-		t.Errorf("expected 'for_each is required' error, got: %v", err)
-	}
-}
-
-func TestValidate_OnComplete_InvalidForEachPath(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-invalid",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "survey",
-				Title: "Survey",
-				OnComplete: &OnCompleteSpec{
-					ForEach: "items", // Should start with "output."
-					Bond:    "mol-item",
-				},
-			},
-		},
-	}
-
-	err := formula.Validate()
-	if err == nil {
-		t.Error("expected validation error for invalid for_each path")
-	}
-	if !strings.Contains(err.Error(), "must start with 'output.'") {
-		t.Errorf("expected 'must start with output.' error, got: %v", err)
-	}
-}
-
-func TestValidate_OnComplete_ParallelAndSequential(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-invalid",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "survey",
-				Title: "Survey",
-				OnComplete: &OnCompleteSpec{
-					ForEach:    "output.items",
-					Bond:       "mol-item",
-					Parallel:   true,
-					Sequential: true, // Can't have both
-				},
-			},
-		},
-	}
-
-	err := formula.Validate()
-	if err == nil {
-		t.Error("expected validation error for parallel + sequential")
-	}
-	if !strings.Contains(err.Error(), "cannot set both parallel and sequential") {
-		t.Errorf("expected 'cannot set both' error, got: %v", err)
-	}
-}
-
-func TestValidate_OnComplete_Sequential(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-valid",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "process-queue",
-				Title: "Process queue",
-				OnComplete: &OnCompleteSpec{
-					ForEach:    "output.branches",
-					Bond:       "mol-merge",
-					Sequential: true,
-				},
-			},
-		},
-	}
-
-	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed for sequential on_complete: %v", err)
-	}
-}
-
-func TestValidate_OnComplete_InChildren(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-valid",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{
-				ID:    "parent",
-				Title: "Parent",
-				Children: []*Step{
-					{
-						ID:    "child",
-						Title: "Child",
-						OnComplete: &OnCompleteSpec{
-							ForEach: "output.items",
-							Bond:    "mol-item",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed for on_complete in child: %v", err)
-	}
 }
 
 // bd-4bt1: Tests for gate field parsing
@@ -1678,7 +1296,6 @@ depends_on = ["step1"]
 id = "step3"
 title = "Third Step"
 needs = ["step2"]
-waits_for = "all-children"
 `
 	p := NewParser()
 	formula, err := p.ParseTOML([]byte(tomlData))
@@ -1702,10 +1319,6 @@ waits_for = "all-children"
 		t.Errorf("Steps[2].Needs = %v, want [step2]", step3.Needs)
 	}
 
-	// Test waits_for (another snake_case field)
-	if step3.WaitsFor != "all-children" {
-		t.Errorf("Steps[2].WaitsFor = %q, want 'all-children'", step3.WaitsFor)
-	}
 }
 
 // Tests for simple string vars in TOML [vars] section

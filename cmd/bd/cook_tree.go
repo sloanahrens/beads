@@ -63,7 +63,6 @@ type cookTreeStep struct {
 	// Needs is depends_on followed by needs, deduplicated: every step this
 	// one is blocked on.
 	Needs          []string       `json:"needs"`
-	WaitsFor       string         `json:"waits_for"`
 	Gate           *formula.Gate  `json:"gate"`
 	Metadata       map[string]any `json:"metadata"`
 	SourceFormula  string         `json:"source_formula"`
@@ -170,7 +169,6 @@ func cookTreeSteps(steps []*formula.Step) []cookTreeStep {
 			Assignee:       st.Assignee,
 			Labels:         append([]string{}, st.Labels...),
 			Needs:          []string{},
-			WaitsFor:       st.WaitsFor,
 			Gate:           st.Gate,
 			Metadata:       st.Metadata,
 			SourceFormula:  st.SourceFormula,

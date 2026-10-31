@@ -46,8 +46,8 @@ type FieldDoc struct {
 // PrimitiveByName returns the PrimitiveDoc that matches name, or nil.
 // Matching is case-insensitive and ignores underscores/dashes; an exact
 // (normalized) match wins over a suffix-stripped match. So "gate" returns
-// Gate, "gaterule" returns GateRule, and "on_complete" returns
-// OnCompleteSpec via the Spec/Rule suffix fallback.
+// Gate, and "expandrule" returns ExpandRule via the Spec/Rule suffix
+// fallback.
 func PrimitiveByName(name string) *PrimitiveDoc {
 	if name == "" {
 		return nil
