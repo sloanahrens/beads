@@ -7,7 +7,7 @@ description: Generated reference for every bd command
 
 Generated from `bd help --docs-root`.
 
-This reference covers all 108 live top-level `bd` commands. Regenerate it with:
+This reference covers all 107 live top-level `bd` commands. Regenerate it with:
 
 ```bash
 ./scripts/generate-cli-docs.sh
@@ -47,7 +47,6 @@ This reference covers all 108 live top-level `bd` commands. Regenerate it with:
 - [`bd edit`](/cli-reference/edit)
 - [`bd epic`](/cli-reference/epic)
 - [`bd export`](/cli-reference/export)
-- [`bd federation`](/cli-reference/federation)
 - [`bd find-duplicates`](/cli-reference/find-duplicates)
 - [`bd flatten`](/cli-reference/flatten)
 - [`bd forget`](/cli-reference/forget)

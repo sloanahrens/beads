@@ -56,15 +56,17 @@ export BD_FEDERATION_SOVEREIGNTY="T2"
 | T3 | Pseudonymous | Identifiers removed |
 | T4 | Anonymous | Maximum privacy |
 
-## Adding Federation Peers
+## Adding a Federation Peer
 
-Use `bd federation add-peer` to register remote peers:
+A peer is a Dolt remote: each replica publishes its history to a location the
+others can reach, and every workspace registers that location with
+`bd dolt remote add`. There is no separate peer registry to keep in step.
 
 ```bash
-bd federation add-peer <name> <endpoint>
+bd dolt remote add <name> <url>
 ```
 
-### Peer Name Rules
+### Remote Name Rules
 
 - Must start with a letter
 - Alphanumeric, dash, and underscore only
@@ -77,94 +79,102 @@ bd federation add-peer <name> <endpoint>
 | DoltHub | `dolthub://org/repo` | DoltHub hosted repository |
 | Google Cloud | `gs://bucket/path` | Google Cloud Storage |
 | Amazon S3 | `s3://bucket/path` | Amazon S3 |
+| Azure Blob | `az://account.blob.core.windows.net/container/path` | Azure Blob Storage |
 | Local | `file:///path/to/backup` | Local filesystem |
 | HTTPS | `https://host/path` | HTTPS remote |
-| SSH | `ssh://host/path` | SSH remote |
+| SSH | `ssh://host/path` or `git+ssh://host/path` | SSH remote |
 | Git SSH | `git@host:path` | Git SSH shorthand |
 
 ### Examples
 
 ```bash
-# Add a staging environment on DoltHub
-bd federation add-peer staging dolthub://myorg/staging-beads
+# Name the shared DoltHub remote origin, so pull and push use it with no flag
+bd dolt remote add origin dolthub://myorg/beads
 
-# Add a cloud backup
-bd federation add-peer backup gs://mybucket/beads-backup
-bd federation add-peer backup-s3 s3://mybucket/beads-backup
+# A named remote for one peer
+bd dolt remote add partner-town dolthub://partner-org/beads
 
-# Add a local backup
-bd federation add-peer local file:///home/user/beads-backup
-
-# Add a partner organization
-bd federation add-peer partner-town dolthub://partner-org/beads
+# Other endpoints work the same way
+bd dolt remote add backup gs://mybucket/beads-backup
+bd dolt remote add backup-s3 s3://mybucket/beads-backup
+bd dolt remote add local file:///home/user/beads-backup
 ```
+
+Adding a remote named `origin` also persists it as `sync.remote` in
+`.beads/config.yaml`, which is how every later pull and push finds it without
+a `--remote` flag.
 
 ### Credentials
 
-Peers configured with `--user` (and optionally `--password`, otherwise
-prompted interactively) store SQL credentials AES-256 encrypted, locally.
-Stored credentials are used automatically during sync:
+Credentials are never stored by `bd`; each pull or push authenticates through
+the standard mechanism for the remote's scheme:
 
-```bash
-bd federation add-peer town-gamma 192.168.1.100:3306/beads --user sync-bot
-```
+| Remote | Credentials |
+|--------|-------------|
+| DoltHub | `DOLT_REMOTE_USER` and `DOLT_REMOTE_PASSWORD` |
+| `gs://` | Application Default Credentials (`gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`) |
+| `s3://` | The standard AWS chain (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, or an instance role) |
+| `az://` | `AZURE_STORAGE_*` variables |
+
+The [Bucket Federation Quickstart](/multi-agent/bucket-federation) walks the
+cloud cases end to end, including the failure modes.
 
 ### JSON Output
 
 For scripting, use the `--json` flag:
 
 ```bash
-bd --json federation add-peer staging dolthub://myorg/staging-beads
-# {"added":"staging","url":"dolthub://myorg/staging-beads","has_auth":false,"sovereignty":""}
+bd --json dolt remote add staging gs://mybucket/staging-beads
+# {"name":"staging","url":"gs://mybucket/staging-beads"}
 ```
 
 ### Verify Configuration
 
-List configured peers:
+List configured remotes:
 
 ```bash
-bd federation list-peers
+bd dolt remote list
 ```
 
 ## Syncing with Peers
 
-Use `bd federation sync` to pull from and push to peer towns, and
-`bd federation status` to check sync state without transferring data.
+Each replica syncs with two commands, run in this order: pull the remote's
+history, then push your own commits.
 
 ```bash
-# Sync with all peers
-bd federation sync
+bd dolt pull                 # fetch and merge the remote's commits
+bd dolt push                 # publish your local commits
 
-# Sync with a specific peer
-bd federation sync --peer town-beta
-
-# Handle conflicts
-bd federation sync --strategy theirs  # or 'ours'
-
-# Check status (ahead/behind, reachability, conflicts)
-bd federation status
-bd federation status --peer town-beta
+# A specific named remote
+bd dolt pull --remote town-beta
+bd dolt push --remote town-beta
 ```
 
-Without `--strategy`, a sync that hits merge conflicts pauses and reports the
-conflicting tables for manual resolution instead of auto-resolving.
+Pull first. A push from a replica whose history has diverged from the remote's
+is rejected, and `bd dolt push --force` overwrites the remote's history — keep
+`--force` out of timers and scripts.
+
+A pull that hits a merge conflict the auto-resolver declines stops and reports
+the conflicting tables. On embedded storage, re-run it with
+`--strategy theirs` or `--strategy ours` to settle the conflict; on server
+storage, run `bd conflicts resolve` after the pull reports it.
 
 ### Topologies
 
-| Pattern | Description | Use Case |
-|---------|-------------|----------|
-| Hub-spoke | Central hub, satellites sync to hub | Team with central coordination |
-| Mesh | All peers sync with each other | Decentralized collaboration |
-| Hierarchical | Tree of hubs | Multi-team organizations |
+| Pattern | How | Use Case |
+|---------|-----|----------|
+| Hub-spoke | One shared remote; every replica names it `origin` | Team with central coordination |
+| Mesh | Each replica owns a remote and names the others as extra remotes | Decentralized collaboration |
+| Hierarchical | One remote per team, plus a remote above them | Multi-team organizations |
 
 ## Architecture Notes
 
 ### How It Works
 
-1. Each workspace has its own Dolt database
-2. `add-peer` registers a Dolt remote (similar to `git remote add`)
-3. `bd federation sync` pushes and pulls commits between peers
-4. Conflict resolution follows the configured strategy
+1. Each workspace keeps its own Dolt database — a full replica
+2. `bd dolt remote add` registers the shared location (similar to `git remote add`)
+3. `bd dolt pull` merges the remote's commits locally; `bd dolt push` publishes local commits
+4. Dolt merges cell by cell; a conflict the auto-resolver declines halts the pull for manual resolution
 
 When run against a Dolt SQL server, federation uses two ports: MySQL (3306)
 for multi-writer SQL access, and remotesapi (8080) for peer-to-peer
@@ -179,15 +189,11 @@ push/pull:
 └─────────────────┘         └─────────────────┘
 ```
 
-### Multi-Repo Support
-
-Issues track their `SourceSystem` to identify which federated system created
-them. This enables proper attribution and trust chains across organizations.
-
 ### Connectivity
 
-Remote connectivity is validated on first push/pull operation, not when adding
-the peer. This allows configuring remotes before infrastructure is ready.
+Remote connectivity is validated on the first pull or push, not when the
+remote is added. This lets you configure remotes before the infrastructure
+exists.
 
 ### Leases are per-replica
 
@@ -285,32 +291,27 @@ whole point of the guard, so prefer the narrow forms:
 included. `bd reclaim` names what it declined on stderr — one summary line per
 run, with `bd -v` expanding it to the first 20 leases individually.
 
-## Planned Features
-
-The following operation has infrastructure support but is not yet exposed as
-a command:
-
-- `bd federation push <peer>` / `bd federation pull <peer>` - single-direction
-  sync with one peer. `bd federation sync` already covers the bidirectional
-  case.
-
 ## Troubleshooting
 
-### "requires direct database access"
+### The remote URL matches the git origin
 
-Federation commands require the Dolt backend with direct database access. Ensure
-you have the Dolt backend configured for federation operations.
+`bd dolt remote add` refuses a URL that matches the repository's git origin,
+since a Dolt remote and the git remote are different stores. Add
+`--allow-git-origin` when the layout is intentional (a monorepo that shares
+one URL), and the add proceeds with a warning.
 
-### "peer already exists"
+### A pull stops on a merge conflict
 
-A peer with that name is already configured. Use a different name or check
-existing peers with `bd federation list-peers`.
+Dolt halts rather than auto-resolving a conflict it cannot settle safely, and
+re-running the same pull halts the same way until someone resolves the
+divergence. See [A pull stops on a merge
+conflict](/multi-agent/bucket-federation#a-pull-stops-on-a-merge-conflict).
 
 ### Invalid endpoint format
 
 Ensure your endpoint matches one of the supported formats above. The scheme
-must be one of: `dolthub://`, `gs://`, `s3://`, `file://`, `https://`, `ssh://`,
-or git SSH format (`git@host:path`).
+must be one of: `dolthub://`, `gs://`, `s3://`, `az://`, `file://`,
+`https://`, `ssh://`, or git SSH format (`git@host:path`).
 
 ### General health check
 
@@ -320,7 +321,7 @@ bd doctor --deep
 
 ## Reference
 
-- Configuration: See [Configuration](/reference/configuration) for all federation settings
-- Source: `cmd/bd/federation.go`
-- Storage interfaces: `internal/storage/versioned.go`
-- Dolt implementation: `internal/storage/dolt/store.go`
+- [Configuration](/reference/configuration) — every `federation.*` setting
+- [`bd dolt`](/cli-reference/dolt) — remote, pull, push, and status commands
+- [Bucket Federation Quickstart](/multi-agent/bucket-federation) — two machines,
+  one bucket, end to end
