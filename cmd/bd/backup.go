@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/config"
-	"github.com/steveyegge/beads/internal/metrics"
 )
 
 var backupCmd = &cobra.Command{
@@ -58,13 +57,6 @@ func newBackupStatusCommand(sizeDatabase backupSizeFunc, machine func() bool) *c
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			evt := metrics.NewCommandEvent("backup-status")
-			defer func() {
-				if c := metrics.Global(); c != nil {
-					c.CloseEventAndAdd(evt)
-				}
-			}()
-
 			dir, err := backupDir()
 			if err != nil {
 				return err

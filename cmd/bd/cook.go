@@ -15,7 +15,6 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/formula"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
@@ -374,13 +373,6 @@ func persistCookFormula(ctx context.Context, resolved *formula.Formula, protoID 
 }
 
 func runCook(cmd *cobra.Command, args []string) error {
-	evt := metrics.NewCommandEvent("cook")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
-
 	flags, err := parseCookFlags(cmd, args)
 	if err != nil {
 		return HandleError("%v", err)
