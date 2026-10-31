@@ -396,33 +396,11 @@ func mergeComposeRules(base, overlay *ComposeRules) *ComposeRules {
 	}
 
 	result := &ComposeRules{
-		BondPoints: append([]*BondPoint{}, base.BondPoints...),
-		Hooks:      append([]*Hook{}, base.Hooks...),
-		Expand:     append([]*ExpandRule{}, base.Expand...),
-		Map:        append([]*MapRule{}, base.Map...),
+		Expand: append([]*ExpandRule{}, base.Expand...),
 	}
-
-	// Add overlay bond points (override by ID)
-	existingBP := make(map[string]int)
-	for i, bp := range result.BondPoints {
-		existingBP[bp.ID] = i
-	}
-	for _, bp := range overlay.BondPoints {
-		if idx, exists := existingBP[bp.ID]; exists {
-			result.BondPoints[idx] = bp
-		} else {
-			result.BondPoints = append(result.BondPoints, bp)
-		}
-	}
-
-	// Add overlay hooks (append, no override)
-	result.Hooks = append(result.Hooks, overlay.Hooks...)
 
 	// Add overlay expand rules (append, no override)
 	result.Expand = append(result.Expand, overlay.Expand...)
-
-	// Add overlay map rules (append, no override)
-	result.Map = append(result.Map, overlay.Map...)
 
 	return result
 }
@@ -455,7 +433,6 @@ func ExtractVariables(formula *Formula) []string {
 		extract(step.Title)
 		extract(step.Description)
 		extract(step.Assignee)
-		extract(step.Condition)
 		if step.Gate != nil {
 			extract(step.Gate.Type)
 			extract(step.Gate.ID)

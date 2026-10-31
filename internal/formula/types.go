@@ -194,7 +194,7 @@ func (v *VarDef) UnmarshalTOML(data interface{}) error {
 // Step defines a work item to create when the formula is instantiated.
 type Step struct {
 	// ID is the unique identifier within this formula.
-	// Used for dependency references and bond points.
+	// Used for dependency references.
 	ID string `json:"id"`
 
 	// Title is the issue title (supports {{variable}} substitution).
@@ -243,11 +243,6 @@ type Step struct {
 	// Merged with the expansion formula's default vars during inline expansion.
 	ExpandVars map[string]string `json:"expand_vars,omitempty" toml:"expand_vars,omitempty"`
 
-	// Condition makes this step optional based on a variable.
-	// Format: "{{var}}" (truthy), "!{{var}}" (negated), "{{var}} == value", "{{var}} != value".
-	// Evaluated at cook/pour time via FilterStepsByCondition.
-	Condition string `json:"condition,omitempty"`
-
 	// Children are nested steps (for creating epic hierarchies).
 	Children []*Step `json:"children,omitempty"`
 
@@ -293,21 +288,11 @@ type Gate struct {
 	Repo string `json:"repo,omitempty" toml:"repo,omitempty"`
 }
 
-// ComposeRules define how formulas can be bonded together.
+// ComposeRules define how a formula composes expansions and aspects.
 type ComposeRules struct {
-	// BondPoints are named locations where other formulas can attach.
-	BondPoints []*BondPoint `json:"bond_points,omitempty" toml:"bond_points,omitempty"`
-
-	// Hooks are automatic attachments triggered by labels or conditions.
-	Hooks []*Hook `json:"hooks,omitempty"`
-
 	// Expand applies an expansion template to a single target step.
 	// The target step is replaced by the expanded template steps.
 	Expand []*ExpandRule `json:"expand,omitempty"`
-
-	// Map applies an expansion template to all steps matching a pattern.
-	// Each matching step is replaced by the expanded template steps.
-	Map []*MapRule `json:"map,omitempty"`
 
 	// Aspects lists aspect formula names to apply to this formula.
 	// Aspects are applied after expansions, adding before/after/around
@@ -325,55 +310,6 @@ type ExpandRule struct {
 	With string `json:"with"`
 
 	// Vars are variable overrides for the expansion.
-	Vars map[string]string `json:"vars,omitempty"`
-}
-
-// MapRule applies an expansion template to all matching steps.
-type MapRule struct {
-	// Select is a glob pattern matching step IDs to expand.
-	// Examples: "*.implement", "shiny.*"
-	Select string `json:"select"`
-
-	// With is the name of the expansion formula to apply.
-	With string `json:"with"`
-
-	// Vars are variable overrides for the expansion.
-	Vars map[string]string `json:"vars,omitempty"`
-}
-
-// BondPoint is a named attachment site for composition.
-type BondPoint struct {
-	// ID is the unique identifier for this bond point.
-	ID string `json:"id"`
-
-	// Description explains what should be attached here.
-	Description string `json:"description,omitempty"`
-
-	// AfterStep is the step ID after which to attach.
-	// Mutually exclusive with BeforeStep.
-	AfterStep string `json:"after_step,omitempty" toml:"after_step,omitempty"`
-
-	// BeforeStep is the step ID before which to attach.
-	// Mutually exclusive with AfterStep.
-	BeforeStep string `json:"before_step,omitempty" toml:"before_step,omitempty"`
-
-	// Parallel makes attached steps run in parallel with the anchor step.
-	Parallel bool `json:"parallel,omitempty"`
-}
-
-// Hook defines automatic formula attachment based on conditions.
-type Hook struct {
-	// Trigger is what activates this hook.
-	// Formats: "label:security", "type:bug", "priority:0-1".
-	Trigger string `json:"trigger"`
-
-	// Attach is the formula to attach when triggered.
-	Attach string `json:"attach"`
-
-	// At is the bond point to attach at (default: end).
-	At string `json:"at,omitempty"`
-
-	// Vars are variable overrides for the attached formula.
 	Vars map[string]string `json:"vars,omitempty"`
 }
 
@@ -518,37 +454,6 @@ func (f *Formula) validationProblems() []string {
 		validateChildDependsOn(step.Children, stepIDLocations, &errs, fmt.Sprintf("steps[%d]", i))
 	}
 
-	// Validate compose rules
-	if f.Compose != nil {
-		for i, bp := range f.Compose.BondPoints {
-			if bp.ID == "" {
-				errs = append(errs, fmt.Sprintf("compose.bond_points[%d]: id is required", i))
-			}
-			if bp.AfterStep != "" && bp.BeforeStep != "" {
-				errs = append(errs, fmt.Sprintf("compose.bond_points[%d] (%s): cannot have both after_step and before_step", i, bp.ID))
-			}
-			if bp.AfterStep != "" {
-				if _, exists := stepIDLocations[bp.AfterStep]; !exists {
-					errs = append(errs, fmt.Sprintf("compose.bond_points[%d] (%s): after_step references unknown step %q", i, bp.ID, bp.AfterStep))
-				}
-			}
-			if bp.BeforeStep != "" {
-				if _, exists := stepIDLocations[bp.BeforeStep]; !exists {
-					errs = append(errs, fmt.Sprintf("compose.bond_points[%d] (%s): before_step references unknown step %q", i, bp.ID, bp.BeforeStep))
-				}
-			}
-		}
-
-		for i, hook := range f.Compose.Hooks {
-			if hook.Trigger == "" {
-				errs = append(errs, fmt.Sprintf("compose.hooks[%d]: trigger is required", i))
-			}
-			if hook.Attach == "" {
-				errs = append(errs, fmt.Sprintf("compose.hooks[%d]: attach is required", i))
-			}
-		}
-	}
-
 	return errs
 }
 
@@ -635,16 +540,3 @@ func findStepByID(step *Step, id string) *Step {
 
 // StringPtr returns a pointer to s. Useful for constructing VarDef literals.
 func StringPtr(s string) *string { return &s }
-
-// GetBondPoint finds a bond point by ID.
-func (f *Formula) GetBondPoint(id string) *BondPoint {
-	if f.Compose == nil {
-		return nil
-	}
-	for _, bp := range f.Compose.BondPoints {
-		if bp.ID == id {
-			return bp
-		}
-	}
-	return nil
-}

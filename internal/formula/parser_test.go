@@ -472,47 +472,6 @@ func TestValidate_ChildStepsInvalidPriority(t *testing.T) {
 	}
 }
 
-func TestValidate_BondPoints(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-compose",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps: []*Step{
-			{ID: "step1", Title: "Step 1"},
-			{ID: "step2", Title: "Step 2"},
-		},
-		Compose: &ComposeRules{
-			BondPoints: []*BondPoint{
-				{ID: "after-step1", AfterStep: "step1"},
-				{ID: "before-step2", BeforeStep: "step2"},
-			},
-		},
-	}
-
-	if err := formula.Validate(); err != nil {
-		t.Errorf("Validate failed for valid bond points: %v", err)
-	}
-}
-
-func TestValidate_BondPointBothAnchors(t *testing.T) {
-	formula := &Formula{
-		Formula: "mol-bad-bond",
-		Version: 1,
-		Type:    TypeWorkflow,
-		Steps:   []*Step{{ID: "step1", Title: "Step 1"}},
-		Compose: &ComposeRules{
-			BondPoints: []*BondPoint{
-				{ID: "bad", AfterStep: "step1", BeforeStep: "step1"}, // can't have both
-			},
-		},
-	}
-
-	err := formula.Validate()
-	if err == nil {
-		t.Error("Validate should fail for bond point with both after_step and before_step")
-	}
-}
-
 func TestExtractVariables(t *testing.T) {
 	formula := &Formula{
 		Formula:     "mol-vars",

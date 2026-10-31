@@ -404,48 +404,6 @@
       }
     ]
   },
-  "wf-conditional": {
-    "formula": "wf-conditional",
-    "source": "wf-conditional.formula.toml",
-    "type": "workflow",
-    "description": "",
-    "phase": "",
-    "mode": "runtime",
-    "vars": [
-      {
-        "name": "docs",
-        "description": "",
-        "required": false,
-        "default": "false",
-        "enum": [],
-        "pattern": "",
-        "type": "",
-        "value": "false",
-        "provided": false
-      }
-    ],
-    "unresolved_vars": [],
-    "overlay": null,
-    "warnings": [],
-    "steps": [
-      {
-        "id": "code",
-        "title": "Code",
-        "description": "",
-        "notes": "",
-        "type": "task",
-        "priority": 2,
-        "assignee": "",
-        "labels": [],
-        "needs": [],
-        "gate": null,
-        "metadata": {},
-        "source_formula": "wf-conditional",
-        "source_location": "steps[0]",
-        "children": []
-      }
-    ]
-  },
   "wf-expanded": {
     "formula": "wf-expanded",
     "source": "wf-expanded.formula.toml",

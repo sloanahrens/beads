@@ -25,7 +25,7 @@ import (
 // generation. The limit applies to template children, not to expansion rules.
 const DefaultMaxExpansionDepth = 5
 
-// ApplyExpansions applies all expand and map rules to a formula's steps.
+// ApplyExpansions applies all expand rules to a formula's steps.
 // Returns a new steps slice with expansions applied.
 // The original steps slice is not modified.
 //
@@ -36,7 +36,7 @@ func ApplyExpansions(steps []*Step, compose *ComposeRules, parser *Parser) ([]*S
 		return steps, nil
 	}
 
-	if len(compose.Expand) == 0 && len(compose.Map) == 0 {
+	if len(compose.Expand) == 0 {
 		return steps, nil
 	}
 
@@ -99,60 +99,6 @@ func ApplyExpansions(steps []*Step, compose *ComposeRules, parser *Parser) ([]*S
 
 		// Rebuild stepMap from result so subsequent iterations see resolved deps
 		stepMap = buildStepMap(result)
-	}
-
-	// Apply map rules (pattern matching)
-	for _, rule := range compose.Map {
-		// Load the expansion formula
-		expFormula, err := parser.LoadByName(rule.With)
-		if err != nil {
-			return nil, fmt.Errorf("map: loading %q: %w", rule.With, err)
-		}
-
-		if expFormula.Type != TypeExpansion {
-			return nil, fmt.Errorf("map: %q is not an expansion formula (type=%s)", rule.With, expFormula.Type)
-		}
-
-		if len(expFormula.Template) == 0 {
-			return nil, fmt.Errorf("map: %q has no template steps", rule.With)
-		}
-
-		// Merge formula default vars with rule overrides
-		vars := mergeVars(expFormula, rule.Vars)
-
-		// Find all matching steps (including nested children)
-		// Rebuild stepMap to capture any changes from previous expansions
-		stepMap = buildStepMap(result)
-		var toExpand []*Step
-		for id, step := range stepMap {
-			if MatchGlob(rule.Select, id) && !expanded[id] {
-				toExpand = append(toExpand, step)
-			}
-		}
-
-		// Expand each matching step
-		for _, targetStep := range toExpand {
-			expandedSteps, err := expandStep(targetStep, expFormula.Template, 0, vars)
-			if err != nil {
-				return nil, fmt.Errorf("map %q -> %q: %w", rule.Select, targetStep.ID, err)
-			}
-
-			// Propagate target step's dependencies to root steps of the expansion
-			propagateTargetDeps(targetStep, expandedSteps)
-
-			result = replaceStep(result, targetStep.ID, expandedSteps)
-			expanded[targetStep.ID] = true
-
-			// Update dependencies: any step that depended on the target should now
-			// depend on the last step of the expansion
-			if len(expandedSteps) > 0 {
-				lastStepID := expandedSteps[len(expandedSteps)-1].ID
-				result = UpdateDependenciesForExpansion(result, targetStep.ID, lastStepID)
-			}
-
-			// Rebuild stepMap from result so subsequent iterations see resolved deps
-			stepMap = buildStepMap(result)
-		}
 	}
 
 	// Validate no duplicate step IDs after expansion

@@ -248,98 +248,6 @@ func TestApplyExpansions(t *testing.T) {
 		}
 	})
 
-	// Test map operator
-	t.Run("map over pattern", func(t *testing.T) {
-		steps := []*Step{
-			{ID: "design", Title: "Design"},
-			{ID: "impl.auth", Title: "Implement auth"},
-			{ID: "impl.api", Title: "Implement API"},
-			{ID: "test", Title: "Test"},
-		}
-
-		compose := &ComposeRules{
-			Map: []*MapRule{
-				{Select: "impl.*", With: "rule-of-five"},
-			},
-		}
-
-		result, err := ApplyExpansions(steps, compose, parser)
-		if err != nil {
-			t.Fatalf("ApplyExpansions failed: %v", err)
-		}
-
-		// design + (impl.auth -> 2 steps) + (impl.api -> 2 steps) + test = 6
-		if len(result) != 6 {
-			t.Fatalf("expected 6 steps, got %d", len(result))
-		}
-
-		// Verify the expanded IDs
-		expectedIDs := []string{
-			"design",
-			"impl.auth.draft", "impl.auth.refine",
-			"impl.api.draft", "impl.api.refine",
-			"test",
-		}
-		for i, exp := range expectedIDs {
-			if result[i].ID != exp {
-				t.Errorf("result[%d].ID = %q, want %q", i, result[i].ID, exp)
-			}
-		}
-	})
-
-	// Test map over nested children (gt-8tmz.33)
-	t.Run("map over nested children", func(t *testing.T) {
-		steps := []*Step{
-			{ID: "design", Title: "Design"},
-			{
-				ID:    "phase",
-				Title: "Implementation Phase",
-				Children: []*Step{
-					{ID: "implement.auth", Title: "Implement auth"},
-					{ID: "implement.api", Title: "Implement API"},
-				},
-			},
-			{ID: "test", Title: "Test"},
-		}
-
-		compose := &ComposeRules{
-			Map: []*MapRule{
-				{Select: "*.auth", With: "rule-of-five"},
-			},
-		}
-
-		result, err := ApplyExpansions(steps, compose, parser)
-		if err != nil {
-			t.Fatalf("ApplyExpansions failed: %v", err)
-		}
-
-		// The nested implement.auth should be expanded
-		// Result should have: design, phase (with expanded children), test
-		if len(result) != 3 {
-			t.Fatalf("expected 3 top-level steps, got %d", len(result))
-		}
-
-		// Check that phase has expanded children
-		phase := result[1]
-		if phase.ID != "phase" {
-			t.Fatalf("expected phase step, got %q", phase.ID)
-		}
-
-		// implement.auth expanded to 2 steps + implement.api unchanged = 3 children
-		if len(phase.Children) != 3 {
-			t.Fatalf("expected 3 children in phase, got %d: %v", len(phase.Children), getChildIDs(phase.Children))
-		}
-
-		// Verify expanded IDs
-		childIDs := getChildIDs(phase.Children)
-		expectedChildren := []string{"implement.auth.draft", "implement.auth.refine", "implement.api"}
-		for i, exp := range expectedChildren {
-			if childIDs[i] != exp {
-				t.Errorf("phase.Children[%d].ID = %q, want %q", i, childIDs[i], exp)
-			}
-		}
-	})
-
 	// Test missing formula
 	t.Run("missing expansion formula", func(t *testing.T) {
 		steps := []*Step{{ID: "test", Title: "Test"}}
@@ -615,42 +523,6 @@ func TestApplyExpansionsWithVars(t *testing.T) {
 			t.Errorf("deploy title = %q, want 'Deploy to staging with 1 replicas'", result[1].Title)
 		}
 	})
-
-	t.Run("map with var overrides", func(t *testing.T) {
-		steps := []*Step{
-			{ID: "deploy.api", Title: "Deploy API"},
-			{ID: "deploy.web", Title: "Deploy Web"},
-		}
-
-		compose := &ComposeRules{
-			Map: []*MapRule{
-				{
-					Select: "deploy.*",
-					With:   "env-deploy",
-					Vars:   map[string]string{"environment": "prod"},
-				},
-			},
-		}
-
-		result, err := ApplyExpansions(steps, compose, parser)
-		if err != nil {
-			t.Fatalf("ApplyExpansions failed: %v", err)
-		}
-
-		// Each deploy.* step should expand with prod environment
-		expectedIDs := []string{
-			"deploy.api.prepare-prod", "deploy.api.deploy-prod",
-			"deploy.web.prepare-prod", "deploy.web.deploy-prod",
-		}
-		if len(result) != len(expectedIDs) {
-			t.Fatalf("expected %d steps, got %d", len(expectedIDs), len(result))
-		}
-		for i, exp := range expectedIDs {
-			if result[i].ID != exp {
-				t.Errorf("result[%d].ID = %q, want %q", i, result[i].ID, exp)
-			}
-		}
-	})
 }
 
 func TestApplyExpansionsDuplicateIDs(t *testing.T) {
@@ -700,44 +572,6 @@ func TestApplyExpansionsDuplicateIDs(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "implement.draft") {
 			t.Errorf("expected error to mention 'implement.draft', got: %v", err)
-		}
-	})
-
-	// Test: map creates duplicates across multiple expansions
-	t.Run("map creates cross-expansion duplicates", func(t *testing.T) {
-		// Create a formula that generates static IDs (not using {target})
-		staticExpansion := `{
-			"formula": "static-ids",
-			"type": "expansion",
-			"version": 1,
-			"template": [
-				{"id": "shared-step", "title": "Shared step"},
-				{"id": "another-shared", "title": "Another shared"}
-			]
-		}`
-		err := os.WriteFile(filepath.Join(tmpDir, "static-ids.formula.json"), []byte(staticExpansion), 0644)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		steps := []*Step{
-			{ID: "impl.auth", Title: "Implement auth"},
-			{ID: "impl.api", Title: "Implement API"},
-		}
-
-		compose := &ComposeRules{
-			Map: []*MapRule{
-				{Select: "impl.*", With: "static-ids"},
-			},
-		}
-
-		_, err = ApplyExpansions(steps, compose, parser)
-		if err == nil {
-			t.Fatal("expected error for duplicate step IDs from map, got nil")
-		}
-
-		if !strings.Contains(err.Error(), "duplicate step IDs") {
-			t.Errorf("expected duplicate step IDs error, got: %v", err)
 		}
 	})
 }
