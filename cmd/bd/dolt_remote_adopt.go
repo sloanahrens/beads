@@ -25,19 +25,14 @@ import (
 
 // adoptOptIn is the caller's identity for adoption messages: the command that
 // re-runs this operation with consent, and the verb the interactive question
-// uses. The sync path shares the whole adoption flow with push
-// (syncAdoptGitOrigin), and a refusal that steers a sync user into
-// `bd dolt push --yes` would trade their pull away — the opt-in must name the
-// command they actually ran.
+// uses. A refusal must name the command the user actually ran, so a shared
+// caller cannot steer them into a sibling command that does something else.
 type adoptOptIn struct {
 	rerun  string // e.g. "bd dolt push --yes"
 	action string // completes "Adopt this remote and <action>?"
 }
 
-var (
-	pushAdoptOptIn = adoptOptIn{rerun: "bd dolt push --yes", action: "push"}
-	syncAdoptOptIn = adoptOptIn{rerun: "bd sync --yes", action: "sync"}
-)
+var pushAdoptOptIn = adoptOptIn{rerun: "bd dolt push --yes", action: "push"}
 
 // adoptPolicy carries the caller's consent inputs for git-origin adoption.
 // It is a value, not global state, so the decision is testable without a TTY,
@@ -137,9 +132,8 @@ To never adopt implicitly, pass --no-adopt or set BD_NO_REMOTE_ADOPT=1.`, remote
 // applyAdoptionConsent is the gate as the push path uses it: given a derived
 // URL and a policy, either return proceed=true (everything after this may
 // write) or stop. It is separated from adoptGitOriginRemoteForPush so the
-// fail-closed behavior can be asserted without resolving a workspace — that
-// resolution mutates whatever repo the test binary runs in, which is exactly
-// what the syncAdoptGitOrigin seam comment in sync.go warns about.
+// fail-closed behavior can be asserted without resolving a workspace: that
+// resolution mutates whatever repo the test binary runs in.
 //
 // proceed=false with err=nil is the deliberate --no-adopt case: the caller
 // falls through to its ordinary no-remote handling rather than failing.

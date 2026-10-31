@@ -100,7 +100,7 @@ func TestCurrentAdoptPolicyJSONModeIsNotInteractive(t *testing.T) {
 	t.Setenv("BD_NO_REMOTE_ADOPT", "")
 	p := currentAdoptPolicy(false, false, true, true)
 	if p.Interactive {
-		t.Fatal("jsonMode policy is Interactive; bd sync --json on a pty would hang on the consent prompt")
+		t.Fatal("jsonMode policy is Interactive; bd dolt push --json on a pty would hang on the consent prompt")
 	}
 	if decision, refusal := decideRemoteAdoption(p); decision != adoptRefuse || refusal != adoptRefusedNonInteractive {
 		t.Fatalf("jsonMode without --yes: decision = %v/%v, want refuse/non-interactive", decision, refusal)
@@ -123,15 +123,17 @@ func TestAdoptionRefusedErrorNamesTheURL(t *testing.T) {
 	}
 }
 
-// The refusal must name the command the user actually ran: steering a sync
-// user into `bd dolt push --yes` would trade their pull away.
+// The refusal must name the command the caller actually ran, not a hardcoded
+// one: a shared caller steered into a sibling command would be told to run
+// something that does a different thing.
 func TestAdoptionRefusedErrorNamesTheCallersCommand(t *testing.T) {
-	msg := adoptionRefusedError("git+ssh://git@github.com/x/y.git", syncAdoptOptIn).Error()
-	if !strings.Contains(msg, "bd sync --yes") {
-		t.Errorf("sync-path refusal does not offer bd sync --yes:\n%s", msg)
+	caller := adoptOptIn{rerun: "bd other-op --yes", action: "other-op"}
+	msg := adoptionRefusedError("git+ssh://git@github.com/x/y.git", caller).Error()
+	if !strings.Contains(msg, "bd other-op --yes") {
+		t.Errorf("refusal does not offer the caller's own command bd other-op --yes:\n%s", msg)
 	}
 	if strings.Contains(msg, "bd dolt push --yes") {
-		t.Errorf("sync-path refusal steers the user to bd dolt push:\n%s", msg)
+		t.Errorf("refusal steers the caller to bd dolt push:\n%s", msg)
 	}
 }
 

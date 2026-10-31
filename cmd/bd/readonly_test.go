@@ -23,7 +23,6 @@ func TestReadonlyModeBlocksWrites(t *testing.T) {
 		{"update"},
 		{"close"},
 		{"delete"},
-		{"sync"},
 		{"import"},
 		{"reopen"},
 		{"comment add"},

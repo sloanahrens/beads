@@ -66,7 +66,6 @@
 33 main checkExistingBeadsDataAt cmd/bd/init.go:2447:1
 33 main detectStructuralIssues cmd/bd/swarm.go:327:1
 33 main maybeAutoExport cmd/bd/export_auto.go:72:1
-33 main runSyncCommand cmd/bd/sync.go:732:1
 33 proxy (*proxyServer).ListenAndServe internal/storage/dbproxy/proxy/server.go:109:1
 32 issueops DeleteResolvedSetInTx internal/storage/issueops/delete.go:199:1
 32 jira (*Tracker).Init internal/jira/tracker.go:61:1
