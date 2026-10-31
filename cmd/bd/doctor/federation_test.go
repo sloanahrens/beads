@@ -42,9 +42,7 @@ func TestDoltServerConfig_SuppressesCLIAutoStartWithConfiguredPort(t *testing.T)
 
 func TestDoltServerConfig_EnablesCLIAutoStartWithoutConfiguredPort(t *testing.T) {
 	t.Setenv("BEADS_TEST_MODE", "")
-	t.Setenv("BEADS_DOLT_AUTO_START", "")
-	t.Setenv("BEADS_DOLT_SERVER_MODE", "")
-	t.Setenv("BEADS_DOLT_SHARED_SERVER", "")
+	isolateDoltServerEnv(t)
 
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
@@ -138,6 +136,7 @@ func TestCheckDoltServerModeMismatch_NoDoltDatabase(t *testing.T) {
 }
 
 func TestDoltServerConfig_PopulatesFromConfig(t *testing.T) {
+	isolateDoltServerEnv(t)
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
 	doltDir := filepath.Join(beadsDir, "dolt")
