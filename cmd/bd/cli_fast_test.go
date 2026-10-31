@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
 
 // Fast CLI tests converted from scripttest suite
@@ -124,6 +127,130 @@ func cliTestDatabaseName(testName, suffix string) string {
 		readable = readable[:maxReadable]
 	}
 	return cliTestDatabaseNamePrefix + readable + "_" + suffix
+}
+
+// withUniqueInitDatabase returns args with a database of its own added when they
+// run bd init and name none. Without --database, bd init takes the database
+// named from the prefix, so every test that inits with --prefix test shares one
+// server database, and the first test's project id then refuses every later
+// test's metadata.json with PROJECT IDENTITY MISMATCH. Other commands, and an
+// init that names its database with --database or --database=, come back as
+// given. The command is the first argument that is not a flag, so an init that
+// follows a global flag such as --json is still recognised.
+//
+// When a database is added and a test server is running, the database is dropped
+// in t.Cleanup, so a test run leaves nothing behind on the shared server. The
+// drop is DROP DATABASE IF EXISTS, so an init that failed before creating it is
+// not an error.
+func withUniqueInitDatabase(t *testing.T, args []string) []string {
+	t.Helper()
+	if !initNamesNoDatabase(args) {
+		return args
+	}
+	dbName := newCLITestDatabaseName(t, t.Name())
+	if testDoltServerPort != 0 {
+		t.Cleanup(func() {
+			if err := dropDatabaseOnServer(dbName, testDoltServerPort, false); err != nil {
+				t.Errorf("Failed to drop test database %s: %v", dbName, err)
+			}
+		})
+	}
+	withDB := append([]string(nil), args...)
+	return append(withDB, "--database", dbName)
+}
+
+// initNamesNoDatabase reports whether args run bd init without --database.
+func initNamesNoDatabase(args []string) bool {
+	cmdAt := -1
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			cmdAt = i
+			break
+		}
+	}
+	if cmdAt < 0 || args[cmdAt] != "init" {
+		return false
+	}
+	for _, a := range args[cmdAt+1:] {
+		if a == "--database" || strings.HasPrefix(a, "--database=") {
+			return false
+		}
+	}
+	return true
+}
+
+func TestWithUniqueInitDatabase(t *testing.T) {
+	t.Run("an init that names no database gets a test database of its own", func(t *testing.T) {
+		got := withUniqueInitDatabase(t, []string{"init", "--prefix", "test", "--quiet"})
+		if len(got) != 6 || got[4] != "--database" || !strings.HasPrefix(got[5], cliTestDatabaseNamePrefix) {
+			t.Fatalf("args = %v, want the init flags then --database %s<name>", got, cliTestDatabaseNamePrefix)
+		}
+		again := withUniqueInitDatabase(t, []string{"init", "--prefix", "test", "--quiet"})
+		if got[5] == again[5] {
+			t.Fatalf("two inits got the same database %q", got[5])
+		}
+	})
+	t.Run("an init after a global flag is recognised", func(t *testing.T) {
+		got := withUniqueInitDatabase(t, []string{"--json", "init", "--prefix", "test"})
+		if len(got) != 6 || got[4] != "--database" {
+			t.Fatalf("args = %v, want --database added after the init flags", got)
+		}
+	})
+	t.Run("the caller's slice is not written through", func(t *testing.T) {
+		in := make([]string, 3, 8)
+		copy(in, []string{"init", "--prefix", "x"})
+		withUniqueInitDatabase(t, in)
+		if got := in[:8][3]; got != "" {
+			t.Fatalf("append wrote %q into the caller's backing array", got)
+		}
+	})
+	for name, args := range map[string][]string{
+		"--database given":    {"init", "--database", "mine"},
+		"--database= given":   {"init", "--database=mine"},
+		"another command":     {"create", "title"},
+		"no arguments at all": nil,
+	} {
+		t.Run(name+" is left as it is", func(t *testing.T) {
+			got := withUniqueInitDatabase(t, args)
+			if strings.Join(got, " ") != strings.Join(args, " ") {
+				t.Fatalf("args = %v, want %v", got, args)
+			}
+		})
+	}
+}
+
+// TestWithUniqueInitDatabaseDropsItsDatabase proves the cleanup the helper
+// registers removes the database an init created: the subtest creates the named
+// database the way bd init would, and the database must be gone once it ends.
+func TestWithUniqueInitDatabaseDropsItsDatabase(t *testing.T) {
+	if testDoltServerPort == 0 {
+		t.Skip("Dolt test server not running")
+	}
+	var dbName string
+	t.Run("init", func(t *testing.T) {
+		args := withUniqueInitDatabase(t, []string{"init", "--prefix", "test"})
+		dbName = args[len(args)-1]
+		db, err := sql.Open("mysql", doltutil.ServerDSN{Host: "127.0.0.1", Port: testDoltServerPort, User: "root"}.String())
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer db.Close()
+		if _, err := db.Exec(fmt.Sprintf("CREATE DATABASE `%s`", dbName)); err != nil {
+			t.Fatalf("create %s: %v", dbName, err)
+		}
+	})
+	db, err := sql.Open("mysql", doltutil.ServerDSN{Host: "127.0.0.1", Port: testDoltServerPort, User: "root"}.String())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = ?", dbName).Scan(&n); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("database %s still on the server after its test ended", dbName)
+	}
 }
 
 // workspaceEnvVars are the variables that point bd at a workspace or database
@@ -1464,7 +1591,7 @@ func init() {
 func runBDExec(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command(testBD, args...)
+	cmd := exec.Command(testBD, withUniqueInitDatabase(t, args)...)
 	cmd.Dir = dir
 	cmd.Env = withoutWorkspaceEnv(os.Environ())
 
@@ -1480,7 +1607,7 @@ func runBDExec(t *testing.T, dir string, args ...string) string {
 func runBDExecAllowErrorWithEnv(t *testing.T, dir string, env []string, args ...string) (string, error) {
 	t.Helper()
 
-	cmd := exec.Command(testBD, args...)
+	cmd := exec.Command(testBD, withUniqueInitDatabase(t, args)...)
 	cmd.Dir = dir
 	cmd.Env = env
 
