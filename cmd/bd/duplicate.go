@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
@@ -59,13 +58,6 @@ func init() {
 
 func runDuplicate(cmd *cobra.Command, args []string) error {
 	CheckReadonly("duplicate")
-
-	evt := metrics.NewCommandEvent("duplicate")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
 
 	ctx := getRootContext()
 	store := getStore()
@@ -126,13 +118,6 @@ func runDuplicate(cmd *cobra.Command, args []string) error {
 
 func runSupersede(cmd *cobra.Command, args []string) error {
 	CheckReadonly("supersede")
-
-	evt := metrics.NewCommandEvent("supersede")
-	defer func() {
-		if c := metrics.Global(); c != nil {
-			c.CloseEventAndAdd(evt)
-		}
-	}()
 
 	ctx := getRootContext()
 	store := getStore()

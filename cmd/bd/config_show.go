@@ -11,7 +11,6 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/workapi"
 )
 
@@ -45,13 +44,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		evt := metrics.NewCommandEvent("config-show")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		sourceFilter, _ := cmd.Flags().GetString("source")
 
 		entries := collectConfigEntries()

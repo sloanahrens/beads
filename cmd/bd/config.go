@@ -14,7 +14,6 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/git"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/remotecache"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/issueops"
@@ -121,13 +120,6 @@ var configSetCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(_ *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("config-set")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		key := args[0]
 		value := args[1]
 
@@ -265,13 +257,6 @@ var configGetCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("config-get")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		key := args[0]
 
 		if key == "backup.enabled" {
@@ -460,13 +445,6 @@ var configListCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("config-list")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		settings, err := openWorkspaceConfig("config list requires direct database access")
 		if err != nil {
 			return HandleError("%v", err)
@@ -584,13 +562,6 @@ var configUnsetCmd = &cobra.Command{
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("config-unset")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		key := args[0]
 
 		if config.IsYamlOnlyKey(key) {
@@ -679,13 +650,6 @@ Checks:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("config-validate")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		repoPath, err := resolvedConfigRepoRoot()
 		if err != nil {
 			return HandleErrorWithHintRespectJSON(activeWorkspaceNotFoundError(), diagHint())
@@ -834,13 +798,6 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(_ *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("config-set-many")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		type kvPair struct {
 			key, value string
 		}

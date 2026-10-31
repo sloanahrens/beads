@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/ui"
 )
@@ -25,13 +24,6 @@ recomputed in the same transaction.
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		evt := metrics.NewCommandEvent("dep-prune-orphans")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
-
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		if !dryRun {
 			CheckReadonly("dep prune-orphans")

@@ -12,7 +12,6 @@ import (
 	"github.com/steveyegge/beads/internal/audit"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/debug"
-	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
@@ -51,13 +50,6 @@ the flags appear in the command line.`,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		CheckReadonly("close") // also covers CheckMigrationFreeze (dc-6jaq)
-
-		evt := metrics.NewCommandEvent("close")
-		defer func() {
-			if c := metrics.Global(); c != nil {
-				c.CloseEventAndAdd(evt)
-			}
-		}()
 
 		guards, err := writeGuardsFromFlags(cmd)
 		if err != nil {
