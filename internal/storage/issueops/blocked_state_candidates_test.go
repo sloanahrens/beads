@@ -10,6 +10,7 @@ package issueops
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -210,6 +211,55 @@ func TestRecomputeIsBlockedUnmarkReceivesOnlyBlockedIds(t *testing.T) {
 	if markExecs := rec.execs("SET w.is_blocked = 1"); len(markExecs) != 0 {
 		t.Fatalf("mark ran %d time(s), want 0:%s", len(markExecs), rec.describe())
 	}
+}
+
+// TestBlockedCandidateSelectErrorsFailTheRecompute: a candidate select that
+// cannot be read must fail the write, never fall through to the statement (or
+// to a silent no-op) as if the batch had no candidates.
+func TestBlockedCandidateSelectErrorsFailTheRecompute(t *testing.T) {
+	sentinel := errors.New("candidate select failed")
+
+	t.Run("mark candidates", func(t *testing.T) {
+		rec, mock := newCountingBlockedMock(t)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT i.id FROM issues i")).WillReturnError(sentinel)
+
+		err := RecomputeIsBlockedForIDsInTx(context.Background(), rec, []string{"issue-1"})
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("err = %v, want the candidate select error", err)
+		}
+		if !strings.Contains(err.Error(), "mark candidates") {
+			t.Fatalf("err = %v, want it to name the mark candidate read", err)
+		}
+	})
+
+	t.Run("unmark candidates", func(t *testing.T) {
+		rec, mock := newCountingBlockedMock(t)
+		expectCandidateSelect(mock, "issues", "i", "issue-1")
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE issues i SET i.is_blocked = 1")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT i.id FROM issues i")).WillReturnError(sentinel)
+
+		err := RecomputeIsBlockedForIDsInTx(context.Background(), rec, []string{"issue-1"})
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("err = %v, want the candidate select error", err)
+		}
+		if !strings.Contains(err.Error(), "unmark candidates") {
+			t.Fatalf("err = %v, want it to name the unmark candidate read", err)
+		}
+	})
+
+	t.Run("mark-only pass", func(t *testing.T) {
+		rec, mock := newCountingBlockedMock(t)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT i.id FROM issues i")).WillReturnError(sentinel)
+
+		err := MarkIsBlockedInTx(context.Background(), rec, []string{"issue-1"}, nil)
+		if !errors.Is(err, sentinel) {
+			t.Fatalf("err = %v, want the candidate select error", err)
+		}
+		if execs := rec.execs("UPDATE"); len(execs) != 0 {
+			t.Fatalf("mark ran after the candidate read failed:%s", rec.describe())
+		}
+	})
 }
 
 // TestMarkIsBlockedPassReceivesOnlyOpenCandidateIds covers the mark-only path
