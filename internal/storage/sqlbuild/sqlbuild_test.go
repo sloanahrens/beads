@@ -306,22 +306,44 @@ func TestSearchCountsSQLShape(t *testing.T) {
 		t.Error("reverse blockers must not predicate on the COALESCE target expression")
 	}
 
-	// Filter-before-join structure (predicate form): whereSQL is applied to the
-	// main table in a derived table that closes before the first aggregate LEFT
-	// JOIN. Locking this prevents a regression back to the filter-after-join
-	// shape that materialized every aggregate before pruning. "SELECT i.*" is
-	// the derived driver's marker — "FROM (" alone is ambiguous, since the
-	// reverse-blocker subquery also nests one.
-	driverEnd := strings.Index(sql, ") i")
+	// Filter-before-join structure (predicate form): whereSQL filters the main
+	// table inside the `filtered` CTE, which closes before the first aggregate
+	// LEFT JOIN, and the driver reads from it. Locking this prevents a
+	// regression back to the filter-after-join shape that materialized every
+	// aggregate before pruning. The WHERE is rendered exactly once, so the
+	// caller-supplied arg list still binds once per placeholder.
 	firstJoin := strings.Index(sql, "LEFT JOIN")
-	if !strings.Contains(sql, "SELECT i.*") || driverEnd < 0 {
-		t.Fatalf("counts SQL must wrap the main table in a derived subquery; got:\n%s", sql)
+	if !strings.HasPrefix(sql, "WITH filtered AS (") || !strings.Contains(sql, "FROM filtered i") {
+		t.Fatalf("counts SQL must render the filtered driver as a CTE; got:\n%s", sql)
 	}
-	if firstJoin < 0 || driverEnd > firstJoin {
-		t.Fatalf("derived driver must close before the first aggregate LEFT JOIN")
+	if firstJoin < 0 {
+		t.Fatal("counts SQL has no aggregate LEFT JOIN")
 	}
-	if idx := strings.Index(sql, "WHERE x = ?"); idx < 0 || idx > driverEnd {
-		t.Errorf("WHERE filter must appear inside the derived driver (before %q)", ") i")
+	if got := strings.Count(sql, "WHERE x = ?"); got != 1 {
+		t.Errorf("WHERE filter must be rendered exactly once, got %d", got)
+	}
+	if idx := strings.Index(sql, "WHERE x = ?"); idx < 0 || idx > firstJoin {
+		t.Errorf("WHERE filter must appear before the first aggregate LEFT JOIN")
+	}
+	// Every aggregate subquery is narrowed to the filtered id set: the labels,
+	// comments, dep-count, parent and deps-JSON aggregates by issue_id, and the
+	// reverse-blocker union on each typed target column (it unions both
+	// dependency tables, so the restriction rides the predicate once per
+	// branch). Without these the subqueries group the whole side table whatever
+	// the filter selected.
+	for _, want := range []string{
+		"FROM wisp_labels\n\t\t\tWHERE issue_id IN (SELECT id FROM filtered)",
+		"FROM wisp_comments\n\t\t\tWHERE issue_id IN (SELECT id FROM filtered)",
+		"FROM wisp_dependencies\n\t\t\tWHERE type = 'blocks' AND issue_id IN (SELECT id FROM filtered)",
+		"FROM wisp_dependencies\n\t\t\tWHERE type = 'parent-child' AND issue_id IN (SELECT id FROM filtered)",
+		"FROM wisp_dependencies\n\t\t\tWHERE issue_id IN (SELECT id FROM filtered)",
+		"AND depends_on_issue_id IN (SELECT id FROM filtered)",
+		"AND depends_on_wisp_id IN (SELECT id FROM filtered)",
+		"AND depends_on_external IN (SELECT id FROM filtered)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("counts SQL missing aggregate restriction %q", want)
+		}
 	}
 	// ORDER BY and LIMIT must stay AFTER the joins, and appear exactly once —
 	// the ready-work path passes a parameterized ORDER BY, so duplicating it
@@ -342,10 +364,11 @@ func TestSearchCountsSQLShape(t *testing.T) {
 		t.Error("counts SQL must not union wisp reverse deps when probe says absent")
 	}
 	// An empty whereSQL keeps the plain driver: there is no predicate to push
-	// down, so the derived-table wrapper would be pure overhead for the
-	// unfiltered list/counts path.
-	if strings.Contains(noWispDeps, "SELECT i.*") {
-		t.Errorf("empty-where counts SQL must keep the plain driver, not a derived table:\n%s", noWispDeps)
+	// down and no filtered set to narrow an aggregate to (the driver is every
+	// row), so the CTE would be pure overhead for the unfiltered list/counts
+	// path.
+	if strings.Contains(noWispDeps, "WITH filtered") || strings.Contains(noWispDeps, "FROM filtered") {
+		t.Errorf("empty-where counts SQL must keep the plain driver, not a CTE:\n%s", noWispDeps)
 	}
 	if strings.Contains(noWispDeps, "JSON_ARRAYAGG(label)") {
 		t.Error("counts SQL must skip the labels join when skipLabels is set")

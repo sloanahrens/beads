@@ -199,6 +199,96 @@ func seedSearchCountsFixture(ctx context.Context, t *testing.T, store *DoltStore
 	}
 }
 
+// TestSearchCountsNarrowedAggregatesMatchOldQuery is the single-row check for
+// be-gd14's aggregate narrowing: when the filter selects one issue among many,
+// the narrowed query must return that issue's counts, labels and parent
+// identical to the whole-table query it replaced. The filter matrix in
+// TestSearchCountsFilterBeforeJoinParity would still catch a wrong id-set
+// restriction through its multi-row cases, but not for the one-row page shape:
+// a restriction keyed on the wrong column can leave the surviving row with
+// zeroed counts and missing labels, which a row-set comparison still passes.
+func TestSearchCountsNarrowedAggregatesMatchOldQuery(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx, cancel := testContext(t)
+	defer cancel()
+
+	seedSearchCountsFixture(ctx, t, store)
+
+	cases := []struct {
+		name       string
+		filter     types.IssueFilter
+		wantID     string
+		wantLabels string
+		wantParent string
+		wantDep    int
+		wantRdep   int
+		wantComnt  int
+	}{
+		{
+			// counts-parity-a: two labels, one blocks edge to c (nothing
+			// blocks it — b -> a is parent-child), two comments.
+			name:       "one issue by id: labels and counts",
+			filter:     types.IssueFilter{IDs: []string{"counts-parity-a"}},
+			wantID:     "counts-parity-a",
+			wantLabels: "alpha,shared",
+			wantDep:    1,
+			wantComnt:  2,
+		},
+		{
+			// counts-parity-b: child of a, blocks on c, no labels or comments.
+			name:       "one issue by id: parent-child ancestor",
+			filter:     types.IssueFilter{IDs: []string{"counts-parity-b"}},
+			wantID:     "counts-parity-b",
+			wantParent: "counts-parity-a",
+			wantDep:    1,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			whereClauses, args, err := sqlbuild.BuildIssueFilterClauses("", tc.filter, sqlbuild.IssuesFilterTables)
+			if err != nil {
+				t.Fatalf("BuildIssueFilterClauses: %v", err)
+			}
+			if len(whereClauses) == 0 {
+				t.Fatal("filter produced no WHERE clause; the test would compare two unfiltered queries")
+			}
+			whereSQL := "WHERE " + strings.Join(whereClauses, " AND ")
+
+			hyd := sqlbuild.CountsHydration{}
+			newSQL, genArgs := sqlbuild.SearchCountsSQL(sqlbuild.IssuesFilterTables, nil, whereSQL, "", "", true, hyd)
+			if genArgs != nil {
+				t.Fatalf("predicate form must not generate args, got %d", len(genArgs))
+			}
+			oldSQL := oldSearchCountsSQL(sqlbuild.IssuesFilterTables, whereSQL, "", "", true, false)
+
+			gotNew := runCountsSQL(ctx, t, store.db, newSQL, args, hyd)
+			gotOld := runCountsSQL(ctx, t, store.db, oldSQL, args, hyd)
+
+			// Guard the premise before the comparison: a filter that matched
+			// nothing would make the equality vacuous.
+			if len(gotNew) != 1 || len(gotOld) != 1 {
+				t.Fatalf("row count: new=%d old=%d, want 1 each", len(gotNew), len(gotOld))
+			}
+			if gotNew[0] != gotOld[0] {
+				t.Fatalf("narrowed row differs from the whole-table query:\n new=%+v\n old=%+v", gotNew[0], gotOld[0])
+			}
+			got := gotNew[0]
+			if got.id != tc.wantID {
+				t.Fatalf("filter selected %q, want %q", got.id, tc.wantID)
+			}
+			if got.labels != tc.wantLabels || got.parent != tc.wantParent ||
+				got.depCount != tc.wantDep || got.rdepCount != tc.wantRdep || got.commentCount != tc.wantComnt {
+				t.Fatalf("narrowed row = %+v, want labels=%q parent=%q dep=%d rdep=%d comments=%d",
+					got, tc.wantLabels, tc.wantParent, tc.wantDep, tc.wantRdep, tc.wantComnt)
+			}
+		})
+	}
+}
+
 // oldSearchCountsSQL renders the pre-refactor counts mega-query shape, with the
 // WHERE/ORDER BY/LIMIT applied AFTER the aggregate LEFT JOINs. It is kept here,
 // in test code only, as the reference shape that the production
