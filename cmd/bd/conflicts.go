@@ -360,7 +360,7 @@ Examples:
 		case remaining > 0:
 			fmt.Printf("%d conflict(s) remain; the merge is not committed yet.\nRun: bd conflicts list\n", remaining)
 		case committed:
-			fmt.Println("Merge committed. Push when ready: bd sync")
+			fmt.Println("Merge committed. Push when ready: bd dolt push")
 		case blockers.Blocked():
 			printMergeBlockers(blockers)
 		case resolved == 0:
@@ -513,7 +513,7 @@ func concludeResolvedMerge(ctx context.Context) error {
 		return HandleErrorRespectJSON("%v", err)
 	}
 	blockers, _ = mergeBlockers(ctx)
-	return concludeJSON(true, blockers, "Merge committed. Push when ready: bd sync")
+	return concludeJSON(true, blockers, "Merge committed. Push when ready: bd dolt push")
 }
 
 // concludeJSON emits --conclude's one payload shape — same keys on every

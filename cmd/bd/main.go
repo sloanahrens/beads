@@ -106,7 +106,7 @@ var (
 	commandMayEmptyJSONLExport atomic.Bool
 
 	// commandDidExplicitDoltCommit is set when a command already created a Dolt commit
-	// explicitly (e.g., bd sync in dolt-native mode, hook flows, bd vc commit).
+	// explicitly (e.g., bd dolt push, hook flows, bd vc commit).
 	// This prevents a redundant auto-commit attempt in PersistentPostRun.
 	commandDidExplicitDoltCommit bool
 

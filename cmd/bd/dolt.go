@@ -230,17 +230,16 @@ func isConfirmedNoRemote(ctx context.Context, st remoteLister, err error) bool {
 // hasNoRemoteConfigured is the structural half of isConfirmedNoRemote: the
 // positive proof that this rig really has no remote, independent of how the
 // failure worded itself. It is what actually makes an exit-0 skip safe, so a
-// caller with a different (broader) error classification — `bd sync`, which
-// runs on a timer and must not fail every tick on a solo rig — can reuse the
-// proof without loosening it.
+// caller with a different (broader) error classification can reuse the proof
+// without loosening it.
 func hasNoRemoteConfigured(ctx context.Context, st remoteLister) bool {
 	configured, listErr := hasConfiguredRemote(ctx, st)
 	return listErr == nil && !configured
 }
 
 // hasConfiguredRemote decides, from evidence, whether a rig has a Dolt remote
-// at all. It is the one decider for the push/sync no-remote question: both
-// hasNoRemoteConfigured (the `bd sync` / `bd dolt push|pull` exit-0 gate) and
+// at all. It is the one decider for the push no-remote question: both
+// hasNoRemoteConfigured (the `bd dolt push|pull` exit-0 gate) and
 // adoptGitOriginRemoteForPush go through it. The MUTATING siblings —
 // `bd config apply`, ensureDoltRemote, and the git-protocol CLI push route —
 // consult the same persisted evidence via PersistedRemoteInfos (wy-6k7f7);
@@ -286,8 +285,8 @@ func hasConfiguredRemote(ctx context.Context, st remoteLister) (bool, error) {
 // main.go builds a hook runner whenever there is a dbPath, whether or not any
 // hook scripts exist, so only no-hooks:true / BD_NO_HOOKS=1 leaves it off.
 // Asserting straight on the passed store therefore all but always failed,
-// silently skipping the GH#2118 cold-start probe and letting `bd sync` /
-// `bd dolt push|pull` report "no remote configured" and exit 0 forever on a rig
+// silently skipping the GH#2118 cold-start probe and letting `bd dolt push|pull`
+// report "no remote configured" and exit 0 forever on a rig
 // whose remote is persisted in .dolt/repo_state.json (wy-xtv17).
 //
 // It peels via storage.Unwrapper, the same contract storage.UnwrapStore uses,
