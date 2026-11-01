@@ -28,9 +28,6 @@ func TestRunHookKillsDescendantsWhenGroupSignalRefused(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the descendant check needs Linux /proc")
 	}
-	if testing.Short() {
-		t.Skip("Skipping long-running descendant kill test in short mode")
-	}
 
 	tmpDir := t.TempDir()
 	hookPath := filepath.Join(tmpDir, HookOnCreate)
@@ -99,9 +96,6 @@ func TestRunHookKillsDescendantsWhenGroupSignalRefused(t *testing.T) {
 // error rather than the timeout.
 func TestRunHookWaitsForTheHookWhenTheKillFails(t *testing.T) {
 	skipWithoutShellHooks(t)
-	if testing.Short() {
-		t.Skip("Skipping process-tree test in short mode")
-	}
 
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "descendant-exited")
