@@ -112,7 +112,7 @@ func (r *Runner) runHook(hookPath, event string, issue *types.Issue) (retErr err
 // It signals the hook's process group first, which takes the whole tree in one
 // call. Some kernels refuse that call with EPERM even for a group the caller
 // created: a polecat container's seccomp filter refuses every negative-pid
-// signal. On EPERM the group's members are signalled one pid at a time from the
+// signal. On EPERM the group's members are signaled one pid at a time from the
 // process table; any other error is returned as before.
 func (r *Runner) killTimedOutHook(pid int) error {
 	signal := r.signalKill
@@ -134,7 +134,7 @@ func (r *Runner) killTimedOutHook(pid int) error {
 
 // killGroupMembers sends SIGKILL to every live member of process group pgid,
 // one pid at a time. signal takes a plain pid here and a negative group pid in
-// the group call. A member that exits before it is signalled (ESRCH) is done,
+// the group call. A member that exits before it is signaled (ESRCH) is done,
 // not an error. The member list comes from groupMembers when a test injects
 // it, and from the process table otherwise.
 func (r *Runner) killGroupMembers(pgid int, signal func(pid int, sig syscall.Signal) error) error {
@@ -178,6 +178,7 @@ func procGroupMembers(procRoot string, pgid int) ([]int, error) {
 		if err != nil {
 			continue // not a process directory
 		}
+		//nolint:gosec // G304: procRoot is /proc in production and the entry name comes from that directory's own listing.
 		stat, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "stat"))
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
