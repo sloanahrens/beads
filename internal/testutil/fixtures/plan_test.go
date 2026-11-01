@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/types"
+	"github.com/steveyegge/beads/issueops"
 )
 
 // planNow is the fixed clock every plan test passes in, so plans can be compared.
@@ -316,6 +318,74 @@ func TestPlanLocalizeRefusesBadEnds(t *testing.T) {
 				t.Errorf("ends = %q, want %q", [2]string{got.IssueID, got.DependsOnID}, tt.wantEnds)
 			}
 		})
+	}
+}
+
+func TestPlanEdgesRefuseUnwrittenEnds(t *testing.T) {
+	tests := []struct {
+		name    string
+		issues  []*types.Issue
+		dep     *types.Dependency
+		want    []issueops.DependencyEdge
+		wantErr bool
+	}{
+		{
+			name:   "both ends written",
+			issues: []*types.Issue{{ID: "bd-0"}, {ID: "bd-1"}},
+			dep:    &types.Dependency{IssueID: planRef(1), DependsOnID: planRef(0), Type: types.DepBlocks},
+			want:   []issueops.DependencyEdge{{IssueID: "bd-1", DependsOnID: "bd-0", Type: types.DepBlocks}},
+		},
+		{
+			name:    "end past the plan is refused",
+			issues:  []*types.Issue{{ID: "bd-0"}},
+			dep:     &types.Dependency{IssueID: planRef(0), DependsOnID: planRef(5), Type: types.DepBlocks},
+			wantErr: true,
+		},
+		{
+			name:    "end with no ID is refused",
+			issues:  []*types.Issue{{ID: "bd-0"}, {}},
+			dep:     &types.Dependency{IssueID: planRef(1), DependsOnID: planRef(0), Type: types.DepBlocks},
+			wantErr: true,
+		},
+		{
+			name:    "end that is not a plan ref is refused",
+			issues:  []*types.Issue{{ID: "bd-0"}},
+			dep:     &types.Dependency{IssueID: "bd-0", DependsOnID: planRef(0), Type: types.DepBlocks},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := dependencyEdges(tt.issues, []*types.Dependency{tt.dep})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("edges = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlanWriteStopsOnError(t *testing.T) {
+	issues := []*types.Issue{{Title: "a"}, {Title: "b"}, {Title: "c"}}
+	calls := 0
+	wantErr := errors.New("store refused the chunk")
+	_, err := writePlanInChunks(issues, 1, func(chunk []*types.Issue) error {
+		calls++
+		if calls == 2 {
+			return wantErr
+		}
+		for i, issue := range chunk {
+			issue.ID = fmt.Sprintf("bd-%d", calls*10+i)
+		}
+		return nil
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if calls != 2 {
+		t.Errorf("write called %d times, want it to stop at 2", calls)
 	}
 }
 
