@@ -15,9 +15,10 @@ import (
 // issue's ID before the dependency is written.
 const planRefPrefix = "plan:"
 
-// batchRefPrefix is the form CreateIssues reads for a dependency end that
-// names issues[index] of the same call (batchDependencyRefPrefix in
-// internal/storage/issueops).
+// batchRefPrefix is the form CheckBatchDependencyRefs and
+// ResolveBatchDependencyRefs in internal/storage/issueops read for a dependency
+// end that names issues[index] of the same CreateIssues call. Their prefix
+// constant is unexported, so the literal is repeated here.
 const batchRefPrefix = "batch:"
 
 func planRef(index int) string {
