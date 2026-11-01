@@ -18,18 +18,20 @@ func issueIDCompletion(cmd *cobra.Command, args []string, toComplete string) ([]
 		ctx = rootCtx
 	}
 
-	// Get database path - use same logic as in PersistentPreRun
-	currentDBPath := dbPath
-	if currentDBPath == "" {
-		currentDBPath = beads.FindDatabasePath()
-		if currentDBPath == "" {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-	}
-
-	// Open database if store is not initialized
+	// An open store answers without a database path: a caller that has the
+	// store but no .beads in its working directory still gets its completions.
+	// A path is resolved only to open a read-only store when none is open.
 	currentStore := store
 	if currentStore == nil {
+		// Get database path - use same logic as in PersistentPreRun
+		currentDBPath := dbPath
+		if currentDBPath == "" {
+			currentDBPath = beads.FindDatabasePath()
+			if currentDBPath == "" {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+		}
+
 		var err error
 		currentStore, err = openReadOnlyStoreForDBPath(ctx, currentDBPath)
 		if err != nil {
