@@ -101,23 +101,27 @@ func splitPSField(line string) (field, rest string, ok bool) {
 }
 
 // isProcessInDir checks if a process's working directory matches the given path.
-// The CWD comes from processCWD (see processcwd_linux.go and
-// processcwd_other_unix.go), which is more reliable than checking command-line
+// Uses lsof to look up the CWD, which is more reliable than checking command-line
 // args since dolt sql-server is started with cmd.Dir (not a --data-dir flag).
 func isProcessInDir(pid int, dir string) bool {
-	cwd, ok := processCWD(pid)
-	if !ok {
-		return false
-	}
-	absDir, err := filepath.Abs(dir)
+	// On macOS, lsof requires -a to AND selectors together; without it,
+	// "-p <pid>" and "-d cwd" can yield cwd entries from unrelated processes.
+	out, err := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
 	if err != nil {
 		return false
 	}
-	absCwd, err := filepath.Abs(cwd)
-	if err != nil {
-		return false
+	absDir, _ := filepath.Abs(dir)
+	// lsof -Fn output format: "p<pid>\nfcwd\nn<path>"
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "n") {
+			cwd := strings.TrimSpace(line[1:])
+			absCwd, _ := filepath.Abs(cwd)
+			if absCwd == absDir {
+				return true
+			}
+		}
 	}
-	return absCwd == absDir
+	return false
 }
 
 // isProcessAlive checks if a process with the given PID is running.

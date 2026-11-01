@@ -588,30 +588,79 @@ func TestMaxDoltServers(t *testing.T) {
 	})
 }
 
+// TestIsProcessInDir drives isProcessInDir, which resolves a pid's cwd by
+// running `lsof -a -p <pid> -d cwd -Fn` and reading the `n` field. Asking the
+// host's lsof made the test depend on a tool that need not answer: on some
+// hosts that lsof form never returns, which hung this package's whole test
+// binary until its timeout (be-x4e8). A fake lsof on PATH emits the same -Fn
+// field output deterministically, so the production parsing and comparison
+// still run while the host tool never does.
 func TestIsProcessInDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("isProcessInDir always returns false on Windows (CWD not exposed)")
 	}
-	// Our own process should have a CWD we can check
-	cwd, err := os.Getwd()
-	if err != nil {
+
+	// The fake answers only for the pid named in FAKE_LSOF_LIVE_PID, reporting
+	// FAKE_LSOF_CWD; every other -p fails the way lsof does for a pid it cannot
+	// resolve.
+	fakeLsof := "#!/bin/sh\n" +
+		"pid=\n" +
+		"while [ $# -gt 0 ]; do\n" +
+		"  case \"$1\" in\n" +
+		"    -p) pid=\"$2\"; shift 2 ;;\n" +
+		"    *) shift ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"if [ \"$pid\" != \"$FAKE_LSOF_LIVE_PID\" ]; then\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"printf 'p%s\\nfcwd\\nn%s\\n' \"$pid\" \"$FAKE_LSOF_CWD\"\n"
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "lsof"), []byte(fakeLsof), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("PATH", bin)
+	t.Setenv("FAKE_LSOF_LIVE_PID", strconv.Itoa(os.Getpid()))
 
-	// Our PID should be in our CWD
-	if !isProcessInDir(os.Getpid(), cwd) {
-		t.Log("isProcessInDir returned false for own process CWD (lsof may not be available)")
-	}
+	dir := t.TempDir()
 
-	// Our PID should NOT be in a random temp dir
-	if isProcessInDir(os.Getpid(), t.TempDir()) {
-		t.Error("isProcessInDir should return false for wrong directory")
-	}
+	t.Run("process in directory", func(t *testing.T) {
+		t.Setenv("FAKE_LSOF_CWD", dir)
+		if !isProcessInDir(os.Getpid(), dir) {
+			t.Error("isProcessInDir = false for the reported cwd, want true")
+		}
+	})
 
-	// Dead PID should return false
-	if isProcessInDir(99999999, cwd) {
-		t.Error("isProcessInDir should return false for dead PID")
-	}
+	t.Run("other directory", func(t *testing.T) {
+		t.Setenv("FAKE_LSOF_CWD", dir)
+		if isProcessInDir(os.Getpid(), t.TempDir()) {
+			t.Error("isProcessInDir = true for a different directory, want false")
+		}
+	})
+
+	t.Run("deleted cwd does not match", func(t *testing.T) {
+		// Once the directory is unlinked the kernel reports the cwd with a
+		// " (deleted)" suffix, which must not equal the live directory it
+		// used to name.
+		t.Setenv("FAKE_LSOF_CWD", dir+" (deleted)")
+		if isProcessInDir(os.Getpid(), dir) {
+			t.Error("isProcessInDir = true for a deleted cwd, want false")
+		}
+	})
+
+	t.Run("unresolvable pid", func(t *testing.T) {
+		t.Setenv("FAKE_LSOF_CWD", dir)
+		if isProcessInDir(99999999, dir) {
+			t.Error("isProcessInDir = true for a pid lsof cannot resolve, want false")
+		}
+	})
+
+	t.Run("lsof unavailable", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		if isProcessInDir(os.Getpid(), dir) {
+			t.Error("isProcessInDir = true without lsof on PATH, want false")
+		}
+	})
 }
 
 func TestCountDoltProcesses(t *testing.T) {
