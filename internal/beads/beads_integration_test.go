@@ -373,34 +373,36 @@ func TestBatchCreateIssues(t *testing.T) {
 	}
 }
 
-// TestFindDatabasePathIntegration tests the database discovery
+// TestFindDatabasePathIntegration tests the database discovery: a .beads
+// directory holding a dolt directory is the database FindDatabasePath returns.
+// The fixture is a bare directory, so no server is needed. The discovery
+// environment is cleared first, since the function reads BEADS_DIR and BEADS_DB
+// before it walks the tree.
 func TestFindDatabasePathIntegration(t *testing.T) {
-	if !hasDoltTestPort() {
-		t.Skip("skipping: Dolt test container not available")
-	}
-	// Create temporary directory with .beads
-	tmpDir, err := os.MkdirTemp("", "beads-find-*")
+	t.Setenv("BEADS_DIR", "")
+	t.Setenv("BEADS_DB", "")
+
+	tmpDir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf("resolving the temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	doltDir := filepath.Join(tmpDir, ".beads", "dolt")
+	if err := os.MkdirAll(doltDir, 0o755); err != nil {
+		t.Fatalf("creating the dolt directory: %v", err)
+	}
 
-	beadsDir := filepath.Join(tmpDir, ".beads")
-	os.MkdirAll(beadsDir, 0o755)
-
-	dbPath := filepath.Join(beadsDir, "test.db")
-	f, _ := os.Create(dbPath)
-	f.Close()
-
-	// Change to temp directory
 	t.Chdir(tmpDir)
 
-	// Should find the database
 	found := beads.FindDatabasePath()
 	if found == "" {
-		t.Error("Expected to find database, got empty string")
+		t.Fatal("Expected to find database, got empty string")
 	}
-
+	if resolved, err := filepath.EvalSymlinks(found); err == nil {
+		found = resolved
+	}
+	if found != doltDir {
+		t.Errorf("FindDatabasePath() = %q, want %q", found, doltDir)
+	}
 	t.Logf("Found database at: %s", found)
 }
 
