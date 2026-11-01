@@ -607,3 +607,163 @@ func TestCompactTier1Batch_MixedResults(t *testing.T) {
 		t.Fatalf("summarizer should run once; got %d", summary.calls)
 	}
 }
+
+func closedFakeIssue(id string) *types.Issue {
+	return &types.Issue{
+		ID:                 id,
+		Title:              "Closed Issue",
+		Description:        "Implemented a JWT authentication flow with refresh-token rotation.",
+		Design:             "Stateless tokens, rotated on use, stored in httpOnly cookies.",
+		Notes:              "Monitor refresh patterns for anomalies.",
+		AcceptanceCriteria: "Users can log in and receive a valid token.",
+		Status:             types.StatusClosed,
+		Priority:           2,
+		IssueType:          types.TypeTask,
+	}
+}
+
+func openFakeIssue(id string) *types.Issue {
+	return &types.Issue{
+		ID:          id,
+		Title:       "Open Issue",
+		Description: "Should not be compacted",
+		Status:      types.StatusOpen,
+		Priority:    2,
+		IssueType:   types.TypeTask,
+	}
+}
+
+func TestCompactTier1_IneligibleIssue(t *testing.T) {
+	store := newFakeStore(openFakeIssue("bd-open"))
+	c, err := New(store, "", &Config{DryRun: true})
+	if err != nil {
+		t.Fatalf("failed to create compactor: %v", err)
+	}
+
+	err = c.CompactTier1(context.Background(), "bd-open")
+	if err == nil {
+		t.Fatal("expected error for ineligible issue, got nil")
+	}
+	const want = "issue bd-open is not eligible for Tier 1 compaction: issue is not closed"
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if len(store.writes) != 0 {
+		t.Errorf("ineligible issue must not be written, got writes: %v", store.writes)
+	}
+}
+
+func TestCompactTier1Batch_DryRun(t *testing.T) {
+	store := newFakeStore(closedFakeIssue("bd-batch-1"), closedFakeIssue("bd-batch-2"))
+	c, err := New(store, "", &Config{DryRun: true, Concurrency: 2})
+	if err != nil {
+		t.Fatalf("failed to create compactor: %v", err)
+	}
+
+	results, err := c.CompactTier1Batch(context.Background(), []string{"bd-batch-1", "bd-batch-2"})
+	if err != nil {
+		t.Fatalf("failed to batch compact: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	for _, result := range results {
+		if result.Err == nil {
+			t.Errorf("dry-run must not succeed for %s", result.IssueID)
+			continue
+		}
+		if want := "dry-run: would compact " + result.IssueID; !strings.HasPrefix(result.Err.Error(), want) {
+			t.Errorf("unexpected error for %s: %v", result.IssueID, result.Err)
+		}
+		if result.OriginalSize == 0 {
+			t.Errorf("expected non-zero original size for %s", result.IssueID)
+		}
+	}
+	if len(store.writes) != 0 {
+		t.Errorf("dry-run must not write, got writes: %v", store.writes)
+	}
+}
+
+func TestCompactTier1Batch_WithIneligible(t *testing.T) {
+	store := newFakeStore(closedFakeIssue("bd-closed"), openFakeIssue("bd-open"))
+	c, err := New(store, "", &Config{DryRun: true, Concurrency: 2})
+	if err != nil {
+		t.Fatalf("failed to create compactor: %v", err)
+	}
+
+	results, err := c.CompactTier1Batch(context.Background(), []string{"bd-closed", "bd-open"})
+	if err != nil {
+		t.Fatalf("failed to batch compact: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	for _, result := range results {
+		if result.Err == nil {
+			t.Errorf("expected an error for %s in dry-run, got nil", result.IssueID)
+			continue
+		}
+		var want string
+		switch result.IssueID {
+		case "bd-closed":
+			want = "dry-run: would compact bd-closed"
+		case "bd-open":
+			want = "issue bd-open is not eligible for Tier 1 compaction: issue is not closed"
+		default:
+			t.Fatalf("unexpected result for %s: %v", result.IssueID, result.Err)
+		}
+		if !strings.HasPrefix(result.Err.Error(), want) {
+			t.Errorf("%s: want error starting %q, got: %v", result.IssueID, want, result.Err)
+		}
+	}
+}
+
+func TestBatchOperations_ErrorHandling(t *testing.T) {
+	store := newFakeStore(closedFakeIssue("bd-closed"), openFakeIssue("bd-open"))
+	c, err := New(store, "", &Config{DryRun: true, Concurrency: 2})
+	if err != nil {
+		t.Fatalf("failed to create compactor: %v", err)
+	}
+
+	results, err := c.CompactTier1Batch(context.Background(), []string{"bd-closed", "bd-open", "bd-missing"})
+	if err != nil {
+		t.Fatalf("batch operation failed: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	var successCount, errorCount int
+	for _, r := range results {
+		if r.Err == nil {
+			successCount++
+			continue
+		}
+		errorCount++
+		switch r.IssueID {
+		case "bd-closed":
+			if !strings.HasPrefix(r.Err.Error(), "dry-run: would compact bd-closed") {
+				t.Errorf("bd-closed: want dry-run error, got: %v", r.Err)
+			}
+		case "bd-open":
+			if !strings.HasPrefix(r.Err.Error(), "issue bd-open is not eligible for Tier 1 compaction: issue is not closed") {
+				t.Errorf("bd-open: want ineligible error, got: %v", r.Err)
+			}
+		case "bd-missing":
+			if !errors.Is(r.Err, errFakeNotFound) {
+				t.Errorf("bd-missing: want not-found error, got: %v", r.Err)
+			}
+		default:
+			t.Errorf("unexpected result for %s: %v", r.IssueID, r.Err)
+		}
+	}
+
+	if successCount != 0 {
+		t.Errorf("expected 0 successes, got %d", successCount)
+	}
+	if errorCount != 3 {
+		t.Errorf("expected 3 errors, got %d", errorCount)
+	}
+}
