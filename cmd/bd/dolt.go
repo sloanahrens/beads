@@ -21,7 +21,6 @@ import (
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dberrors"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/storage/versioncontrolops"
 	"github.com/steveyegge/beads/internal/ui"
@@ -891,57 +890,6 @@ type doltStopRecordResult struct {
 	ProcessWasGone  bool   `json:"process_was_gone,omitempty"`
 	SignalSent      bool   `json:"signal_sent,omitempty"`
 	QuarantinedPath string `json:"quarantined_path,omitempty"`
-}
-
-func newForcedDoltStopResult(
-	shutdownErr error,
-	report proxy.ForceStopReport,
-	forceErr error,
-) doltStopResult {
-	result := doltStopResult{
-		Stopped:               forceErr == nil,
-		Force:                 true,
-		ForcedRecovery:        true,
-		Verified:              boolPointer(false),
-		VerifiedShutdownError: shutdownErr.Error(),
-		RecordFound:           report.RecordFound,
-		RecordPath:            report.RecordPath,
-		LockWasHeld:           report.LockWasHeld,
-		PID:                   report.PID,
-		Executable:            report.Executable,
-		ProcessWasGone:        report.ProcessWasGone,
-		SignalSent:            report.SignalSent,
-		QuarantinedPath:       report.QuarantinedPath,
-	}
-	if report.Executable != "" {
-		result.ExecutableVerified = boolPointer(
-			report.Executable == "bd" || report.Executable == "dolt",
-		)
-	}
-	result.ProcessLeftAlone = report.RecordFound &&
-		!report.ProcessWasGone &&
-		!report.SignalSent
-	result.RecordLeftAlone = report.RecordFound && report.QuarantinedPath == ""
-	if report.Backend != nil {
-		result.Backend = &doltStopRecordResult{
-			RecordFound:     report.Backend.RecordFound,
-			RecordPath:      report.Backend.RecordPath,
-			LockWasHeld:     report.Backend.LockWasHeld,
-			PID:             report.Backend.PID,
-			Executable:      report.Backend.Executable,
-			ProcessWasGone:  report.Backend.ProcessWasGone,
-			SignalSent:      report.Backend.SignalSent,
-			QuarantinedPath: report.Backend.QuarantinedPath,
-		}
-	}
-	if forceErr != nil {
-		result.Error = forceErr.Error()
-	}
-	return result
-}
-
-func boolPointer(value bool) *bool {
-	return &value
 }
 
 func renderDoltStopResult(result doltStopResult) error {
