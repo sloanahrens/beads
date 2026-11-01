@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -24,6 +25,13 @@ import (
 
 	"github.com/steveyegge/beads/internal/types"
 )
+
+// hookWaitDelay bounds how long a timed-out hook's pipe wait may run after the
+// kill. Wait returns only once every holder of the hook's stdout/stderr pipes
+// exits, and a descendant that survived the kill holds one; without a bound a
+// fallback that could not signal every member would block the caller past its
+// own timeout. It is cleanup slop, not a second timeout.
+const hookWaitDelay = 2 * time.Second
 
 // runHook executes the hook and enforces a timeout, killing the process group
 // on expiration to ensure descendant processes are terminated.
@@ -58,6 +66,7 @@ func (r *Runner) runHook(hookPath, event string, issue *types.Issue) (retErr err
 	// Create command: hook_script <issue_id> <event_type>
 	// #nosec G204 -- hookPath is from controlled .beads/hooks directory
 	cmd := exec.CommandContext(ctx, hookPath, issue.ID, event)
+	cmd.WaitDelay = hookWaitDelay
 	cmd.Stdin = bytes.NewReader(issueJSON)
 
 	// Capture output for debugging (but don't block on it)
@@ -88,16 +97,22 @@ func (r *Runner) runHook(hookPath, event string, issue *types.Issue) (retErr err
 
 	select {
 	case <-ctx.Done():
+		var killErr error
 		if cmd.Process != nil {
-			if err := r.killTimedOutHook(cmd.Process.Pid); err != nil {
-				return err
-			}
+			killErr = r.killTimedOutHook(cmd.Process.Pid)
 		}
-		// Wait for the hook and its descendants to exit after the kill. cmd.Wait
-		// returns only once the stdout/stderr pipes close, and a descendant that
-		// inherited them keeps this wait open until it is dead too.
+		// Wait for the hook and its descendants to exit after the kill, even
+		// when the kill reported a failure: returning while the hook is still
+		// running hands the caller a live process, the outcome the timeout
+		// exists to prevent. cmd.Wait returns only once the stdout/stderr
+		// pipes close, and a descendant that inherited them keeps this wait
+		// open until it is dead too; WaitDelay bounds that to cleanup slop
+		// when a descendant outlived the kill.
 		<-done
 		addHookOutputEvents(span, &stdout, &stderr)
+		if killErr != nil {
+			return killErr
+		}
 		return ctx.Err()
 	case err := <-done:
 		addHookOutputEvents(span, &stdout, &stderr)
@@ -112,8 +127,9 @@ func (r *Runner) runHook(hookPath, event string, issue *types.Issue) (retErr err
 // It signals the hook's process group first, which takes the whole tree in one
 // call. Some kernels refuse that call with EPERM even for a group the caller
 // created: a polecat container's seccomp filter refuses every negative-pid
-// signal. On EPERM the group's members are signaled one pid at a time from the
-// process table; any other error is returned as before.
+// signal. On EPERM the hook itself is signaled with a plain pid, which the
+// kernel accepts, and then the group's members are swept one pid at a time
+// from the process table. Any other group error is returned as before.
 func (r *Runner) killTimedOutHook(pid int) error {
 	signal := r.signalKill
 	if signal == nil {
@@ -126,32 +142,67 @@ func (r *Runner) killTimedOutHook(pid int) error {
 	if !errors.Is(err, syscall.EPERM) {
 		return fmt.Errorf("kill process group: %w", err)
 	}
-	if err := r.killGroupMembers(pid, signal); err != nil {
-		return fmt.Errorf("kill process group members: %w", err)
+	var errs []error
+	// Signal the hook itself first. A plain pid is not refused, so the hook
+	// dies even when the member sweep below cannot run, and the tree's root
+	// cannot fork again while that sweep reads the table.
+	if sigErr := signal(pid, syscall.SIGKILL); sigErr != nil && !errors.Is(sigErr, syscall.ESRCH) {
+		errs = append(errs, fmt.Errorf("kill hook %d: %w", pid, sigErr))
 	}
-	return nil
+	if memberErr := r.killGroupMembers(pid, signal); memberErr != nil {
+		errs = append(errs, fmt.Errorf("kill process group members: %w", memberErr))
+	}
+	return errors.Join(errs...)
 }
 
+// maxMemberSweeps bounds how many times the fallback re-reads the process
+// table. One sweep lists the group as the table shows it and signals every
+// member; a second catches a descendant that forked while the first sweep was
+// being signaled. The loop normally ends sooner, on the first sweep that finds
+// no pid it has not already signaled.
+const maxMemberSweeps = 3
+
 // killGroupMembers sends SIGKILL to every live member of process group pgid,
-// one pid at a time. signal takes a plain pid here and a negative group pid in
-// the group call. A member that exits before it is signaled (ESRCH) is done,
-// not an error. The member list comes from groupMembers when a test injects
-// it, and from the process table otherwise.
+// one pid at a time, re-reading the table until a sweep finds no member it has
+// not signaled. A member may fork after the sweep that listed it, so the
+// re-read is what keeps that child from outliving the hook; the hook itself is
+// signaled before this sweep runs, so the tree's root cannot fork behind it.
+// signal takes a plain pid here and a negative group pid in the group call. A
+// member that exits before it is signaled (ESRCH) is done, not an error, and
+// one refused member does not stop the rest of the sweep from being signaled:
+// every failure is collected rather than returned at the first one. The member
+// list comes from groupMembers when a test injects it, and from the process
+// table otherwise.
 func (r *Runner) killGroupMembers(pgid int, signal func(pid int, sig syscall.Signal) error) error {
 	list := processGroupMembers
 	if r.groupMembers != nil {
 		list = r.groupMembers
 	}
-	members, err := list(pgid)
-	if err != nil {
-		return err
-	}
-	for _, pid := range members {
-		if err := signal(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			return fmt.Errorf("kill member %d: %w", pid, err)
+	signaled := make(map[int]bool)
+	var errs []error
+	for sweep := 0; sweep < maxMemberSweeps; sweep++ {
+		members, err := list(pgid)
+		if err != nil {
+			errs = append(errs, err)
+			return errors.Join(errs...)
+		}
+		fresh := 0
+		for _, pid := range members {
+			if signaled[pid] {
+				continue
+			}
+			signaled[pid] = true
+			fresh++
+			if sigErr := signal(pid, syscall.SIGKILL); sigErr != nil && !errors.Is(sigErr, syscall.ESRCH) {
+				errs = append(errs, fmt.Errorf("kill member %d: %w", pid, sigErr))
+			}
+		}
+		if fresh == 0 {
+			return errors.Join(errs...)
 		}
 	}
-	return nil
+	errs = append(errs, fmt.Errorf("process group %d still has members after %d sweeps", pgid, maxMemberSweeps))
+	return errors.Join(errs...)
 }
 
 // processGroupMembers lists the live pids in process group pgid. Linux reads

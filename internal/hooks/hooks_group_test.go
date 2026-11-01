@@ -74,24 +74,58 @@ func TestRunHookKillsDescendantsWhenGroupSignalRefused(t *testing.T) {
 		t.Fatalf("backgrounded descendant %d was not signalled one pid at a time; signalled: %v", pid, perMember)
 	}
 	// RunSync returns once the hook's stdout pipe closes, which the killed
-	// descendant does while it is still finishing its own exit. Yield to the
-	// scheduler a bounded number of times so the descendant reaches the state
-	// that proves it is gone. A descendant the fallback missed keeps running
-	// for the rest of its sleep, so the bound only ever covers a dying task.
-	stopped := false
-	for yields := 0; yields < 10000; yields++ {
-		var stateErr error
-		stopped, stateErr = childStopped(pid)
-		if stateErr != nil {
-			t.Fatalf("read the descendant's state: %v", stateErr)
-		}
-		if stopped {
-			break
-		}
-		runtime.Gosched()
+	// descendant does as it exits. Wait on that exit with the kernel, as
+	// TestRunSync_KillsDescendants does, rather than spinning on the scheduler.
+	res := awaitChildExit(pid, pidfdExitTimeout,
+		func() (bool, error) { return childStopped(pid) })
+	if res.SkipReason != "" {
+		t.Skip(res.SkipReason)
 	}
-	if !stopped {
+	if res.Err != nil {
+		t.Fatalf("wait for descendant %d to exit: %v", pid, res.Err)
+	}
+	if !res.Stopped {
 		t.Fatalf("backgrounded descendant %d is still running after RunSync returned", pid)
+	}
+}
+
+// TestRunHookWaitsForTheHookWhenTheKillFails pins the failure path: a fallback
+// that cannot signal the group's members must not return while the hook's tree
+// is still running. The hook backgrounds a subshell that holds the hook's
+// stdout pipe and writes a marker after 500ms, and the member list is made
+// unreadable so the sweep cannot signal it. RunSync may return only after that
+// subshell exits — the marker exists by then — and it reports the enumeration
+// error rather than the timeout.
+func TestRunHookWaitsForTheHookWhenTheKillFails(t *testing.T) {
+	skipWithoutShellHooks(t)
+	if testing.Short() {
+		t.Skip("Skipping process-tree test in short mode")
+	}
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "descendant-exited")
+	writeHook(t, dir, HookOnCreate,
+		"#!/bin/sh\n(sleep 0.5; echo exited > \""+marker+"\") &\nwait\n")
+
+	errEnum := errors.New("unreadable process table")
+	runner := &Runner{
+		hooksDir: dir,
+		timeout:  200 * time.Millisecond,
+		signalKill: func(pid int, sig syscall.Signal) error {
+			if pid < 0 {
+				return syscall.EPERM
+			}
+			return syscall.Kill(pid, sig)
+		},
+		groupMembers: func(int) ([]int, error) { return nil, errEnum },
+	}
+
+	err := runner.RunSync(EventCreate, &types.Issue{ID: "bd-test", Title: "Test"})
+	if !errors.Is(err, errEnum) {
+		t.Fatalf("RunSync error = %v, want the enumeration error wrapped", err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("RunSync returned while the hook's descendant was still running: %v", statErr)
 	}
 }
 
@@ -169,8 +203,10 @@ func TestRunHookGroupSignalOtherErrorReturned(t *testing.T) {
 }
 
 // TestRunHookGroupSignalRefusedEnumerationError pins the refusal when the group
-// signal is refused and the member list cannot be read: the error is returned
-// wrapped, not swallowed, and no pid is signalled from an unknown list.
+// signal is refused and the member list cannot be read: the hook itself is
+// still signalled with the plain pid the kernel accepts, no pid is taken from
+// an unknown list, and the enumeration error is returned wrapped, not
+// swallowed.
 func TestRunHookGroupSignalRefusedEnumerationError(t *testing.T) {
 	skipWithoutShellHooks(t)
 
@@ -178,6 +214,8 @@ func TestRunHookGroupSignalRefusedEnumerationError(t *testing.T) {
 	writeHook(t, dir, HookOnCreate, "#!/bin/sh\nexec sleep 0.5\n")
 
 	errEnum := errors.New("unreadable process table")
+	var signaled []int
+	var rootPid int
 	runner := &Runner{
 		hooksDir: dir,
 		timeout:  200 * time.Millisecond,
@@ -185,10 +223,13 @@ func TestRunHookGroupSignalRefusedEnumerationError(t *testing.T) {
 			if pid < 0 {
 				return syscall.EPERM
 			}
-			t.Errorf("sent a per-member signal after enumeration failed: %d", pid)
-			return nil
+			signaled = append(signaled, pid)
+			return syscall.Kill(pid, sig)
 		},
-		groupMembers: func(int) ([]int, error) { return nil, errEnum },
+		groupMembers: func(pgid int) ([]int, error) {
+			rootPid = pgid
+			return nil, errEnum
+		},
 	}
 
 	err := runner.RunSync(EventCreate, &types.Issue{ID: "bd-test", Title: "Test"})
@@ -198,18 +239,26 @@ func TestRunHookGroupSignalRefusedEnumerationError(t *testing.T) {
 	if !strings.Contains(err.Error(), "kill process group members") {
 		t.Errorf("RunSync error = %q, want the kill process group members wrap", err)
 	}
+	if !slices.Equal(signaled, []int{rootPid}) {
+		t.Errorf("signaled %v, want only the hook's own pid %d", signaled, rootPid)
+	}
 }
 
-// TestKillGroupMembers pins the member list's edges: every member is signalled,
-// a member that already exited (ESRCH) is not an error, a failed enumeration is
-// returned, and a refused member signal is returned with the member's pid.
+// TestKillGroupMembers pins the member sweep's edges: every member is
+// signalled, a member that already exited (ESRCH) is not an error, a member
+// forked after the sweep that listed it is caught by the next sweep, one
+// refused member does not stop the rest, a failed enumeration is returned, and
+// a group that keeps producing members is reported rather than swept forever.
 func TestKillGroupMembers(t *testing.T) {
 	errEnum := errors.New("unreadable process table")
 	errSignal := errors.New("signal refused")
 
 	tests := []struct {
-		name    string
+		name string
+		// members is the table every sweep sees; lists, when set, is the table
+		// the successive sweeps see instead, its last entry repeating.
 		members []int
+		lists   [][]int
 		listErr error
 		signal  func(pid int) error
 		want    []int
@@ -233,24 +282,54 @@ func TestKillGroupMembers(t *testing.T) {
 			want: []int{11, 12},
 		},
 		{
+			name:   "a member forked after the sweep that listed it",
+			lists:  [][]int{{11}, {11, 12}, {11, 12}},
+			signal: func(int) error { return nil },
+			want:   []int{11, 12},
+		},
+		{
+			name:    "a refused member does not stop the rest",
+			members: []int{11, 12},
+			signal: func(pid int) error {
+				if pid == 11 {
+					return errSignal
+				}
+				return nil
+			},
+			want:    []int{11, 12},
+			wantErr: "kill member 11",
+		},
+		{
+			name:    "members keep appearing",
+			lists:   [][]int{{1}, {2}, {3}, {4}},
+			signal:  func(int) error { return nil },
+			want:    []int{1, 2, 3},
+			wantErr: "still has members after 3 sweeps",
+		},
+		{
 			name:    "enumeration failed",
 			listErr: errEnum,
 			signal:  func(int) error { return nil },
 			wantErr: errEnum.Error(),
-		},
-		{
-			name:    "a member signal failed",
-			members: []int{11},
-			signal:  func(int) error { return errSignal },
-			wantErr: "kill member 11",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var signalled []int
+			sweeps := 0
 			runner := &Runner{
-				groupMembers: func(int) ([]int, error) { return tt.members, tt.listErr },
+				groupMembers: func(int) ([]int, error) {
+					if tt.listErr != nil {
+						return nil, tt.listErr
+					}
+					if tt.lists == nil {
+						return tt.members, nil
+					}
+					i := min(sweeps, len(tt.lists)-1)
+					sweeps++
+					return tt.lists[i], nil
+				},
 			}
 			err := runner.killGroupMembers(4242, func(pid int, sig syscall.Signal) error {
 				signalled = append(signalled, pid)
@@ -260,9 +339,7 @@ func TestKillGroupMembers(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("killGroupMembers error = %v, want %q", err, tt.wantErr)
 				}
-				return
-			}
-			if err != nil {
+			} else if err != nil {
 				t.Fatalf("killGroupMembers returned an error: %v", err)
 			}
 			if !slices.Equal(signalled, tt.want) {
