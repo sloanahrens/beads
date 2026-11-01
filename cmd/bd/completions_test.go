@@ -3,12 +3,15 @@
 package main
 
 import (
+	"context"
 	"os"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/git"
+	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/types"
 )
 
 func TestIssueIDCompletion_NoStore(t *testing.T) {
@@ -36,6 +39,49 @@ func TestIssueIDCompletion_NoStore(t *testing.T) {
 
 	if directive != cobra.ShellCompDirectiveNoFileComp {
 		t.Errorf("Expected directive NoFileComp (4), got %d", directive)
+	}
+}
+
+// completionStore answers SearchIssues from a fixed list and records the filter;
+// any other storage call panics on the nil embedded interface, so the test
+// fails loudly if completion reaches for more than the search.
+type completionStore struct {
+	storage.DoltStorage
+	issues []*types.Issue
+	filter types.IssueFilter
+}
+
+func (s *completionStore) SearchIssues(_ context.Context, _ string, filter types.IssueFilter) ([]*types.Issue, error) {
+	s.filter = filter
+	return s.issues, nil
+}
+
+// An open store is enough: a caller with no database path and no .beads in its
+// working directory still gets the store's completions (be-l4uu).
+func TestIssueIDCompletionUsesTheOpenStoreWithoutADatabasePath(t *testing.T) {
+	originalStore, originalDBPath := store, dbPath
+	t.Cleanup(func() { store, dbPath = originalStore, originalDBPath })
+
+	t.Chdir(t.TempDir())
+	t.Setenv("BEADS_DIR", "")
+	t.Setenv("BEADS_DB", "")
+	fake := &completionStore{issues: []*types.Issue{
+		{ID: "bd-aaa", Title: "first"},
+		{ID: "bd-aab", Title: "second"},
+	}}
+	store, dbPath = fake, ""
+
+	completions, directive := issueIDCompletion(&cobra.Command{}, nil, "bd-aa")
+
+	want := []string{"bd-aaa\tfirst", "bd-aab\tsecond"}
+	if len(completions) != len(want) || completions[0] != want[0] || completions[1] != want[1] {
+		t.Errorf("completions = %q, want %q", completions, want)
+	}
+	if fake.filter.IDPrefix != "bd-aa" {
+		t.Errorf("the store was searched with IDPrefix %q, want %q", fake.filter.IDPrefix, "bd-aa")
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("directive = %d, want NoFileComp (4)", directive)
 	}
 }
 
