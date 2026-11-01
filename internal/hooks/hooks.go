@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/steveyegge/beads/internal/types"
@@ -34,6 +35,14 @@ type Runner struct {
 	// the process exit takes every goroutine with it — including one that has
 	// not reached exec yet. Wait is how a caller gives them their moment.
 	inFlight sync.WaitGroup
+	// signalKill sends sig to a process (pid > 0) or a process group (pid < 0).
+	// nil means syscall.Kill. Tests inject it to drive runHook's EPERM fallback
+	// without relying on the host to refuse the group signal.
+	signalKill func(pid int, sig syscall.Signal) error
+	// groupMembers lists the live members of a process group. nil means
+	// processGroupMembers. Tests inject it so the fallback is driven with a
+	// known member list instead of the host's process table.
+	groupMembers func(pgid int) ([]int, error)
 }
 
 // NewRunner creates a new hook runner.
