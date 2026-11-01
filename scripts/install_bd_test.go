@@ -260,6 +260,63 @@ func (f *installBdFixture) writeNewBD(marker, json string) {
 	f.writeFakeBD(f.newBDPath(), marker, json, 0)
 }
 
+// installBdListJSON is the shape `bd list --limit 1 --json` prints: a data
+// array holding the listed beads, then pagination. The default smoke reads the
+// first "id" in it, so each bead opens with its id and an empty list carries
+// none.
+func installBdListJSON(ids ...string) string {
+	var b strings.Builder
+	b.WriteString("{\n  \"data\": [")
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "\n    {\n      \"id\": %q,\n      \"title\": \"a bead\"\n    }", id)
+	}
+	fmt.Fprintf(&b, "\n  ],\n  \"pagination\": {\"returned\": %d},\n  \"schema_version\": 1\n}", len(ids))
+	return b.String()
+}
+
+// writeDefaultSmokeBD writes a stand-in bd for the default smoke, which runs
+// `bd list --limit 1 --json` and then `bd show <id> --json` itself instead of
+// invoking the fixture's smoke stub. The stub answers both reads plus the two
+// version probes the script makes before and after the swap, and appends the
+// path and argv of each list and show to $BD_ARGV_LOG, so a test can prove what
+// ran, in what order, and which binary it was. showFailFrom makes the show
+// fail from that call on (counted in $BD_SHOW_COUNT; 0 means never), so one
+// test can fail the pre-install show and another the post-install one.
+func (f *installBdFixture) writeDefaultSmokeBD(path, json, list string, showFailFrom int) {
+	f.t.Helper()
+	writeExecutable(f.t, path, fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  "version --json")
+    printf '%%s\n' %s
+    ;;
+  version)
+    ;;
+  "list --limit 1 --json")
+    printf '%%s %%s\n' "$0" "$*" >>"$BD_ARGV_LOG"
+    printf '%%s\n' %s
+    ;;
+  show*)
+    printf '%%s %%s\n' "$0" "$*" >>"$BD_ARGV_LOG"
+    count=0
+    if [ -s "$BD_SHOW_COUNT" ]; then IFS= read -r count <"$BD_SHOW_COUNT"; fi
+    count=$((count + 1))
+    printf '%%s\n' "$count" >"$BD_SHOW_COUNT"
+    if [ %d -gt 0 ] && [ "$count" -ge %d ]; then
+      printf 'default-smoke-bd: refusing show on call %%s\n' "$count" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    printf 'default-smoke-bd: unexpected invocation: %%s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+`, shSingleQuote(json), shSingleQuote(list), showFailFrom, showFailFrom))
+}
+
 // writeSmokeStub writes the SMOKE_CMD stand-in. It records which bd it
 // resolved — so a test can prove the pre-install smoke ran the new build and
 // the post-install smoke ran the installed one — and fails from call failOn
@@ -339,6 +396,18 @@ func (f *installBdFixture) run(overrides ...string) installBdRun {
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	return installBdRun{output: string(out), err: err}
+}
+
+// runDefaultSmoke runs the script with SMOKE_CMD unset, so the default smoke
+// is the one under test, and points the default-smoke bd's recording into the
+// fixture's state directory.
+func (f *installBdFixture) runDefaultSmoke() installBdRun {
+	f.t.Helper()
+	return f.run(
+		"SMOKE_CMD=",
+		"BD_ARGV_LOG="+f.shellFile(filepath.Join(f.stateDir, "bd-argv-log")),
+		"BD_SHOW_COUNT="+f.shellFile(filepath.Join(f.stateDir, "bd-show-count")),
+	)
 }
 
 func installBdWithOverrides(t *testing.T, env []string, overrides []string) []string {
@@ -431,6 +500,13 @@ func (f *installBdFixture) escalations(t *testing.T) []string {
 func (f *installBdFixture) smokeLog(t *testing.T) []string {
 	t.Helper()
 	return f.lines(t, "smoke-log")
+}
+
+// bdArgv returns what the default-smoke bd recorded, one entry per call:
+// "<path of the bd that ran> <argv...>".
+func (f *installBdFixture) bdArgv(t *testing.T) []string {
+	t.Helper()
+	return f.lines(t, "bd-argv-log")
 }
 
 // oldBackup plants a backup as if an earlier install had made it.
@@ -790,5 +866,156 @@ func TestInstallBdRollsBackWhenPostInstallSmokeFails(t *testing.T) {
 	}
 	if !strings.HasSuffix(smoke[1], f.shellFile(f.installedBDPath())) {
 		t.Errorf("post-install smoke resolved %q, want the installed bd at %q", smoke[1], f.installedBDPath())
+	}
+}
+
+// TestInstallBdDefaultSmokeShowsABeadTheListReturned pins the default smoke:
+// with no SMOKE_CMD the proof is `bd list --limit 1 --json` followed by
+// `bd show <id> --json` on the first bead the list returned. A list-only smoke
+// once installed a build whose batched show was broken, so the show has to run
+// against the id the same bd printed — before the install against the build,
+// and after it against the installed file.
+func TestInstallBdDefaultSmokeShowsABeadTheListReturned(t *testing.T) {
+	f := newInstallBdFixture(t, 999)
+	f.writeDefaultSmokeBD(f.installedBDPath(), installBdVersionJSON(f.commitA, "1.2.2", 5), installBdListJSON("be-abc123"), 0)
+	head := f.goChange()
+	f.writeDefaultSmokeBD(f.newBDPath(), installBdVersionJSON(head, "1.2.2", 5), installBdListJSON("be-abc123"), 0)
+
+	run := f.runDefaultSmoke()
+	run.requireExitZero(t)
+
+	if escalations := f.escalations(t); len(escalations) != 0 {
+		t.Fatalf("escalations = %v, want none on a successful install\n%s", escalations, run.output)
+	}
+	if got, want := string(f.installedBDBytes(t, f.installedBDPath())), string(f.installedBDBytes(t, f.newBDPath())); got != want {
+		t.Errorf("installed bd is not the build that landed\n%s", run.output)
+	}
+
+	want := [][2]string{
+		{f.newBDPath(), "list --limit 1 --json"},
+		{f.newBDPath(), "show be-abc123 --json"},
+		{f.installedBDPath(), "list --limit 1 --json"},
+		{f.installedBDPath(), "show be-abc123 --json"},
+	}
+	argv := f.bdArgv(t)
+	if len(argv) != len(want) {
+		t.Fatalf("bd ran %d times, want %d: %v\n%s", len(argv), len(want), argv, run.output)
+	}
+	for i, call := range want {
+		if !strings.HasSuffix(argv[i], f.shellFile(call[0])+" "+call[1]) {
+			t.Errorf("bd call %d = %q, want %q run against %q", i, argv[i], call[1], call[0])
+		}
+	}
+}
+
+// TestInstallBdRefusesWhenTheDefaultSmokeShowFails pins the refusal: a build
+// that lists but cannot show a bead is exactly the break a list-only smoke let
+// through, so it is refused before anything is replaced — the installed bd is
+// untouched, no backup is written, and one escalation names the smoke.
+func TestInstallBdRefusesWhenTheDefaultSmokeShowFails(t *testing.T) {
+	f := newInstallBdFixture(t, 999)
+	f.writeDefaultSmokeBD(f.installedBDPath(), installBdVersionJSON(f.commitA, "1.2.2", 5), installBdListJSON("be-abc123"), 0)
+	installed := f.installedBD(t)
+	head := f.goChange()
+	f.writeDefaultSmokeBD(f.newBDPath(), installBdVersionJSON(head, "1.2.2", 5), installBdListJSON("be-abc123"), 1)
+
+	run := f.runDefaultSmoke()
+	run.requireExitZero(t)
+
+	if got := f.installedBD(t); got != installed {
+		t.Errorf("installed bd changed although the build's show failed\n%s", run.output)
+	}
+	if backups := f.backups(t); len(backups) != 0 {
+		t.Errorf("backups = %v, want none: nothing was replaced", backups)
+	}
+	if leftovers := f.stageLeftovers(t); len(leftovers) != 0 {
+		t.Errorf("staging files left behind: %v", leftovers)
+	}
+	escalations := f.escalations(t)
+	if len(escalations) != 1 {
+		t.Fatalf("escalations = %d, want exactly 1:\n%v\n%s", len(escalations), escalations, run.output)
+	}
+	if !strings.Contains(escalations[0], "failed the smoke command") || !strings.Contains(escalations[0], "bd show <id> --json") {
+		t.Errorf("escalation does not name the smoke: %q", escalations[0])
+	}
+
+	// The list ran first and the show is what failed.
+	argv := f.bdArgv(t)
+	if len(argv) != 2 || !strings.HasSuffix(argv[1], "show be-abc123 --json") {
+		t.Errorf("bd calls = %v, want the list then the failing show", argv)
+	}
+}
+
+// TestInstallBdDefaultSmokeSkipsShowOnAnEmptyList pins the fresh-town path: a
+// town with no beads lists none, so there is no id to show. That is not a
+// failure — the smoke passes and the install proceeds — but the skip is logged
+// so the gap in the proof is visible. The stub's show refuses from its first
+// call, so this also proves the show never ran.
+func TestInstallBdDefaultSmokeSkipsShowOnAnEmptyList(t *testing.T) {
+	f := newInstallBdFixture(t, 999)
+	f.writeDefaultSmokeBD(f.installedBDPath(), installBdVersionJSON(f.commitA, "1.2.2", 5), installBdListJSON(), 0)
+	head := f.goChange()
+	f.writeDefaultSmokeBD(f.newBDPath(), installBdVersionJSON(head, "1.2.2", 5), installBdListJSON(), 1)
+
+	run := f.runDefaultSmoke()
+	run.requireExitZero(t)
+
+	if got, want := string(f.installedBDBytes(t, f.installedBDPath())), string(f.installedBDBytes(t, f.newBDPath())); got != want {
+		t.Fatalf("installed bd is not the build that landed: an empty list must not refuse\n%s", run.output)
+	}
+	if backups := f.backups(t); len(backups) != 1 {
+		t.Errorf("backups = %v, want the fresh one: the install went ahead", backups)
+	}
+	if escalations := f.escalations(t); len(escalations) != 0 {
+		t.Errorf("escalations = %v, want none on an empty town\n%s", escalations, run.output)
+	}
+	if !strings.Contains(run.output, "skipping bd show --json") {
+		t.Errorf("output does not report the skip:\n%s", run.output)
+	}
+	for _, call := range f.bdArgv(t) {
+		if !strings.HasSuffix(call, "list --limit 1 --json") {
+			t.Errorf("bd ran something other than the list on an empty town: %q", call)
+		}
+	}
+}
+
+// TestInstallBdRollsBackWhenTheDefaultSmokeShowFailsAfterInstall pins the last
+// line of defence for the default: the same show that passed before the swap
+// fails after it, so the previous binary comes back and the escalation says it
+// did.
+func TestInstallBdRollsBackWhenTheDefaultSmokeShowFailsAfterInstall(t *testing.T) {
+	f := newInstallBdFixture(t, 999)
+	f.writeDefaultSmokeBD(f.installedBDPath(), installBdVersionJSON(f.commitA, "1.2.2", 5), installBdListJSON("be-abc123"), 0)
+	installed := f.installedBD(t)
+	head := f.goChange()
+	f.writeDefaultSmokeBD(f.newBDPath(), installBdVersionJSON(head, "1.2.2", 5), installBdListJSON("be-abc123"), 2)
+
+	run := f.runDefaultSmoke()
+	run.requireExitZero(t)
+
+	if got := f.installedBD(t); got != installed {
+		t.Fatalf("installed bd was not rolled back to the previous binary\n%s", run.output)
+	}
+	if leftovers := f.stageLeftovers(t); len(leftovers) != 0 {
+		t.Errorf("staging files left behind: %v", leftovers)
+	}
+	if backups := f.backups(t); len(backups) != 0 {
+		t.Errorf("backups = %v, want none: the fresh one was consumed by the rollback", backups)
+	}
+	escalations := f.escalations(t)
+	if len(escalations) != 1 {
+		t.Fatalf("escalations = %d, want exactly 1:\n%v\n%s", len(escalations), escalations, run.output)
+	}
+	if !strings.Contains(escalations[0], "failed the smoke command") || !strings.Contains(escalations[0], "restored") {
+		t.Errorf("escalation does not report the rollback: %q", escalations[0])
+	}
+
+	// The second show is the one that failed: it is the installed file's.
+	argv := f.bdArgv(t)
+	if len(argv) != 4 {
+		t.Fatalf("bd calls = %v, want 4: a list and a show before and after the install", argv)
+	}
+	if !strings.HasSuffix(argv[3], f.shellFile(f.installedBDPath())+" show be-abc123 --json") {
+		t.Errorf("last bd call = %q, want the installed bd's show", argv[3])
 	}
 }
