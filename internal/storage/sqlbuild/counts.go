@@ -97,6 +97,14 @@ func (h CountsHydration) IssueColumns() string {
 //     evaluation is one pass over the driver filter — index-backed for the
 //     id/label/status filters the dispatcher uses — while what it saves is the
 //     whole-table aggregation of ~65k rows.
+//     In this form dep_count and parent_id also move their type test out of the
+//     WHERE and into a conditional aggregate (COUNT(CASE ...), MIN(CASE ...)):
+//     with the type predicate in the WHERE, Dolt plans the subquery as a
+//     LookupJoin over the type index and does not seek the looked-up id's own
+//     rows (see the comment at the projections for the before/after EXPLAIN).
+//     The other forms keep the typed WHERE: the by-IDs form is already a
+//     bounded IN list, and the unfiltered form has no id set to seek, so for
+//     both the type index is the narrower read.
 //     An empty whereSQL selects every driver row, so each whole-table aggregate
 //     already covers exactly the driver's set: there is nothing to narrow and
 //     no CTE is rendered.
@@ -175,13 +183,60 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 	// Per-subquery id constraints. Empty strings leave the projection
 	// unchanged; otherwise each aggregate groups only the filtered ids instead
 	// of its whole side table.
-	var labelWhere, depBlocksExtra, ccWhere, pcExtra, depWhere string
+	var labelWhere, ccWhere, depWhere string
 	if idSetSQL != "" {
 		labelWhere = fmt.Sprintf("WHERE issue_id IN (%s)", idSetSQL)
-		depBlocksExtra = fmt.Sprintf(" AND issue_id IN (%s)", idSetSQL)
-		ccWhere = fmt.Sprintf("WHERE issue_id IN (%s)", idSetSQL)
-		pcExtra = fmt.Sprintf(" AND issue_id IN (%s)", idSetSQL)
-		depWhere = fmt.Sprintf("WHERE issue_id IN (%s)", idSetSQL)
+		ccWhere = labelWhere
+		depWhere = labelWhere
+	}
+
+	// dep_count and parent_id: where the type test lives.
+	//
+	// In the filtered predicate form the driver is the `filtered` CTE, and a
+	// `WHERE type = ... AND issue_id IN (SELECT id FROM filtered)` subquery is
+	// planned as a LookupJoin whose right side is an IndexedTableAccess on the
+	// `type` index: the typed range bounds the read, not the looked-up id.
+	// EXPLAIN FORMAT=TREE on the gt database (be-bbcb):
+	//
+	//	dc WHERE type = 'blocks' AND issue_id IN (SELECT id FROM filtered)
+	//	  -> LookupJoin -> Filter(type = 'blocks')
+	//	     -> IndexedTableAccess(wisp_dependencies) index: [type] keys: 'blocks'
+	//	dc COUNT(CASE WHEN type = 'blocks' THEN 1 END)
+	//	   WHERE issue_id IN (SELECT id FROM filtered)
+	//	  -> LookupJoin -> IndexedTableAccess(wisp_dependencies)
+	//	     index: [issue_id, depends_on_wisp_id] keys: filtered.id
+	//
+	// The conditional aggregate keeps every grouped row (the type test is in the
+	// projection) so the result is identical: a db row of another type counts 0/
+	// contributes NULL, and an issue with no dependency row still reads 0 or
+	// NULL through the LEFT JOIN's COALESCE. It applies only to the filtered
+	// predicate form, because that is the one whose id set is a subquery the
+	// planner can seek:
+	//
+	//   - by-IDs form: the page is an IN list, and EXPLAIN with the page ids as
+	//     literals shows it already seeks [issue_id, depends_on_external] with
+	//     the type test as a Filter over those few rows, so it keeps its
+	//     current shape (be-bbcb measured this rather than assumed it).
+	//   - unfiltered predicate form: with no id set there is no index to seek,
+	//     and `WHERE type = 'blocks'` is itself an IndexedTableAccess on the
+	//     type index; the conditional form drops that bound and EXPLAIN shows a
+	//     full Table scan of the dependency table. Keeping the typed WHERE is
+	//     strictly narrower there.
+	byFilteredCTE := !byIDs && whereSQL != ""
+	depCountExpr := "COUNT(*)"
+	depTypeWhere := "WHERE type = 'blocks'"
+	parentExpr := "MIN(" + DepTargetExpr + ")"
+	parentTypeWhere := "WHERE type = 'parent-child'"
+	switch {
+	case byFilteredCTE:
+		depCountExpr = "COUNT(CASE WHEN type = 'blocks' THEN 1 END)"
+		depTypeWhere = labelWhere
+		parentExpr = "MIN(CASE WHEN type = 'parent-child' THEN " + DepTargetExpr + " END)"
+		parentTypeWhere = labelWhere
+	case idSetSQL != "":
+		// by-IDs form: the type test stays, still bound to the page.
+		depTypeWhere = fmt.Sprintf("WHERE type = 'blocks' AND issue_id IN (%s)", idSetSQL)
+		parentTypeWhere = fmt.Sprintf("WHERE type = 'parent-child' AND issue_id IN (%s)", idSetSQL)
 	}
 
 	// Reverse-blocker branches: one indexed target equality per typed column
@@ -225,9 +280,9 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 			COALESCE(cc.cnt, 0) AS comment_count`
 	countsJoins := fmt.Sprintf(`
 		LEFT JOIN (
-			SELECT issue_id, COUNT(*) AS cnt
+			SELECT issue_id, %s AS cnt
 			FROM %s
-			WHERE type = 'blocks'%s
+			%s
 			GROUP BY issue_id
 		) dc ON dc.issue_id = i.id
 		LEFT JOIN (
@@ -241,7 +296,7 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 			%s
 			GROUP BY issue_id
 		) cc ON cc.issue_id = i.id`,
-		tables.Dependencies, depBlocksExtra,
+		depCountExpr, tables.Dependencies, depTypeWhere,
 		reverseBlockerSelect,
 		tables.Comments, ccWhere)
 	if hyd.SkipCounts {
@@ -288,9 +343,9 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 		%s
 		LEFT JOIN (
 			SELECT issue_id,
-			       MIN(%s) AS parent_id
+			       %s AS parent_id
 			FROM %s
-			WHERE type = 'parent-child'%s
+			%s
 			GROUP BY issue_id
 		) pc ON pc.issue_id = i.id
 		LEFT JOIN (
@@ -309,7 +364,7 @@ func SearchCountsSQL(tables FilterTables, ids []string, whereSQL, orderBySQL, li
 		LeaseJoin("i"),
 		labelsJoin,
 		countsJoins,
-		DepTargetExpr, tables.Dependencies, pcExtra,
+		parentExpr, tables.Dependencies, parentTypeWhere,
 		DepJSONObject, tables.Dependencies, depWhere,
 		outerClause,
 	)
