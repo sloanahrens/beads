@@ -2,6 +2,7 @@ package uow
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/steveyegge/beads/internal/storage/domain"
 	"github.com/steveyegge/beads/internal/storage/domain/db"
@@ -35,6 +36,24 @@ func NewUOW(ctx context.Context, p TxProvider) (UnitOfWork, error) {
 		return nil, err
 	}
 	return &baseUOW{tx: tx}, nil
+}
+
+// statementRunner exposes the unit of work's statement runner to the statement
+// lists in internal/storage/issueops, which run on any DBTX. The domain/db
+// Runner satisfies that seam, so a caller on a unit of work runs the SAME code
+// the classic stores run instead of mirroring it in parallel SQL.
+//
+// The unit of work is UNWRAPPED first because a decorated one is still the
+// caller's unit of work: the hook-notifying wrapper stands in front of the use
+// cases (notifying.go), and asserting on the concrete type through it would
+// refuse every call in a workspace that has hooks. The statements never pass a
+// use case, so a decorator's recorder never sees them.
+func statementRunner(uw UnitOfWork) (db.Runner, error) {
+	b, ok := unwrapUOW(uw).(*baseUOW)
+	if !ok {
+		return nil, fmt.Errorf("uow: %T does not expose a statement runner", uw)
+	}
+	return b.tx.Runner(), nil
 }
 
 type baseUOW struct {
