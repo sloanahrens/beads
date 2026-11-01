@@ -334,8 +334,6 @@ func TestSearchCountsSQLShape(t *testing.T) {
 	for _, want := range []string{
 		"FROM wisp_labels\n\t\t\tWHERE issue_id IN (SELECT id FROM filtered)",
 		"FROM wisp_comments\n\t\t\tWHERE issue_id IN (SELECT id FROM filtered)",
-		"FROM wisp_dependencies\n\t\t\tWHERE type = 'blocks' AND issue_id IN (SELECT id FROM filtered)",
-		"FROM wisp_dependencies\n\t\t\tWHERE type = 'parent-child' AND issue_id IN (SELECT id FROM filtered)",
 		"FROM wisp_dependencies\n\t\t\tWHERE issue_id IN (SELECT id FROM filtered)",
 		"AND depends_on_issue_id IN (SELECT id FROM filtered)",
 		"AND depends_on_wisp_id IN (SELECT id FROM filtered)",
@@ -446,6 +444,112 @@ func TestSearchCountsSQLShape(t *testing.T) {
 	if len(idArgsNeither) != 3*2 {
 		t.Errorf("by-IDs args (skipLabels+skipCounts) = %d, want %d", len(idArgsNeither), 3*2)
 	}
+}
+
+// TestSearchCountsFilteredFormAggregatesTypeIntoProjection pins where the type
+// test lives in the dep_count (dc) and parent (pc) subqueries of each form.
+//
+// In the filtered predicate form it must be a conditional aggregate, not a
+// WHERE: with `type = 'blocks' AND issue_id IN (SELECT id FROM filtered)` Dolt
+// plans a LookupJoin whose right side is an IndexedTableAccess on the type
+// index, which is the shape be-bbcb bisected the dispatcher's roster read time
+// to. With the CASE form the plan seeks the id's own
+// [issue_id, depends_on_wisp_id] index instead.
+//
+// The other two forms keep the typed WHERE on purpose: their EXPLAIN plans
+// already use the narrower index (by-IDs: the id IN list seeks
+// [issue_id, depends_on_external] with the type as a cheap Filter; unfiltered:
+// the type index bounds a whole-table aggregate, which the CASE form would turn
+// into a full Table scan). Those two subtests pin the decision so a later
+// "make it uniform" change does not silently regress the plan.
+func TestSearchCountsFilteredFormAggregatesTypeIntoProjection(t *testing.T) {
+	t.Parallel()
+
+	// countsSubquery returns the aggregate subquery opening at from and ending
+	// just before the aliased LEFT JOIN close to.
+	countsSubquery := func(t *testing.T, sql, from, to string) string {
+		t.Helper()
+		i := strings.Index(sql, from)
+		if i < 0 {
+			t.Fatalf("counts SQL has no %q:\n%s", from, sql)
+		}
+		rest := sql[i:]
+		j := strings.Index(rest, to)
+		if j < 0 {
+			t.Fatalf("counts SQL has no %q after %q:\n%s", to, from, sql)
+		}
+		return rest[:j]
+	}
+
+	t.Run("filtered predicate form: conditional aggregates, no type WHERE", func(t *testing.T) {
+		t.Parallel()
+		sql, genArgs := SearchCountsSQL(WispsFilterTables, nil, "WHERE assignee = 'someone'", "", "", true, CountsHydration{})
+		if genArgs != nil {
+			t.Fatalf("predicate form must not generate args, got %d", len(genArgs))
+		}
+
+		dc := countsSubquery(t, sql, "SELECT issue_id, COUNT", ") dc ON dc.issue_id = i.id")
+		for _, want := range []string{
+			"COUNT(CASE WHEN type = 'blocks' THEN 1 END) AS cnt",
+			"WHERE issue_id IN (SELECT id FROM filtered)",
+		} {
+			if !strings.Contains(dc, want) {
+				t.Errorf("dc subquery missing %q:\n%s", want, dc)
+			}
+		}
+		if strings.Contains(dc, "WHERE type =") {
+			t.Errorf("dc subquery still filters type in a WHERE (the type-index LookupJoin); got:\n%s", dc)
+		}
+
+		pc := countsSubquery(t, sql, "MIN(", ") pc ON pc.issue_id = i.id")
+		for _, want := range []string{
+			"MIN(CASE WHEN type = 'parent-child' THEN COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external) END) AS parent_id",
+			"WHERE issue_id IN (SELECT id FROM filtered)",
+		} {
+			if !strings.Contains(pc, want) {
+				t.Errorf("pc subquery missing %q:\n%s", want, pc)
+			}
+		}
+		if strings.Contains(pc, "WHERE type =") {
+			t.Errorf("pc subquery still filters type in a WHERE (the type-index LookupJoin); got:\n%s", pc)
+		}
+	})
+
+	t.Run("unfiltered predicate form: keeps the type WHERE", func(t *testing.T) {
+		t.Parallel()
+		sql, genArgs := SearchCountsSQL(WispsFilterTables, nil, "", "", "", true, CountsHydration{})
+		if genArgs != nil {
+			t.Fatalf("predicate form must not generate args, got %d", len(genArgs))
+		}
+
+		dc := countsSubquery(t, sql, "SELECT issue_id, COUNT", ") dc ON dc.issue_id = i.id")
+		if !strings.Contains(dc, "WHERE type = 'blocks'") {
+			t.Errorf("unfiltered dc must keep the type index bound (no id set to seek); got:\n%s", dc)
+		}
+		if strings.Contains(dc, "CASE WHEN") {
+			t.Errorf("unfiltered dc must not use a conditional aggregate: without an id set Dolt plans it as a full Table scan:\n%s", dc)
+		}
+
+		pc := countsSubquery(t, sql, "MIN(", ") pc ON pc.issue_id = i.id")
+		if !strings.Contains(pc, "WHERE type = 'parent-child'") {
+			t.Errorf("unfiltered pc must keep the type index bound (no id set to seek); got:\n%s", pc)
+		}
+	})
+
+	t.Run("by-IDs form: keeps the typed WHERE", func(t *testing.T) {
+		t.Parallel()
+		sql, _ := SearchCountsSQL(WispsFilterTables, []string{"a", "b"}, "", "", "", true, CountsHydration{})
+
+		dc := countsSubquery(t, sql, "SELECT issue_id, COUNT", ") dc ON dc.issue_id = i.id")
+		if !strings.Contains(dc, "WHERE type = 'blocks' AND issue_id IN (?,?)") {
+			t.Errorf("by-IDs dc must keep its bound type WHERE (the id list already seeks the id index); got:\n%s", dc)
+		}
+
+		pc := countsSubquery(t, sql, "MIN(", ") pc ON pc.issue_id = i.id")
+		if !strings.Contains(pc, "WHERE type = 'parent-child' AND issue_id IN (?,?)") {
+			t.Errorf("by-IDs pc must keep its bound type WHERE (the id list already seeks the id index); got:\n%s", pc)
+		}
+	})
 }
 
 func TestBuildReadyWorkWhereStatusFilter(t *testing.T) {
