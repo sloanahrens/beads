@@ -31,7 +31,7 @@ import (
 // exits, and a descendant that survived the kill holds one; without a bound a
 // fallback that could not signal every member would block the caller past its
 // own timeout. It is cleanup slop, not a second timeout.
-const hookWaitDelay = 2 * time.Second
+var hookWaitDelay = 2 * time.Second
 
 // runHook executes the hook and enforces a timeout, killing the process group
 // on expiration to ensure descendant processes are terminated.
@@ -121,7 +121,10 @@ func (r *Runner) runHook(hookPath, event string, issue *types.Issue) (retErr err
 		return ctx.Err()
 	case err := <-done:
 		addHookOutputEvents(span, &stdout, &stderr)
-		if err != nil {
+		// A hook that exited 0 while a descendant still held its stdout or
+		// stderr pipe makes Wait return ErrWaitDelay after hookWaitDelay. The
+		// hook itself succeeded, so that is not a failure of the run.
+		if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 			return err
 		}
 		return nil

@@ -18,6 +18,45 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
+// TestRunHookCleanExitWithLingeringPipeHolderSucceeds pins the success path:
+// a hook that exits 0 while a backgrounded child still holds its stdout and
+// stderr makes cmd.Wait return ErrWaitDelay after hookWaitDelay, and RunSync
+// must report the hook's own success, not that bookkeeping error. The delay is
+// shortened so the row stays fast, and the child is killed at cleanup.
+func TestRunHookCleanExitWithLingeringPipeHolderSucceeds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell hook")
+	}
+	old := hookWaitDelay
+	hookWaitDelay = 100 * time.Millisecond
+	t.Cleanup(func() { hookWaitDelay = old })
+
+	tmpDir := t.TempDir()
+	hookPath := filepath.Join(tmpDir, HookOnCreate)
+	pidFile := filepath.Join(tmpDir, "child.pid")
+	// The child inherits the hook's stdout and stderr and outlives the hook,
+	// which exits 0 at once.
+	hookScript := `#!/bin/sh
+sleep 30 &
+echo $! > ` + pidFile + `
+exit 0`
+	if err := os.WriteFile(hookPath, []byte(hookScript), 0755); err != nil {
+		t.Fatalf("write hook: %v", err)
+	}
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+
+	runner := &Runner{hooksDir: tmpDir, timeout: 10 * time.Second}
+	if err := runner.RunSync(EventCreate, &types.Issue{ID: "bd-test", Title: "Test"}); err != nil {
+		t.Fatalf("RunSync = %v, want nil for a hook that exited 0", err)
+	}
+}
+
 // TestRunHookKillsDescendantsWhenGroupSignalRefused pins the fallback a polecat
 // container needs: its seccomp filter refuses every negative-pid signal with
 // EPERM, even for a process group the hook created. The group's members must
