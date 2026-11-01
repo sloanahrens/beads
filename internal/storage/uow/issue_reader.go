@@ -2,10 +2,11 @@ package uow
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/domain"
+	storageissueops "github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/workapi"
 	publicops "github.com/steveyegge/beads/issueops"
 )
@@ -151,39 +152,39 @@ func (r *issueReader) Get(ctx context.Context, req publicops.GetRequest) (*publi
 	})
 }
 
-// GetMany answers the batch detail read ONE ID AT A TIME here, and that is a
-// statement about this seam rather than a shortcut: the domain use cases behind
-// a unit of work expose the detail read per id (IssueUseCase.GetIssue,
-// LabelUseCase.GetLabels, DependencyUseCase.ListWithIssueMetadata, ...), with
-// no batched counterpart to fold the list into. Batching them here would mean a
-// second implementation of the detail SQL inside this package, which is exactly
-// what the store seam's GetIssueDetailsBatch exists to avoid.
+// GetMany answers the batch detail read in ONE statement list over the whole id
+// list, run on the open unit of work's own runner: the same
+// issueops.GetIssueDetailsBatchInTx the store seam runs, so a proxied
+// `bd show --json` costs a fixed statement count per list here, not one detail
+// read per id. The rows are assembled by workapi.BuildIssueDetailsBatch, the
+// view Get answers with, and the reader contract pins the two answers equal.
 //
-// The consequence is scope, not correctness: `bd show --json` — the caller this
-// method exists for — runs on the DIRECT route through storereader, where the
-// whole list is one query set. A caller on this seam gets the same ANSWER
-// (the same workapi assembly, field for field, which the reader contract test
-// pins on both seams) at the per-id cost.
+// The batch reads through this unit of work's transaction, never a second
+// connection, so the answer describes the same snapshot every other read in the
+// unit of work sees. The transaction and retry policy are RunTxRead's, unchanged.
 //
-// Misses are named in the result, as the contract says; any other failure
-// short-circuits, so a backend error never arrives as a shorter list.
+// Misses are named in the result, as the contract says. Any other failure fails
+// the call, so a backend error never arrives as a shorter list. A unit of work
+// that exposes no statement runner is refused rather than answered per id.
 func (r *issueReader) GetMany(ctx context.Context, req publicops.GetManyRequest) (publicops.GetManyResult, error) {
-	result := publicops.GetManyResult{}
-	for _, id := range req.IDs {
-		details, err := r.Get(ctx, publicops.GetRequest{
-			ID:                id,
+	return RunTxRead(ctx, r.provider, func(ctx context.Context, uw UnitOfWork) (publicops.GetManyResult, error) {
+		runner, err := statementRunner(uw)
+		if err != nil {
+			return publicops.GetManyResult{}, err
+		}
+		batch, err := storageissueops.GetIssueDetailsBatchInTx(ctx, runner, storage.IssueDetailsBatchRequest{
+			IDs:               req.IDs,
+			IncludeDependents: req.IncludeDependents,
+			IncludeComments:   req.IncludeComments,
+		})
+		if err != nil {
+			return publicops.GetManyResult{}, err
+		}
+		details, notFound := workapi.BuildIssueDetailsBatch(batch, req.IDs, workapi.DetailOptions{
 			IncludeDependents: req.IncludeDependents,
 			IncludeComments:   req.IncludeComments,
 			BriefDeps:         req.BriefDeps,
 		})
-		if err != nil {
-			if errors.Is(err, publicops.ErrNotFound) {
-				result.NotFound = append(result.NotFound, id)
-				continue
-			}
-			return publicops.GetManyResult{}, err
-		}
-		result.Details = append(result.Details, details)
-	}
-	return result, nil
+		return publicops.GetManyResult{Details: details, NotFound: notFound}, nil
+	})
 }
