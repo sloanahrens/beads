@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"sort"
 	"testing"
 
 	"github.com/steveyegge/beads/internal/types"
@@ -204,11 +205,20 @@ func TestCustomStatusConfig(t *testing.T) {
 		if len(detailed) != 2 {
 			t.Fatalf("expected 2 statuses, got %d", len(detailed))
 		}
-		if detailed[0].Category != types.CategoryActive {
-			t.Errorf("review should be active, got %q", detailed[0].Category)
+		// Look up by name: the store returns rows in name order, not config order.
+		byName := make(map[string]types.StatusCategory, len(detailed))
+		for _, s := range detailed {
+			byName[s.Name] = s.Category
 		}
-		if detailed[1].Category != types.CategoryUnspecified {
-			t.Errorf("legacy should be unspecified, got %q", detailed[1].Category)
+		if got, ok := byName["review"]; !ok {
+			t.Errorf("review is missing from %+v", detailed)
+		} else if got != types.CategoryActive {
+			t.Errorf("review should be active, got %q", got)
+		}
+		if got, ok := byName["legacy"]; !ok {
+			t.Errorf("legacy is missing from %+v", detailed)
+		} else if got != types.CategoryUnspecified {
+			t.Errorf("legacy should be unspecified, got %q", got)
 		}
 	})
 
@@ -221,13 +231,16 @@ func TestCustomStatusConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetCustomStatuses failed: %v", err)
 		}
-		if len(names) != 3 {
-			t.Fatalf("expected 3 names, got %d", len(names))
+		// Compare as a sorted set: the store returns name order, not config order.
+		want := []string{"qa", "review", "testing"}
+		if len(names) != len(want) {
+			t.Fatalf("expected %d names %v, got %d: %v", len(want), want, len(names), names)
 		}
-		want := []string{"review", "testing", "qa"}
-		for i, name := range names {
-			if name != want[i] {
-				t.Errorf("name[%d] = %q, want %q", i, name, want[i])
+		sort.Strings(names)
+		for i := range want {
+			if names[i] != want[i] {
+				t.Errorf("names = %v, want the set %v", names, want)
+				break
 			}
 		}
 	})
