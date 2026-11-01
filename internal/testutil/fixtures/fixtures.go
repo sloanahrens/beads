@@ -13,6 +13,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/types"
+	"github.com/steveyegge/beads/issueops"
 )
 
 // labels used across all fixtures
@@ -153,189 +154,78 @@ func LargeFromJSONL(ctx context.Context, store *dolt.DoltStore, tempDir string) 
 	return generateFromJSONL(ctx, store, tempDir, cfg)
 }
 
-// generateIssuesWithConfig creates issues with realistic epic hierarchies and cross-links using provided configuration
+// fixtureChunkSize bounds how many issues one CreateIssues call writes.
+const fixtureChunkSize = 500
+
+// generateIssuesWithConfig creates issues with realistic epic hierarchies and cross-links using provided configuration.
+// The dataset is planned in memory first (planIssues), then written in chunks of
+// fixtureChunkSize, one CreateIssues call per chunk. CreateIssues persists the
+// Labels and Dependencies set on each issue. Cross-links into a later chunk are
+// added in one batch once every chunk exists.
 func generateIssuesWithConfig(ctx context.Context, store *dolt.DoltStore, cfg DataConfig) error {
-	rng := rand.New(rand.NewSource(cfg.RandSeed)) // #nosec G404 -- deterministic math/rand used for repeatable fixture data
+	issues := planIssues(cfg, time.Now())
 
-	// Calculate breakdown using configuration ratios
-	numEpics := int(float64(cfg.TotalIssues) * cfg.EpicRatio)
-	numFeatures := int(float64(cfg.TotalIssues) * cfg.FeatureRatio)
-	numTasks := cfg.TotalIssues - numEpics - numFeatures
-
-	// Track created issues for cross-linking
-	var allIssues []*types.Issue
-	epicIssues := make([]*types.Issue, 0, numEpics)
-	featureIssues := make([]*types.Issue, 0, numFeatures)
-	taskIssues := make([]*types.Issue, 0, numTasks)
-
-	// Progress tracking
-	createdIssues := 0
-	lastPctLogged := -1
-
-	logProgress := func() {
-		pct := (createdIssues * 100) / cfg.TotalIssues
-		if pct >= lastPctLogged+10 {
-			fmt.Printf("  Progress: %d%% (%d/%d issues created)\n", pct, createdIssues, cfg.TotalIssues)
-			lastPctLogged = pct
+	created := 0
+	deferred, err := writePlanInChunks(issues, fixtureChunkSize, func(chunk []*types.Issue) error {
+		if err := store.CreateIssues(ctx, chunk, "fixture"); err != nil {
+			return fmt.Errorf("failed to create issues: %w", err)
 		}
+		created += len(chunk)
+		fmt.Printf("  Progress: %d%% (%d/%d issues created)\n", created*100/len(issues), created, len(issues))
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// Create epics
-	for i := 0; i < numEpics; i++ {
-		issue := &types.Issue{
-			Title:       fmt.Sprintf("%s (Epic %d)", epicTitles[i%len(epicTitles)], i),
-			Description: fmt.Sprintf("Epic for %s", epicTitles[i%len(epicTitles)]),
-			Status:      randomStatus(rng, cfg.OpenRatio),
-			Priority:    randomPriority(rng),
-			IssueType:   types.TypeEpic,
-			Assignee:    commonAssignees[rng.Intn(len(commonAssignees))],
-			CreatedAt:   randomTime(rng, cfg.MaxEpicAgeDays),
-			UpdatedAt:   time.Now(),
-		}
-
-		if issue.Status == types.StatusClosed {
-			closedAt := randomTime(rng, cfg.MaxClosedAgeDays)
-			issue.ClosedAt = &closedAt
-		}
-
-		if err := store.CreateIssue(ctx, issue, "fixture"); err != nil {
-			return fmt.Errorf("failed to create epic: %w", err)
-		}
-
-		// Add labels to epics
-		for j := 0; j < rng.Intn(3)+1; j++ {
-			label := commonLabels[rng.Intn(len(commonLabels))]
-			_ = store.AddLabel(ctx, issue.ID, label, "fixture")
-		}
-
-		epicIssues = append(epicIssues, issue)
-		allIssues = append(allIssues, issue)
-		createdIssues++
-		logProgress()
+	edges, err := dependencyEdges(issues, deferred)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cross-links: %w", err)
 	}
-
-	// Create features under epics
-	for i := 0; i < numFeatures; i++ {
-		parentEpic := epicIssues[i%len(epicIssues)]
-
-		issue := &types.Issue{
-			Title:       fmt.Sprintf("%s (Feature %d)", featureTitles[i%len(featureTitles)], i),
-			Description: fmt.Sprintf("Feature under %s", parentEpic.Title),
-			Status:      randomStatus(rng, cfg.OpenRatio),
-			Priority:    randomPriority(rng),
-			IssueType:   types.TypeFeature,
-			Assignee:    commonAssignees[rng.Intn(len(commonAssignees))],
-			CreatedAt:   randomTime(rng, cfg.MaxFeatureAgeDays),
-			UpdatedAt:   time.Now(),
-		}
-
-		if issue.Status == types.StatusClosed {
-			closedAt := randomTime(rng, cfg.MaxClosedAgeDays)
-			issue.ClosedAt = &closedAt
-		}
-
-		if err := store.CreateIssue(ctx, issue, "fixture"); err != nil {
-			return fmt.Errorf("failed to create feature: %w", err)
-		}
-
-		// Add parent-child dependency to epic
-		dep := &types.Dependency{
-			IssueID:     issue.ID,
-			DependsOnID: parentEpic.ID,
-			Type:        types.DepParentChild,
-			CreatedAt:   time.Now(),
-			CreatedBy:   "fixture",
-		}
-		if err := store.AddDependency(ctx, dep, "fixture"); err != nil {
-			return fmt.Errorf("failed to add feature-epic dependency: %w", err)
-		}
-
-		// Add labels
-		for j := 0; j < rng.Intn(3)+1; j++ {
-			label := commonLabels[rng.Intn(len(commonLabels))]
-			_ = store.AddLabel(ctx, issue.ID, label, "fixture")
-		}
-
-		featureIssues = append(featureIssues, issue)
-		allIssues = append(allIssues, issue)
-		createdIssues++
-		logProgress()
+	if len(edges) == 0 {
+		return nil
 	}
-
-	// Create tasks under features
-	for i := 0; i < numTasks; i++ {
-		parentFeature := featureIssues[i%len(featureIssues)]
-
-		issue := &types.Issue{
-			Title:       fmt.Sprintf("%s (Task %d)", taskTitles[i%len(taskTitles)], i),
-			Description: fmt.Sprintf("Task under %s", parentFeature.Title),
-			Status:      randomStatus(rng, cfg.OpenRatio),
-			Priority:    randomPriority(rng),
-			IssueType:   types.TypeTask,
-			Assignee:    commonAssignees[rng.Intn(len(commonAssignees))],
-			CreatedAt:   randomTime(rng, cfg.MaxTaskAgeDays),
-			UpdatedAt:   time.Now(),
-		}
-
-		if issue.Status == types.StatusClosed {
-			closedAt := randomTime(rng, cfg.MaxClosedAgeDays)
-			issue.ClosedAt = &closedAt
-		}
-
-		if err := store.CreateIssue(ctx, issue, "fixture"); err != nil {
-			return fmt.Errorf("failed to create task: %w", err)
-		}
-
-		// Add parent-child dependency to feature
-		dep := &types.Dependency{
-			IssueID:     issue.ID,
-			DependsOnID: parentFeature.ID,
-			Type:        types.DepParentChild,
-			CreatedAt:   time.Now(),
-			CreatedBy:   "fixture",
-		}
-		if err := store.AddDependency(ctx, dep, "fixture"); err != nil {
-			return fmt.Errorf("failed to add task-feature dependency: %w", err)
-		}
-
-		// Add labels
-		for j := 0; j < rng.Intn(2)+1; j++ {
-			label := commonLabels[rng.Intn(len(commonLabels))]
-			_ = store.AddLabel(ctx, issue.ID, label, "fixture")
-		}
-
-		taskIssues = append(taskIssues, issue)
-		allIssues = append(allIssues, issue)
-		createdIssues++
-		logProgress()
+	editor, err := store.DependencyEditor()
+	if err != nil {
+		return fmt.Errorf("failed to open dependency editor: %w", err)
 	}
-
-	fmt.Printf("  Progress: 100%% (%d/%d issues created) - Complete!\n", cfg.TotalIssues, cfg.TotalIssues)
-
-	// Add cross-links between tasks across epics using configured ratio
-	numCrossLinks := int(float64(numTasks) * cfg.CrossLinkRatio)
-	for i := 0; i < numCrossLinks; i++ {
-		fromTask := taskIssues[rng.Intn(len(taskIssues))]
-		toTask := taskIssues[rng.Intn(len(taskIssues))]
-
-		// Avoid self-dependencies
-		if fromTask.ID == toTask.ID {
-			continue
-		}
-
-		dep := &types.Dependency{
-			IssueID:     fromTask.ID,
-			DependsOnID: toTask.ID,
-			Type:        types.DepBlocks,
-			CreatedAt:   time.Now(),
-			CreatedBy:   "fixture",
-		}
-
-		// Ignore cycle errors for cross-links (they're expected)
-		_ = store.AddDependency(ctx, dep, "fixture")
+	if _, err := editor.AddDependencies(ctx, issueops.AddDependenciesRequest{Actor: "fixture", Edges: edges}); err != nil {
+		return fmt.Errorf("failed to add cross-links: %w", err)
 	}
-
 	return nil
+}
+
+// dependencyEdges turns deps, still in plan refs, into edges between the IDs
+// the store has assigned to their issues.
+func dependencyEdges(issues []*types.Issue, deps []*types.Dependency) ([]issueops.DependencyEdge, error) {
+	edges := make([]issueops.DependencyEdge, 0, len(deps))
+	for _, dep := range deps {
+		from, err := planEndID(issues, dep.IssueID)
+		if err != nil {
+			return nil, err
+		}
+		to, err := planEndID(issues, dep.DependsOnID)
+		if err != nil {
+			return nil, err
+		}
+		edges = append(edges, issueops.DependencyEdge{IssueID: from, DependsOnID: to, Type: dep.Type})
+	}
+	return edges, nil
+}
+
+// planEndID returns the ID of the plan issue that end names.
+func planEndID(issues []*types.Issue, end string) (string, error) {
+	index, err := planRefIndex(end)
+	if err != nil {
+		return "", err
+	}
+	if index >= len(issues) {
+		return "", fmt.Errorf("dependency end %q names issue %d of %d", end, index, len(issues))
+	}
+	if issues[index].ID == "" {
+		return "", fmt.Errorf("issue %d has no ID after its chunk was written", index)
+	}
+	return issues[index].ID, nil
 }
 
 // generateFromJSONL creates issues, exports to JSONL, clears DB, and reimports
@@ -526,8 +416,8 @@ func randomPriority(rng *rand.Rand) int {
 	}
 }
 
-// randomTime returns a random time up to maxDaysAgo days in the past
-func randomTime(rng *rand.Rand, maxDaysAgo int) time.Time {
+// randomTime returns a random time up to maxDaysAgo days before now
+func randomTime(rng *rand.Rand, now time.Time, maxDaysAgo int) time.Time {
 	daysAgo := rng.Intn(maxDaysAgo)
-	return time.Now().Add(-time.Duration(daysAgo) * 24 * time.Hour)
+	return now.Add(-time.Duration(daysAgo) * 24 * time.Hour)
 }
