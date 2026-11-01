@@ -29,11 +29,21 @@
 # and the landing worker reverts it), so this script exits 0 on every outcome,
 # including every refusal. Refusals are reported through ESCALATE_CMD.
 #
+# The smoke proof is read-only by design: it runs twice, once against the build
+# under test and once against the installed file, so a write could not be taken
+# back by a failing second run. The default proves both halves of a read: a
+# `bd list --limit 1 --json`, then a `bd show <id> --json` on the first bead
+# that list returned. A list-only smoke once installed a build whose batched
+# show was broken, which is the read every agent makes. A town with no beads
+# lists nothing, so the show is skipped there.
+#
 # Inputs (all optional, all overridable from the environment):
 #
 #   INSTALL_DIR   directory holding the installed bd   (default $HOME/.local/bin)
 #   BD_NEW        the freshly built binary to install  (default ./bd)
-#   SMOKE_CMD     read-only command proving a bd works (default bd list --limit 1)
+#   SMOKE_CMD     read-only command proving a bd works (default: `bd list
+#                 --limit 1 --json`, then `bd show <id> --json` on the first
+#                 bead it listed; an explicit setting replaces both)
 #   SMOKE_DIR     directory to run SMOKE_CMD in        (default $GT_TOWN_ROOT,
 #                 else $HOME/gt, else the current directory)
 #   ESCALATE_CMD  command run with the refusal message as its one argument
@@ -44,7 +54,7 @@ set -uo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BD_NEW="${BD_NEW:-$PWD/bd}"
-SMOKE_CMD="${SMOKE_CMD:-bd list --limit 1}"
+SMOKE_CMD="${SMOKE_CMD:-}"
 BD_BACKUPS="${BD_BACKUPS:-3}"
 ESCALATE_CMD="${ESCALATE_CMD:-gt escalate -s high}"
 
@@ -98,6 +108,17 @@ json_commit() {
         sed 's/.*"\([^"]*\)"$/\1/'
 }
 
+# json_id prints the first "id" field of a `bd list --json` body, or nothing.
+# It is json_commit's grep/sed pair reading a bare id, for the same reason: the
+# landing host does not guarantee jq. Each listed bead opens with its "id", and
+# a key like "build_id" cannot match — the pattern demands the quote
+# immediately before id.
+json_id() {
+    printf '%s' "$1" |
+        grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' |
+        sed -n '1s/.*"\([^"]*\)"$/\1/p'
+}
+
 # normalize_version_json blanks the three build stamps — build, build_id and
 # commit — so two builds of the same source compare equal, and leaves the rest
 # (version, db_schema_version, schema_ceiling, contract_version, and a JSON
@@ -131,26 +152,63 @@ bd_path_dir() {
     printf '%s' "$linked_bd_dir"
 }
 
-# run_smoke runs SMOKE_CMD from the smoke directory with the given directory
-# first on PATH (pass an empty string to smoke the installed bd). The default
-# command is a read-only `bd list`; nothing here writes. Output is held back on
-# success and printed on failure.
-run_smoke() {
-    local path_dir="$1" out rc
+# smoke_label names the smoke proof in escalations and the final log line: the
+# configured command, or the pair the default runs.
+smoke_label() {
+    if [ -n "$SMOKE_CMD" ]; then
+        printf '%s' "$SMOKE_CMD"
+    else
+        printf '%s' 'bd list --limit 1 --json, then bd show <id> --json'
+    fi
+}
+
+# smoke_cmd runs one read-only smoke command from the smoke directory with the
+# given directory first on PATH (pass an empty string to run against whatever
+# PATH already resolves, which is the installed bd). It leaves the combined
+# output in smoke_output for the caller, holds that output back on success and
+# prints it on failure.
+smoke_cmd() {
+    local path_dir="$1" cmd="$2" out rc
     out="$(
         cd "$SMOKE_DIR" || exit 1
         if [ -n "$path_dir" ]; then
-            PATH="$path_dir:$PATH" eval "$SMOKE_CMD" 2>&1
+            PATH="$path_dir:$PATH" eval "$cmd" 2>&1
         else
-            eval "$SMOKE_CMD" 2>&1
+            eval "$cmd" 2>&1
         fi
     )"
     rc=$?
+    smoke_output="$out"
     if [ "$rc" -ne 0 ]; then
-        log "smoke command failed (exit $rc): $SMOKE_CMD"
+        log "smoke command failed (exit $rc): $cmd"
         printf '%s\n' "$out" | sed 's/^/install-bd:   /'
     fi
     return "$rc"
+}
+
+# run_smoke runs the smoke proof from the smoke directory with the given
+# directory first on PATH. An explicit SMOKE_CMD is the whole proof, exactly as
+# before. The default is two read-only reads of the same bd: `bd list --limit 1
+# --json`, then `bd show <id> --json` on the first bead that list returned, so
+# a build whose batched show is broken cannot pass on its list alone. A town
+# with no beads lists none, and the show is skipped rather than failed. Nothing
+# here writes: a write cannot be smoked, because this runs before and after the
+# install and a failed second run cannot undo it.
+run_smoke() {
+    local path_dir="$1" id
+    if [ -n "$SMOKE_CMD" ]; then
+        smoke_cmd "$path_dir" "$SMOKE_CMD"
+        return
+    fi
+    if ! smoke_cmd "$path_dir" "bd list --limit 1 --json"; then
+        return 1
+    fi
+    id="$(json_id "$smoke_output")"
+    if [ -z "$id" ]; then
+        log "the bead list returned no id; skipping bd show --json"
+        return 0
+    fi
+    smoke_cmd "$path_dir" "bd show $(quote_word "$id") --json"
 }
 
 # prune_backups keeps the newest BD_BACKUPS bd.bak-* files. The names carry only
@@ -238,7 +296,7 @@ main() {
         refuse "cannot stage $BD_NEW for the smoke command"
     fi
     if ! run_smoke "$new_dir"; then
-        refuse "the build at $BD_NEW failed the smoke command ($SMOKE_CMD); refusing to install"
+        refuse "the build at $BD_NEW failed the smoke command ($(smoke_label)); refusing to install"
     fi
 
     # (6) Back up what is about to be replaced. Plain cp, not cp -p: the
@@ -272,12 +330,12 @@ main() {
     # One that fails takes the town down, so put the backup back.
     if ! run_smoke "$INSTALL_DIR"; then
         if mv -f -- "$backup" "$installed_bd"; then
-            refuse "the installed bd failed the smoke command ($SMOKE_CMD); restored $(basename "$backup")"
+            refuse "the installed bd failed the smoke command ($(smoke_label)); restored $(basename "$backup")"
         fi
         refuse "the installed bd failed the smoke command and restoring $(basename "$backup") failed; $installed_bd is broken"
     fi
 
-    log "install complete: $installed_bd passes $SMOKE_CMD"
+    log "install complete: $installed_bd passes $(smoke_label)"
     exit 0
 }
 
