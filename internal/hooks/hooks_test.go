@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -380,12 +381,14 @@ func waitForStopped(wait func() (bool, error), state func() (bool, error)) (bool
 }
 
 // childStopped reports whether the process is no longer running: reaped (gone),
-// a zombie, or dead. Any other read failure is returned rather than passing as
-// stopped, so an unreadable /proc cannot make the assertion above pass.
+// a zombie, or dead. /proc reports both a missing entry (ENOENT) and a pid that
+// has just been reaped (ESRCH) for the gone case. Any other read failure is
+// returned rather than passing as stopped, so an unreadable /proc cannot make
+// the assertion above pass.
 func childStopped(pid int) (bool, error) {
 	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 			return true, nil
 		}
 		return false, err
