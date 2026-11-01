@@ -588,32 +588,6 @@ func TestMaxDoltServers(t *testing.T) {
 	})
 }
 
-func TestIsProcessInDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("isProcessInDir always returns false on Windows (CWD not exposed)")
-	}
-	// Our own process should have a CWD we can check
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Our PID should be in our CWD
-	if !isProcessInDir(os.Getpid(), cwd) {
-		t.Log("isProcessInDir returned false for own process CWD (lsof may not be available)")
-	}
-
-	// Our PID should NOT be in a random temp dir
-	if isProcessInDir(os.Getpid(), t.TempDir()) {
-		t.Error("isProcessInDir should return false for wrong directory")
-	}
-
-	// Dead PID should return false
-	if isProcessInDir(99999999, cwd) {
-		t.Error("isProcessInDir should return false for dead PID")
-	}
-}
-
 func TestCountDoltProcesses(t *testing.T) {
 	// Just verify it doesn't panic and returns a non-negative number
 	count := countDoltProcesses()

@@ -104,9 +104,23 @@ func splitPSField(line string) (field, rest string, ok bool) {
 // Uses lsof to look up the CWD, which is more reliable than checking command-line
 // args since dolt sql-server is started with cmd.Dir (not a --data-dir flag).
 func isProcessInDir(pid int, dir string) bool {
+	return isProcessInDirWith(pid, dir, lsofCwdFields)
+}
+
+// lsofCwdFields runs lsof for pid's cwd and returns its machine-readable field
+// output.
+func lsofCwdFields(pid int) ([]byte, error) {
 	// On macOS, lsof requires -a to AND selectors together; without it,
 	// "-p <pid>" and "-d cwd" can yield cwd entries from unrelated processes.
-	out, err := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	return exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+}
+
+// isProcessInDirWith is isProcessInDir with the lsof lookup injected, so a test
+// can drive every branch without running the host's lsof: on some hosts that
+// lsof form does not return, and asking it hung the package's whole test
+// binary until its timeout (be-x4e8).
+func isProcessInDirWith(pid int, dir string, cwdFields func(pid int) ([]byte, error)) bool {
+	out, err := cwdFields(pid)
 	if err != nil {
 		return false
 	}

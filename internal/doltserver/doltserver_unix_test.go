@@ -3,6 +3,7 @@
 package doltserver
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -67,6 +68,75 @@ func TestParseDoltProcessPIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := parseDoltProcessPIDs([]byte(tt.snapshot)); !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("parseDoltProcessPIDs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsProcessInDir drives isProcessInDirWith, the parse-and-compare step of
+// isProcessInDir, with lsof's -Fn field output injected. The host's lsof is
+// never run: on some hosts `lsof -a -p <pid> -d cwd -Fn` does not return, and
+// asking it hung this package's whole test binary until its timeout (be-x4e8).
+func TestIsProcessInDir(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name string
+		pid  int
+		dir  string
+		// fields is the lsof output handed back by the injected lookup; err is
+		// what lsof failing (no such process, not installed) reports.
+		fields string
+		err    error
+		want   bool
+	}{
+		{
+			name:   "process in directory",
+			pid:    42,
+			dir:    dir,
+			fields: "p42\nfcwd\nn" + dir + "\n",
+			want:   true,
+		},
+		{
+			name:   "another directory",
+			pid:    42,
+			dir:    t.TempDir(),
+			fields: "p42\nfcwd\nn" + dir + "\n",
+			want:   false,
+		},
+		{
+			// A cwd whose directory has been unlinked is reported with a
+			// " (deleted)" suffix, which must not equal the live directory it
+			// used to name.
+			name:   "deleted cwd does not match",
+			pid:    42,
+			dir:    dir,
+			fields: "p42\nfcwd\nn" + dir + " (deleted)\n",
+			want:   false,
+		},
+		{
+			name: "lookup fails",
+			pid:  42,
+			dir:  dir,
+			err:  errors.New("lsof: no such process"),
+			want: false,
+		},
+		{
+			name:   "no name field",
+			pid:    42,
+			dir:    dir,
+			fields: "p42\nfcwd\n",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isProcessInDirWith(tt.pid, tt.dir, func(int) ([]byte, error) {
+				return []byte(tt.fields), tt.err
+			})
+			if got != tt.want {
+				t.Errorf("isProcessInDirWith(%d, %q) = %v, want %v", tt.pid, tt.dir, got, tt.want)
 			}
 		})
 	}
