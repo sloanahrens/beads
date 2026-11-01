@@ -66,6 +66,11 @@ func (r *Runner) runHook(hookPath, event string, issue *types.Issue) (retErr err
 	// Create command: hook_script <issue_id> <event_type>
 	// #nosec G204 -- hookPath is from controlled .beads/hooks directory
 	cmd := exec.CommandContext(ctx, hookPath, issue.ID, event)
+	// WaitDelay has to be set before Start, so it covers every run, not only a
+	// timed-out one. It only matters when the hook has exited or its timeout
+	// fired while a holder of the stdout/stderr pipes is still alive (a
+	// descendant, or a hook that ignored the kill); returning after that
+	// cleanup slop is better than blocking the caller behind a stray holder.
 	cmd.WaitDelay = hookWaitDelay
 	cmd.Stdin = bytes.NewReader(issueJSON)
 
@@ -173,6 +178,14 @@ const maxMemberSweeps = 3
 // every failure is collected rather than returned at the first one. The member
 // list comes from groupMembers when a test injects it, and from the process
 // table otherwise.
+//
+// Every signal in this fallback, the hook's own plain-pid kill included, names
+// a pid that was read from the process table. A pid listed there and then
+// reused by an unrelated process before the signal lands receives it. That
+// window is an accepted limit of any pid-based sweep and this fallback does not
+// narrow it: no kernel call signals "this pid, if it is still in group pgid"
+// atomically, and re-reading the group id before each signal would only shrink
+// the window while widening this change.
 func (r *Runner) killGroupMembers(pgid int, signal func(pid int, sig syscall.Signal) error) error {
 	list := processGroupMembers
 	if r.groupMembers != nil {
@@ -210,15 +223,16 @@ func (r *Runner) killGroupMembers(pgid int, signal func(pid int, sig syscall.Sig
 // the same source the darwin sweep uses.
 func processGroupMembers(pgid int) ([]int, error) {
 	if runtime.GOOS == "linux" {
-		return procGroupMembers("/proc", pgid)
+		return procGroupMembers("/proc", pgid, os.ReadFile)
 	}
 	return psGroupMembers(pgid)
 }
 
 // procGroupMembers lists the pids under procRoot whose process group is pgid.
-// procRoot is a parameter so the parsing runs against a temporary tree in
-// tests; production passes /proc.
-func procGroupMembers(procRoot string, pgid int) ([]int, error) {
+// procRoot and readFile are parameters so the walk runs against a temporary
+// tree with injected read failures in tests; production passes /proc and
+// os.ReadFile.
+func procGroupMembers(procRoot string, pgid int, readFile func(string) ([]byte, error)) ([]int, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", procRoot, err)
@@ -229,11 +243,17 @@ func procGroupMembers(procRoot string, pgid int) ([]int, error) {
 		if err != nil {
 			continue // not a process directory
 		}
-		//nolint:gosec // G304: procRoot is /proc in production and the entry name comes from that directory's own listing.
-		stat, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "stat"))
+		stat, err := readFile(filepath.Join(procRoot, entry.Name(), "stat"))
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue // exited while the table was being read
+			// A process that exits while the table is being read cannot be
+			// signaled. The kernel reports its missing stat as ENOENT, or as
+			// ESRCH when the pid was reaped just before the read. Such a pid is
+			// no longer a member, and it must not abort the enumeration: the
+			// rest of the group still has to be swept and killed. Any other
+			// read failure is an error — a table that could not be read must
+			// not pass as absent.
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+				continue
 			}
 			return nil, fmt.Errorf("read %s stat: %w", entry.Name(), err)
 		}

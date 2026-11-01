@@ -4,6 +4,7 @@ package hooks
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -349,15 +350,62 @@ func TestKillGroupMembers(t *testing.T) {
 	}
 }
 
+// TestKillGroupMembersSurvivesRacingStatRead drives the real process-table walk
+// through the sweep: a pid whose stat read fails with ESRCH was reaped while
+// the table was being read, so it is no longer a member. The sweep must still
+// signal the members that remain and must not report the vanished pid as an
+// error — aborting the enumeration there is what leaves live members behind.
+func TestKillGroupMembersSurvivesRacingStatRead(t *testing.T) {
+	root := t.TempDir()
+	for name, body := range map[string]string{
+		"300/stat": "300 (hook) S 1 100 100 0",
+		"301/stat": "301 (sleep) S 300 100 100 0",
+		"302/stat": "302 (sleep) S 300 100 100 0",
+	} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	readFile := func(path string) ([]byte, error) {
+		if filepath.Base(filepath.Dir(path)) == "301" {
+			return nil, &fs.PathError{Op: "read", Path: path, Err: syscall.ESRCH}
+		}
+		return os.ReadFile(path)
+	}
+
+	var signalled []int
+	runner := &Runner{
+		groupMembers: func(pgid int) ([]int, error) {
+			return procGroupMembers(root, pgid, readFile)
+		},
+	}
+	err := runner.killGroupMembers(100, func(pid int, sig syscall.Signal) error {
+		signalled = append(signalled, pid)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("killGroupMembers returned an error for a pid reaped mid-read: %v", err)
+	}
+	if !slices.Equal(signalled, []int{300, 302}) {
+		t.Errorf("signalled %v, want the live members [300 302]", signalled)
+	}
+}
+
 // TestProcGroupMembers pins the /proc table walk against a temporary tree:
 // members are selected by process group, the comm field may hold spaces and
-// parentheses, a pid that exits mid-read is skipped, and an unreadable or
-// malformed table is an error rather than an empty member list.
+// parentheses, a pid that exits mid-read is skipped whether the kernel reports
+// it missing (ENOENT) or reaped (ESRCH), and an unreadable or malformed table
+// is an error rather than an empty member list.
 func TestProcGroupMembers(t *testing.T) {
 	tests := []struct {
 		name    string
 		files   map[string]string
 		dirs    []string
+		readErr map[string]error
 		want    []int
 		wantErr string
 	}{
@@ -385,6 +433,15 @@ func TestProcGroupMembers(t *testing.T) {
 			},
 			dirs: []string{"301"},
 			want: []int{300},
+		},
+		{
+			name: "pid reaped while the table is read",
+			files: map[string]string{
+				"310/stat": "310 (hook) S 1 100 100 0",
+				"311/stat": "311 (sleep) S 310 100 100 0",
+			},
+			readErr: map[string]error{"311": syscall.ESRCH},
+			want:    []int{310},
 		},
 		{
 			name:    "stat without a comm terminator",
@@ -421,7 +478,13 @@ func TestProcGroupMembers(t *testing.T) {
 				}
 			}
 
-			got, err := procGroupMembers(root, 100)
+			readFile := func(path string) ([]byte, error) {
+				if rerr, ok := tt.readErr[filepath.Base(filepath.Dir(path))]; ok {
+					return nil, &fs.PathError{Op: "read", Path: path, Err: rerr}
+				}
+				return os.ReadFile(path)
+			}
+			got, err := procGroupMembers(root, 100, readFile)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("procGroupMembers error = %v, want %q", err, tt.wantErr)
@@ -437,7 +500,7 @@ func TestProcGroupMembers(t *testing.T) {
 		})
 	}
 
-	if _, err := procGroupMembers(filepath.Join(t.TempDir(), "absent"), 100); err == nil {
+	if _, err := procGroupMembers(filepath.Join(t.TempDir(), "absent"), 100, os.ReadFile); err == nil {
 		t.Fatal("procGroupMembers returned no error for an unreadable process table")
 	}
 }
