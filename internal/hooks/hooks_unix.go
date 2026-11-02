@@ -180,7 +180,10 @@ const maxMemberSweeps = 3
 // one refused member does not stop the rest of the sweep from being signaled:
 // every failure is collected rather than returned at the first one. The member
 // list comes from groupMembers when a test injects it, and from the process
-// table otherwise.
+// table otherwise. A listed pid that is not positive is refused and reported
+// unsignalled: a negative pid is a process group, which is the call this
+// fallback exists because the kernel refused, so it is never made from table
+// data as if it were a member.
 //
 // Every signal in this fallback, the hook's own plain-pid kill included, names
 // a pid that was read from the process table. A pid listed there and then
@@ -208,6 +211,10 @@ func (r *Runner) killGroupMembers(pgid int, signal func(pid int, sig syscall.Sig
 				continue
 			}
 			signaled[pid] = true
+			if pid <= 0 {
+				errs = append(errs, fmt.Errorf("member list holds non-positive pid %d", pid))
+				continue
+			}
 			fresh++
 			if sigErr := signal(pid, syscall.SIGKILL); sigErr != nil && !errors.Is(sigErr, syscall.ESRCH) {
 				errs = append(errs, fmt.Errorf("kill member %d: %w", pid, sigErr))
