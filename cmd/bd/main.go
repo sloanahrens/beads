@@ -499,6 +499,25 @@ func preserveRedirectSourceDatabase(beadsDir string) {
 	}
 }
 
+// redirectLeadsToWorkspace reports whether a .beads/redirect target resolves
+// to the workspace a command will use. Both paths are canonicalised with
+// filepath.EvalSymlinks: BEADS_DIR may name the same directory through a
+// symlink, and a textual comparison would then treat one workspace as two.
+//
+// A path that cannot be resolved is not the workspace: the caller drops the
+// redirect source database name rather than applying it to the wrong workspace.
+func redirectLeadsToWorkspace(redirectTarget, workspaceDir string) bool {
+	resolvedTarget, err := filepath.EvalSymlinks(redirectTarget)
+	if err != nil {
+		return false
+	}
+	resolvedWorkspace, err := filepath.EvalSymlinks(workspaceDir)
+	if err != nil {
+		return false
+	}
+	return resolvedTarget == resolvedWorkspace
+}
+
 func selectedNoDBBeadsDir(cmd *cobra.Command) string {
 	if cmd != nil && cmd.Root() != nil && cmd.Root().PersistentFlags().Changed("db") && dbPath != "" {
 		if selectedBeadsDir := resolveCommandBeadsDir(dbPath); selectedBeadsDir != "" {
@@ -1193,8 +1212,21 @@ var rootCmd = &cobra.Command{
 		// When .beads/redirect points to a shared directory with a different
 		// dolt_database, the source's database name would be lost. Capture it
 		// early and set BEADS_DOLT_SERVER_DATABASE so all store opens use it.
+		//
+		// The name belongs to the workspace the redirect leads to. With
+		// BEADS_DIR set, GetRedirectInfo still reports the cwd repo's redirect
+		// (bd-wayc3); applying it unconditionally opened the cwd repo's
+		// database for a command aimed at BEADS_DIR's workspace (be-qm8.2.2).
 		if dbPath == "" {
-			preserveRedirectSourceDatabase(beads.GetRedirectInfo().LocalDir)
+			redirect := beads.GetRedirectInfo()
+			if redirect.IsRedirected {
+				workspaceDir := beads.FindBeadsDir()
+				if redirectLeadsToWorkspace(redirect.TargetDir, workspaceDir) {
+					preserveRedirectSourceDatabase(redirect.LocalDir)
+				} else if os.Getenv("BD_DEBUG_ROUTING") != "" {
+					fmt.Fprintf(os.Stderr, "[routing] Redirect source dolt_database from %s not applied: redirect target %s and selected workspace %s do not resolve to the same directory\n", redirect.LocalDir, redirect.TargetDir, workspaceDir)
+				}
+			}
 		}
 
 		if dbPath == "" {
