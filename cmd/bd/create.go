@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -327,17 +328,27 @@ var createCmd = &cobra.Command{
 
 		// Use global jsonOutput set by PersistentPreRun
 
-		// Determine target repository using routing logic
-		repoPath := "." // default to current directory
-		routingRule := routing.RuleNone
-		if cmd.Flags().Changed("repo") {
-			// Explicit --repo flag overrides auto-routing
-			repoPath = repoOverride
-		} else {
-			// Build routing config with backward compatibility for legacy contributor.* keys.
-			// Prefer config.yaml values, but fall back to DB config values set by bd init --contributor.
-			routingMode := getRoutingConfigValue(rootCtx, store, "routing.mode")
-			contributorRepo := getRoutingConfigValue(rootCtx, store, "routing.contributor")
+		// Determine target repository using routing logic.
+		//
+		// An explicit --repo is not auto-routing: it always wins, and is
+		// reported as RuleExplicitOverride so the create notice below stays
+		// silent for it.
+		repoFlagChanged := cmd.Flags().Changed("repo")
+
+		// Build routing config with backward compatibility for legacy
+		// contributor.* keys. Prefer config.yaml values, but fall back to DB
+		// config values set by bd init --contributor. None of this is read
+		// for an explicit --repo, which bypasses routing entirely.
+		var (
+			routingMode     string
+			contributorRepo string
+			defaultRepo     string
+			maintainerRepo  string
+			userRole        routing.UserRole
+		)
+		if !repoFlagChanged {
+			routingMode = getRoutingConfigValue(rootCtx, store, "routing.mode")
+			contributorRepo = getRoutingConfigValue(rootCtx, store, "routing.contributor")
 
 			// NFR-001: Backward compatibility - fall back to legacy contributor.* keys
 			if routingMode == "" {
@@ -351,7 +362,6 @@ var createCmd = &cobra.Command{
 
 			// The user role only picks a repo in auto mode; detect it (and
 			// warn when beads.role is unset) only then.
-			var userRole routing.UserRole
 			if routingMode == "auto" {
 				var err error
 				userRole, err = routing.DetectUserRole(".")
@@ -360,19 +370,15 @@ var createCmd = &cobra.Command{
 				}
 			}
 
-			routingConfig := &routing.RoutingConfig{
-				Mode:             routingMode,
-				DefaultRepo:      getRoutingConfigValue(rootCtx, store, "routing.default"),
-				MaintainerRepo:   getRoutingConfigValue(rootCtx, store, "routing.maintainer"),
-				ContributorRepo:  contributorRepo,
-				ExplicitOverride: repoOverride,
-			}
-
-			// Keep the matched rule so the notice below can name the rule
-			// that actually routed the write, instead of always blaming the
-			// contributor role (see printCreateRoutingNotice).
-			repoPath, routingRule = routing.DetermineTargetRepoWithRule(routingConfig, userRole, ".")
+			defaultRepo = getRoutingConfigValue(rootCtx, store, "routing.default")
+			maintainerRepo = getRoutingConfigValue(rootCtx, store, "routing.maintainer")
 		}
+
+		// Keep the matched rule so the create notice can name the rule that
+		// actually routed the write instead of always blaming the contributor
+		// role (see createRoutingNoticeText).
+		repoPath, routingRule := resolveCreateRoute(routingMode, defaultRepo, maintainerRepo,
+			contributorRepo, repoOverride, repoFlagChanged, userRole)
 
 		renderDryRun := func() error {
 			previewIssue := buildCreateIssue(createIssueParams{
@@ -420,44 +426,22 @@ var createCmd = &cobra.Command{
 		var targetStore storage.DoltStorage
 		var remoteCache *remotecache.Cache
 		if !dryRun && repoPath != "." {
-			if remotecache.IsRemoteURL(repoPath) {
-				var err error
-				remoteCache, err = remotecache.DefaultCache()
-				if err != nil {
-					return HandleError("failed to initialize remote cache: %v", err)
-				}
-				if _, err := remoteCache.Ensure(rootCtx, repoPath); err != nil {
-					return HandleError("failed to sync remote %s: %v", repoPath, err)
-				}
-				targetStore, err = remoteCache.OpenStore(rootCtx, repoPath, newDoltStoreFromConfig)
-				if err != nil {
-					return HandleError("failed to open remote store: %v", err)
-				}
-			} else {
-				targetBeadsDir := routing.ExpandPath(repoPath)
-				debug.Logf("DEBUG: Routing to target repo: %s\n", targetBeadsDir)
-
+			target, err := openCreateRoutedTarget(rootCtx, createRouteRequest{
+				RepoPath: repoPath,
+				Rule:     routingRule,
 				// Auto-routed paths (routing.mode: auto, routing.default)
 				// come from config, not caller input, so they're always
 				// allowed to auto-vivify as before; only an explicit --repo
 				// flag value can be ambiguous.
-				allowCreate := !isAmbiguousRepoTarget(cmd.Flags().Changed("repo"), repoOverride)
-				targetBeadsDirPath, err := ensureBeadsDirForPath(rootCtx, targetBeadsDir, store, allowCreate)
-				if err != nil {
-					return HandleError("failed to initialize target repo: %v", err)
-				}
-
-				targetStore, err = newDoltStoreFromConfig(rootCtx, targetBeadsDirPath)
-				if err != nil {
-					return HandleError("failed to open target store: %v", err)
-				}
-
-				// stdout reports only "Created issue: <id>", so a bead that
-				// auto-routed into another workspace's database is otherwise
-				// indistinguishable from a local one. Say where it went and
-				// which rule sent it there before the write.
-				printCreateRoutingNotice(targetBeadsDir, targetBeadsDirPath, routingRule)
+				AllowCreate: !isAmbiguousRepoTarget(repoFlagChanged, repoOverride),
+				Quiet:       quietFlag,
+				SourceStore: store,
+			}, defaultCreateRouteOpeners(), createRouteNotice)
+			if err != nil {
+				return HandleError("%v", err)
 			}
+			targetStore = target.Store
+			remoteCache = target.RemoteCache
 
 			// Close the original store before replacing it (it won't be used anymore)
 			// Note: We don't defer-close targetStore here because PersistentPostRun
@@ -991,33 +975,163 @@ func isAmbiguousRepoTarget(repoFlagChanged bool, repoOverride string) bool {
 	return repoFlagChanged && !filepath.IsAbs(repoOverride) && !strings.HasPrefix(repoOverride, "~/")
 }
 
-// createRoutingNoticeOnce limits the auto-routed create notice to one line per
-// process, so a script that creates several beads doesn't repeat the same
-// routing advice for every bead.
-var createRoutingNoticeOnce sync.Once
+// resolveCreateRoute decides where a `bd create` writes and which routing rule
+// selected that target. A repoFlagChanged create carries its --repo value
+// as repoOverride and always wins as RuleExplicitOverride, so the notice below
+// stays silent for it. userRole is consulted only for routing.mode: auto.
+func resolveCreateRoute(mode, defaultRepo, maintainerRepo, contributorRepo, repoOverride string,
+	repoFlagChanged bool, userRole routing.UserRole) (string, routing.RoutingRule) {
+	if repoFlagChanged {
+		return repoOverride, routing.RuleExplicitOverride
+	}
+	return routing.DetermineTargetRepoWithRule(&routing.RoutingConfig{
+		Mode:            mode,
+		DefaultRepo:     defaultRepo,
+		MaintainerRepo:  maintainerRepo,
+		ContributorRepo: contributorRepo,
+	}, userRole, ".")
+}
 
-// resetCreateRoutingNoticeOnce restores the notice's once guard so tests can
-// exercise each routing rule in a single process.
-func resetCreateRoutingNoticeOnce() { createRoutingNoticeOnce = sync.Once{} }
+// createRouteRequest is the routing decision for one `bd create`, plus the
+// state the target-store openers need.
+type createRouteRequest struct {
+	// RepoPath is the target selected by resolveCreateRoute: a filesystem
+	// path (expanded by the local opener), a remote URL, or "." for the
+	// local project.
+	RepoPath string
+	// Rule is the routing clause that selected RepoPath.
+	Rule routing.RoutingRule
+	// AllowCreate permits auto-vivifying an absent workspace at RepoPath.
+	AllowCreate bool
+	// Quiet suppresses the non-essential routing notice (--quiet).
+	Quiet bool
+	// SourceStore is closed by the caller after the target store opens; the
+	// local opener uses it to inherit the target workspace's prefix.
+	SourceStore storage.DoltStorage
+}
 
-// printCreateRoutingNotice tells the user that a `bd create` without --repo
-// auto-routed the write to another workspace. targetRepo is the expanded repo
-// path the write goes to, beadsDir is the .beads directory actually opened
-// (after redirect following), and rule is the routing clause that matched.
-// Without the notice, stdout's "Created issue: <id>" looks the same whether
-// the bead landed locally or in a routed workspace's database.
-//
-// The reason and fix wording comes from routingNoticeText, the same source the
-// read notice (bd list/ready) uses, so rule names and remediation commands are
-// defined once. Like the read notice, this respects --quiet: --quiet is
-// documented as "Suppress non-essential output (errors only)".
-func printCreateRoutingNotice(targetRepo, beadsDir string, rule routing.RoutingRule) {
-	if quietFlag || targetRepo == "" || targetRepo == "." {
+// autoRouted reports whether the target came from routing config rather than
+// an explicit --repo flag or an unrouted local create.
+func (r createRouteRequest) autoRouted() bool {
+	return r.Rule != routing.RuleNone && r.Rule != routing.RuleExplicitOverride
+}
+
+// createRouteTarget is the opened target store and the two names the notice
+// reports: RepoPath (the filesystem path or remote URL the write goes to) and
+// BeadsDir (the store location actually opened for it, which can differ when a
+// redirect is followed or the target is a remote cache clone).
+type createRouteTarget struct {
+	Store       storage.DoltStorage
+	RepoPath    string
+	BeadsDir    string
+	RemoteCache *remotecache.Cache
+}
+
+// createRouteOpeners opens the target store. They are fields so tests can
+// drive the whole route-to-notice path with a stub store instead of a real
+// database.
+type createRouteOpeners struct {
+	openLocal  func(ctx context.Context, repoPath string, source storage.DoltStorage, allowCreate bool) (createRouteTarget, error)
+	openRemote func(ctx context.Context, remoteURL string) (createRouteTarget, error)
+}
+
+// defaultCreateRouteOpeners returns the production openers.
+func defaultCreateRouteOpeners() createRouteOpeners {
+	return createRouteOpeners{
+		openLocal:  openLocalCreateTarget,
+		openRemote: openRemoteCreateTarget,
+	}
+}
+
+// openCreateRoutedTarget opens the store a create that writes away from the
+// local project targets and, when the write was auto-routed, announces where
+// the bead goes and which rule sent it there. stdout reports only "Created
+// issue: <id>", so a bead that auto-routed into another workspace's database
+// is otherwise indistinguishable from a local one.
+func openCreateRoutedTarget(ctx context.Context, req createRouteRequest, openers createRouteOpeners, notice *createRoutingNotice) (createRouteTarget, error) {
+	var (
+		target createRouteTarget
+		err    error
+	)
+	if remotecache.IsRemoteURL(req.RepoPath) {
+		target, err = openers.openRemote(ctx, req.RepoPath)
+	} else {
+		target, err = openers.openLocal(ctx, req.RepoPath, req.SourceStore, req.AllowCreate)
+	}
+	if err != nil {
+		return createRouteTarget{}, err
+	}
+	if req.autoRouted() {
+		notice.print(target.RepoPath, target.BeadsDir, req.Rule, req.Quiet)
+	}
+	return target, nil
+}
+
+// openLocalCreateTarget opens (and, when allowed, auto-vivifies) the local
+// beads workspace at repoPath. The repo path is expanded before use so the
+// notice reports where the bead actually went rather than "~/..." as typed.
+func openLocalCreateTarget(ctx context.Context, repoPath string, source storage.DoltStorage, allowCreate bool) (createRouteTarget, error) {
+	targetRepo := routing.ExpandPath(repoPath)
+	debug.Logf("DEBUG: Routing to target repo: %s\n", targetRepo)
+
+	beadsDir, err := ensureBeadsDirForPath(ctx, targetRepo, source, allowCreate)
+	if err != nil {
+		return createRouteTarget{}, fmt.Errorf("failed to initialize target repo: %w", err)
+	}
+	targetStore, err := newDoltStoreFromConfig(ctx, beadsDir)
+	if err != nil {
+		return createRouteTarget{}, fmt.Errorf("failed to open target store: %w", err)
+	}
+	return createRouteTarget{Store: targetStore, RepoPath: targetRepo, BeadsDir: beadsDir}, nil
+}
+
+// openRemoteCreateTarget opens a clone of a dolt remote in the local cache.
+// The cache entry directory is the workspace the bead is written to, so it is
+// what the notice reports; the returned cache is kept for the post-write push.
+func openRemoteCreateTarget(ctx context.Context, remoteURL string) (createRouteTarget, error) {
+	remoteCache, err := remotecache.DefaultCache()
+	if err != nil {
+		return createRouteTarget{}, fmt.Errorf("failed to initialize remote cache: %w", err)
+	}
+	cacheDir, err := remoteCache.Ensure(ctx, remoteURL)
+	if err != nil {
+		return createRouteTarget{}, fmt.Errorf("failed to sync remote %s: %w", remoteURL, err)
+	}
+	targetStore, err := remoteCache.OpenStore(ctx, remoteURL, newDoltStoreFromConfig)
+	if err != nil {
+		return createRouteTarget{}, fmt.Errorf("failed to open remote store: %w", err)
+	}
+	return createRouteTarget{Store: targetStore, RepoPath: remoteURL, BeadsDir: cacheDir, RemoteCache: remoteCache}, nil
+}
+
+// createRoutingNotice emits the auto-routed-create notice at most once per
+// process, so a script that creates several beads isn't told the same thing
+// for every bead. The writer and once guard live on the value rather than in
+// package globals so a test can create one per case instead of resetting
+// shared state.
+type createRoutingNotice struct {
+	once sync.Once
+	out  io.Writer // nil means os.Stderr, so captureStderr still sees it
+}
+
+// createRouteNotice is the process-wide notice for auto-routed creates.
+var createRouteNotice = &createRoutingNotice{}
+
+// print records that the bead goes to targetRepo (store beadsDir) because the
+// matched routing rule routed the write there. quiet suppresses it, matching
+// printContributorRoutingNotice's handling of --quiet (documented as
+// "Suppress non-essential output (errors only)", cmd/bd/main.go).
+func (n *createRoutingNotice) print(targetRepo, beadsDir string, rule routing.RoutingRule, quiet bool) {
+	if quiet || targetRepo == "" || targetRepo == "." {
 		return
 	}
-	createRoutingNoticeOnce.Do(func() {
-		reason, fix := routingNoticeText(rule)
-		fmt.Fprintf(os.Stderr, "note: auto-routed create: the bead goes to %s (workspace %s); %s. Fix: %s\n",
+	n.once.Do(func() {
+		out := n.out
+		if out == nil {
+			out = os.Stderr
+		}
+		reason, fix := createRoutingNoticeText(rule)
+		fmt.Fprintf(out, "note: auto-routed create: the bead goes to %s (workspace %s); %s. Fix: %s\n",
 			targetRepo, beadsDir, reason, fix)
 	})
 }

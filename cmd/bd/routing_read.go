@@ -98,27 +98,51 @@ func determineAutoRoutedRepoPath(ctx context.Context, store storage.DoltStorage)
 	return routing.DetermineTargetRepoWithRule(routingConfig, userRole, ".")
 }
 
-// routingNoticeText returns the stderr note and remediation command for the
-// given routing rule, so the notice always attributes the swap to the rule
-// that actually matched instead of hardcoding the contributor-role case.
-func routingNoticeText(rule routing.RoutingRule) (reason, fix string) {
+// routingRuleSource returns the routing clause that matched and the command
+// that undoes it. Both the read notice (bd list/ready) and the create notice
+// build their sentence on this, so the rule names and fixes are defined once.
+func routingRuleSource(rule routing.RoutingRule) (source, fix string) {
 	switch rule {
 	case routing.RuleContributor:
 		// The contributor rule fires on explicit beads.role=contributor OR on
 		// origin-URL inference with beads.role unset — don't claim the config
 		// key is set when it may not be.
-		return "contributor routing (beads.role=contributor, or inferred from the origin URL) routes bd list/ready to the contributor planning store, not this project",
+		return "contributor routing (beads.role=contributor, or inferred from the origin URL)",
 			"git config beads.role maintainer"
 	case routing.RuleMaintainer:
-		return "routing.maintainer routes bd list/ready to a different planning store than this project",
-			"bd config unset routing.maintainer"
+		return "routing.maintainer", "bd config unset routing.maintainer"
 	case routing.RuleDefault:
-		return "routing.default routes bd list/ready to a different planning store than this project",
-			"bd config unset routing.default"
+		return "routing.default", "bd config unset routing.default"
 	default:
-		return "an auto-routing rule sends bd list/ready to a different planning store than this project",
-			"bd config get routing.mode routing.contributor routing.maintainer routing.default"
+		return "an auto-routing rule", "bd config get routing.mode routing.contributor routing.maintainer routing.default"
 	}
+}
+
+// routingNoticeText returns the stderr note and remediation command for the
+// given routing rule, so the notice always attributes the swap to the rule
+// that actually matched instead of hardcoding the contributor-role case.
+func routingNoticeText(rule routing.RoutingRule) (reason, fix string) {
+	source, fix := routingRuleSource(rule)
+	switch rule {
+	case routing.RuleContributor:
+		return source + " routes bd list/ready to the contributor planning store, not this project", fix
+	case routing.RuleMaintainer, routing.RuleDefault:
+		return source + " routes bd list/ready to a different planning store than this project", fix
+	default:
+		return source + " sends bd list/ready to a different planning store than this project", fix
+	}
+}
+
+// createRoutingNoticeText is the write-side sibling of routingNoticeText: the
+// same source clause and fix, but it names `bd create` and the workspace the
+// bead is written to, which a read-side "bd list/ready" sentence would
+// misdescribe.
+func createRoutingNoticeText(rule routing.RoutingRule) (reason, fix string) {
+	source, fix := routingRuleSource(rule)
+	if rule == routing.RuleContributor {
+		return source + " routes bd create to the contributor planning store, not this project", fix
+	}
+	return source + " routes bd create to a different workspace than this project", fix
 }
 
 // printContributorRoutingNotice tells the user that `bd list`/`bd ready` are
