@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
+	"github.com/steveyegge/beads/internal/git"
 )
 
 // setupRedirectWorkspaces builds the two-workspace fixture be-qm8.2.2 needs:
@@ -81,6 +83,15 @@ func TestPreserveRedirectSourceDatabaseOnlyForSelectedWorkspace(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Chdir(cwdRepo)
+			// git.GetRepoRoot is cached once per process; other tests in this
+			// package populate it with their own tree, so it must be cleared
+			// after the chdir and again when this subtest ends.
+			beads.ResetCaches()
+			git.ResetCaches()
+			t.Cleanup(func() {
+				beads.ResetCaches()
+				git.ResetCaches()
+			})
 			t.Setenv("BEADS_DIR", tt.beadsDir)
 			t.Setenv("BEADS_DOLT_SERVER_DATABASE", "")
 			t.Setenv("BEADS_DOLT_SERVER_HOST", "")
@@ -122,6 +133,51 @@ func TestPreserveRedirectSourceDatabaseOnlyForSelectedWorkspace(t *testing.T) {
 			}
 			if notApplied != wantLines {
 				t.Errorf("got %d [routing] not-applied lines, want %d\nstderr:\n%s", notApplied, wantLines, stderr)
+			}
+		})
+	}
+}
+
+// TestRedirectLeadsToWorkspace pins the comparison the pre-run applies. Both
+// producers (GetRedirectInfo and FindBeadsDir) canonicalise their results, so
+// this helper is the only seam that can drive the symlink resolution and the
+// "cannot resolve" refusals: a path that does not resolve is not the workspace
+// and the redirect source database must not be applied to it.
+func TestRedirectLeadsToWorkspace(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real-workspace")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatalf("mkdir real workspace: %v", err)
+	}
+	linkedDir := filepath.Join(root, "linked-workspace")
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Fatalf("symlink workspace: %v", err)
+	}
+	otherDir := filepath.Join(root, "other-workspace")
+	if err := os.Mkdir(otherDir, 0o700); err != nil {
+		t.Fatalf("mkdir other workspace: %v", err)
+	}
+	missing := filepath.Join(root, "missing-workspace")
+
+	tests := []struct {
+		name           string
+		redirectTarget string
+		workspaceDir   string
+		want           bool
+	}{
+		{name: "same directory", redirectTarget: realDir, workspaceDir: realDir, want: true},
+		{name: "workspace reached through a symlink", redirectTarget: realDir, workspaceDir: linkedDir, want: true},
+		{name: "redirect target reached through a symlink", redirectTarget: linkedDir, workspaceDir: realDir, want: true},
+		{name: "different directories", redirectTarget: realDir, workspaceDir: otherDir, want: false},
+		{name: "redirect target does not resolve", redirectTarget: missing, workspaceDir: realDir, want: false},
+		{name: "workspace does not resolve", redirectTarget: realDir, workspaceDir: missing, want: false},
+		{name: "neither path resolves", redirectTarget: missing, workspaceDir: missing, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redirectLeadsToWorkspace(tt.redirectTarget, tt.workspaceDir); got != tt.want {
+				t.Errorf("redirectLeadsToWorkspace(%q, %q) = %v, want %v", tt.redirectTarget, tt.workspaceDir, got, tt.want)
 			}
 		})
 	}

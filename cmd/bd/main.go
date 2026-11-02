@@ -1217,20 +1217,29 @@ var rootCmd = &cobra.Command{
 		// BEADS_DIR set, GetRedirectInfo still reports the cwd repo's redirect
 		// (bd-wayc3); applying it unconditionally opened the cwd repo's
 		// database for a command aimed at BEADS_DIR's workspace (be-qm8.2.2).
+		//
+		// selectedBeadsDir is kept for the binding block below: FindBeadsDir
+		// walks the tree (and asks git) on every call, and nothing between the
+		// two blocks changes discovery within one command.
+		var selectedBeadsDir string
+		selectedBeadsDirKnown := false
 		if dbPath == "" {
-			redirect := beads.GetRedirectInfo()
-			if redirect.IsRedirected {
-				workspaceDir := beads.FindBeadsDir()
-				if redirectLeadsToWorkspace(redirect.TargetDir, workspaceDir) {
+			if redirect := beads.GetRedirectInfo(); redirect.IsRedirected {
+				selectedBeadsDir = beads.FindBeadsDir()
+				selectedBeadsDirKnown = true
+				if redirectLeadsToWorkspace(redirect.TargetDir, selectedBeadsDir) {
 					preserveRedirectSourceDatabase(redirect.LocalDir)
 				} else if os.Getenv("BD_DEBUG_ROUTING") != "" {
-					fmt.Fprintf(os.Stderr, "[routing] Redirect source dolt_database from %s not applied: redirect target %s and selected workspace %s do not resolve to the same directory\n", redirect.LocalDir, redirect.TargetDir, workspaceDir)
+					fmt.Fprintf(os.Stderr, "[routing] Redirect source dolt_database from %s not applied: redirect target %s and selected workspace %s do not resolve to the same directory\n", redirect.LocalDir, redirect.TargetDir, selectedBeadsDir)
 				}
 			}
 		}
 
 		if dbPath == "" {
-			if bd := beads.FindBeadsDir(); bd != "" {
+			if !selectedBeadsDirKnown {
+				selectedBeadsDir = beads.FindBeadsDir()
+			}
+			if bd := selectedBeadsDir; bd != "" {
 				// Bind the discovered target before admission so the legacy guard
 				// honors its config.yaml (including dolt.shared-server), not the
 				// caller's. This setup is read-only: metadata discovery below still
