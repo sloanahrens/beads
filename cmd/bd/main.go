@@ -499,6 +499,25 @@ func preserveRedirectSourceDatabase(beadsDir string) {
 	}
 }
 
+// redirectLeadsToWorkspace reports whether a .beads/redirect target resolves
+// to the workspace a command will use. Both paths are canonicalised with
+// filepath.EvalSymlinks: BEADS_DIR may name the same directory through a
+// symlink, and a textual comparison would then treat one workspace as two.
+//
+// A path that cannot be resolved is not the workspace: the caller drops the
+// redirect source database name rather than applying it to the wrong workspace.
+func redirectLeadsToWorkspace(redirectTarget, workspaceDir string) bool {
+	resolvedTarget, err := filepath.EvalSymlinks(redirectTarget)
+	if err != nil {
+		return false
+	}
+	resolvedWorkspace, err := filepath.EvalSymlinks(workspaceDir)
+	if err != nil {
+		return false
+	}
+	return resolvedTarget == resolvedWorkspace
+}
+
 func selectedNoDBBeadsDir(cmd *cobra.Command) string {
 	if cmd != nil && cmd.Root() != nil && cmd.Root().PersistentFlags().Changed("db") && dbPath != "" {
 		if selectedBeadsDir := resolveCommandBeadsDir(dbPath); selectedBeadsDir != "" {
@@ -1193,12 +1212,34 @@ var rootCmd = &cobra.Command{
 		// When .beads/redirect points to a shared directory with a different
 		// dolt_database, the source's database name would be lost. Capture it
 		// early and set BEADS_DOLT_SERVER_DATABASE so all store opens use it.
+		//
+		// The name belongs to the workspace the redirect leads to. With
+		// BEADS_DIR set, GetRedirectInfo still reports the cwd repo's redirect
+		// (bd-wayc3); applying it unconditionally opened the cwd repo's
+		// database for a command aimed at BEADS_DIR's workspace (be-qm8.2.2).
+		//
+		// selectedBeadsDir is kept for the binding block below: FindBeadsDir
+		// walks the tree (and asks git) on every call, and nothing between the
+		// two blocks changes discovery within one command.
+		var selectedBeadsDir string
+		selectedBeadsDirKnown := false
 		if dbPath == "" {
-			preserveRedirectSourceDatabase(beads.GetRedirectInfo().LocalDir)
+			if redirect := beads.GetRedirectInfo(); redirect.IsRedirected {
+				selectedBeadsDir = beads.FindBeadsDir()
+				selectedBeadsDirKnown = true
+				if redirectLeadsToWorkspace(redirect.TargetDir, selectedBeadsDir) {
+					preserveRedirectSourceDatabase(redirect.LocalDir)
+				} else if os.Getenv("BD_DEBUG_ROUTING") != "" {
+					fmt.Fprintf(os.Stderr, "[routing] Redirect source dolt_database from %s not applied: redirect target %s and selected workspace %s do not resolve to the same directory\n", redirect.LocalDir, redirect.TargetDir, selectedBeadsDir)
+				}
+			}
 		}
 
 		if dbPath == "" {
-			if bd := beads.FindBeadsDir(); bd != "" {
+			if !selectedBeadsDirKnown {
+				selectedBeadsDir = beads.FindBeadsDir()
+			}
+			if bd := selectedBeadsDir; bd != "" {
 				// Bind the discovered target before admission so the legacy guard
 				// honors its config.yaml (including dolt.shared-server), not the
 				// caller's. This setup is read-only: metadata discovery below still
