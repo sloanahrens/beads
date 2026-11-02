@@ -325,7 +325,7 @@ func SharedDoltDir() (string, error) {
 // when shared server mode is on but SharedServerDir fails. The warning is said
 // once per process because every later call would reach the same fallback.
 var (
-	sharedFallbackWarnOnce = &sync.Once{}
+	sharedFallbackWarnOnce           = &sync.Once{}
 	sharedFallbackWarnOut  io.Writer = os.Stderr
 )
 
