@@ -524,13 +524,60 @@ func hasBeadsDatabase(beadsDir string) bool {
 	return workspace.HasDatabase(beadsDir)
 }
 
+// invalidBeadsDirEnvReason explains why the directory BEADS_DIR names is not a
+// usable workspace, or returns "" when it is one. It is the validation
+// FindBeadsDir applies to BEADS_DIR (bd-420).
+func invalidBeadsDirEnvReason(beadsDir string) string {
+	info, err := os.Stat(beadsDir)
+	switch {
+	case os.IsNotExist(err):
+		return "it does not exist"
+	case err != nil:
+		return "it cannot be read"
+	case !info.IsDir():
+		return "it is not a directory"
+	case !HasBeadsProjectFiles(beadsDir):
+		return "it holds no workspace files"
+	}
+	return ""
+}
+
+// invalidBeadsDirEnvWarned guards the one stderr line announcing that BEADS_DIR
+// was rejected: FindBeadsDir runs many times per process, and the line is said
+// once (be-qm8.2.1).
+var invalidBeadsDirEnvWarned sync.Once
+
+// warnRejectedBeadsDirEnv says once per process that BEADS_DIR named a
+// directory that is not a workspace, and which directory discovery used
+// instead. Discovery keeps falling back as it always has (bd-420); this line
+// makes the substitution visible. It does nothing when BEADS_DIR was not
+// rejected (reason == "").
+func warnRejectedBeadsDirEnv(beadsDir, reason, found string) {
+	if reason == "" {
+		return
+	}
+	invalidBeadsDirEnvWarned.Do(func() {
+		if found == "" {
+			found = "no workspace"
+		}
+		fmt.Fprintf(os.Stderr, "warning: BEADS_DIR=%s is not a beads workspace (%s); using %s from the current directory\n", beadsDir, reason, found)
+	})
+}
+
+// resetRejectedBeadsDirEnvWarning clears the once-per-process guard so a test
+// can observe the warning afresh.
+func resetRejectedBeadsDirEnvWarning() {
+	invalidBeadsDirEnvWarned = sync.Once{}
+}
+
 // FindBeadsDir finds the .beads/ directory for the process working directory.
 // Returns empty string if not found.
 //
 // Resolution order:
 //  1. BEADS_DIR environment variable (highest priority). A value that does not
 //     name an existing directory holding workspace files is ignored and
-//     discovery continues from CWD.
+//     discovery continues from CWD. The substitution is announced once per
+//     process on stderr (be-qm8.2.1).
 //  2. workspace.Discover(cwd): walk up from CWD, following each
 //     .beads/redirect, bounded by the nearest repo root -- a directory holding
 //     .git or .jj, checked itself -- or by the filesystem root when CWD is
@@ -547,11 +594,16 @@ func hasBeadsDatabase(beadsDir string) bool {
 // belongs to, and an ancestor workspace must not stand in for it.
 func FindBeadsDir() string {
 	// 1. BEADS_DIR, validated: a directory without workspace files is skipped
-	// rather than returned (bd-420).
+	// rather than returned (bd-420). Skipping it means step 2 may run against a
+	// different workspace than the caller named, so the rejection is said
+	// outright rather than left silent (be-qm8.2.1).
+	rejectedDir, rejectedReason := "", ""
 	if absBeadsDir, set := beadsDirFromEnv(); set {
-		if info, err := os.Stat(absBeadsDir); err == nil && info.IsDir() && HasBeadsProjectFiles(absBeadsDir) {
+		rejectedReason = invalidBeadsDirEnvReason(absBeadsDir)
+		if rejectedReason == "" {
 			return absBeadsDir
 		}
+		rejectedDir = absBeadsDir
 	}
 
 	// 2. Discovery from CWD through the shared walk. The strict follower
@@ -560,13 +612,16 @@ func FindBeadsDir() string {
 	// ancestor workspace.
 	cwd, err := os.Getwd()
 	if err != nil {
+		warnRejectedBeadsDirEnv(rejectedDir, rejectedReason, "")
 		return ""
 	}
 	source, resolved, err := workspace.Discover(cwd, followRedirectStrict)
 	if err != nil {
 		warnBrokenRedirectInWalk(source, err)
+		warnRejectedBeadsDirEnv(rejectedDir, rejectedReason, "")
 		return ""
 	}
+	warnRejectedBeadsDirEnv(rejectedDir, rejectedReason, resolved)
 	return resolved
 }
 

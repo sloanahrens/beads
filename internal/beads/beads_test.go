@@ -537,6 +537,120 @@ func TestFindBeadsDirValidatesBeadsDirEnv(t *testing.T) {
 	}
 }
 
+// TestFindBeadsDirWarnsOnRejectedBeadsDirEnv covers be-qm8.2.1: a BEADS_DIR
+// that names no workspace is still skipped and discovery still falls back to
+// the cwd workspace (bd-420), but the substitution is announced on stderr with
+// the reason and the directory discovery used. A valid BEADS_DIR is silent and
+// returned as before.
+func TestFindBeadsDirWarnsOnRejectedBeadsDirEnv(t *testing.T) {
+	tmpDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cwdDir := filepath.Join(tmpDir, "cwd")
+	cwdWorkspace := filepath.Join(cwdDir, ".beads")
+	if err := os.MkdirAll(cwdWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFiles(t, cwdWorkspace, "metadata.json")
+
+	emptyDir := filepath.Join(tmpDir, "empty")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	filePath := filepath.Join(tmpDir, "not-a-directory")
+	if err := os.WriteFile(filePath, []byte("not a workspace"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	validWorkspace := filepath.Join(tmpDir, "valid", ".beads")
+	if err := os.MkdirAll(validWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFiles(t, validWorkspace, "metadata.json")
+
+	tests := []struct {
+		name     string
+		beadsDir string
+		reason   string
+	}{
+		{"missing directory", filepath.Join(tmpDir, "does-not-exist"), "it does not exist"},
+		{"not a directory", filePath, "it is not a directory"},
+		{"unreadable path", filepath.Join(filePath, "child"), "it cannot be read"},
+		{"no workspace files", emptyDir, "it holds no workspace files"},
+		{"valid workspace", validWorkspace, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(cwdDir)
+			t.Setenv("BEADS_DIR", tt.beadsDir)
+			resetRejectedBeadsDirEnvWarning()
+
+			var got string
+			stderr := captureStderr(t, func() { got = FindBeadsDir() })
+
+			wantDir := cwdWorkspace
+			if tt.reason == "" {
+				wantDir = validWorkspace
+			}
+			if got != wantDir {
+				t.Errorf("FindBeadsDir() = %q, want %q", got, wantDir)
+			}
+			if tt.reason == "" {
+				if stderr != "" {
+					t.Errorf("valid BEADS_DIR printed %q, want no warning", stderr)
+				}
+				return
+			}
+			want := "warning: BEADS_DIR=" + tt.beadsDir + " is not a beads workspace (" +
+				tt.reason + "); using " + wantDir + " from the current directory\n"
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+			}
+			if n := strings.Count(stderr, "warning: BEADS_DIR="); n != 1 {
+				t.Errorf("warning printed %d times, want once; stderr = %q", n, stderr)
+			}
+		})
+	}
+}
+
+// TestFindBeadsDirWarnsOnRejectedBeadsDirEnvOnce verifies the rejection line
+// is said once per process, not once per FindBeadsDir call (be-qm8.2.1).
+func TestFindBeadsDirWarnsOnRejectedBeadsDirEnvOnce(t *testing.T) {
+	tmpDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cwdDir := filepath.Join(tmpDir, "cwd")
+	cwdWorkspace := filepath.Join(cwdDir, ".beads")
+	if err := os.MkdirAll(cwdWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFiles(t, cwdWorkspace, "metadata.json")
+
+	missingDir := filepath.Join(tmpDir, "does-not-exist")
+	t.Chdir(cwdDir)
+	t.Setenv("BEADS_DIR", missingDir)
+	resetRejectedBeadsDirEnvWarning()
+
+	var first, second string
+	stderr := captureStderr(t, func() {
+		first = FindBeadsDir()
+		second = FindBeadsDir()
+	})
+
+	if first != cwdWorkspace || second != cwdWorkspace {
+		t.Fatalf("FindBeadsDir() = %q then %q, want %q both times", first, second, cwdWorkspace)
+	}
+	if n := strings.Count(stderr, "warning: BEADS_DIR="); n != 1 {
+		t.Errorf("warning printed %d times, want once; stderr = %q", n, stderr)
+	}
+}
+
 func TestFindBeadsDirPrefersBranchWorktreeForDetachedCommitBEADS_DIR(t *testing.T) {
 	originalEnv := os.Getenv("BEADS_DIR")
 	defer func() {
