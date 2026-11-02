@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -328,6 +329,7 @@ var createCmd = &cobra.Command{
 
 		// Determine target repository using routing logic
 		repoPath := "." // default to current directory
+		routingRule := routing.RuleNone
 		if cmd.Flags().Changed("repo") {
 			// Explicit --repo flag overrides auto-routing
 			repoPath = repoOverride
@@ -366,7 +368,10 @@ var createCmd = &cobra.Command{
 				ExplicitOverride: repoOverride,
 			}
 
-			repoPath = routing.DetermineTargetRepo(routingConfig, userRole, ".")
+			// Keep the matched rule so the notice below can name the rule
+			// that actually routed the write, instead of always blaming the
+			// contributor role (see printCreateRoutingNotice).
+			repoPath, routingRule = routing.DetermineTargetRepoWithRule(routingConfig, userRole, ".")
 		}
 
 		renderDryRun := func() error {
@@ -446,6 +451,12 @@ var createCmd = &cobra.Command{
 				if err != nil {
 					return HandleError("failed to open target store: %v", err)
 				}
+
+				// stdout reports only "Created issue: <id>", so a bead that
+				// auto-routed into another workspace's database is otherwise
+				// indistinguishable from a local one. Say where it went and
+				// which rule sent it there before the write.
+				printCreateRoutingNotice(targetBeadsDir, targetBeadsDirPath, routingRule)
 			}
 
 			// Close the original store before replacing it (it won't be used anymore)
@@ -978,6 +989,37 @@ func openDryRunTargetStore(ctx context.Context, repoPath string) (storage.DoltSt
 // instead of erroring (bd-8d3f).
 func isAmbiguousRepoTarget(repoFlagChanged bool, repoOverride string) bool {
 	return repoFlagChanged && !filepath.IsAbs(repoOverride) && !strings.HasPrefix(repoOverride, "~/")
+}
+
+// createRoutingNoticeOnce limits the auto-routed create notice to one line per
+// process, so a script that creates several beads doesn't repeat the same
+// routing advice for every bead.
+var createRoutingNoticeOnce sync.Once
+
+// resetCreateRoutingNoticeOnce restores the notice's once guard so tests can
+// exercise each routing rule in a single process.
+func resetCreateRoutingNoticeOnce() { createRoutingNoticeOnce = sync.Once{} }
+
+// printCreateRoutingNotice tells the user that a `bd create` without --repo
+// auto-routed the write to another workspace. targetRepo is the expanded repo
+// path the write goes to, beadsDir is the .beads directory actually opened
+// (after redirect following), and rule is the routing clause that matched.
+// Without the notice, stdout's "Created issue: <id>" looks the same whether
+// the bead landed locally or in a routed workspace's database.
+//
+// The reason and fix wording comes from routingNoticeText, the same source the
+// read notice (bd list/ready) uses, so rule names and remediation commands are
+// defined once. Like the read notice, this respects --quiet: --quiet is
+// documented as "Suppress non-essential output (errors only)".
+func printCreateRoutingNotice(targetRepo, beadsDir string, rule routing.RoutingRule) {
+	if quietFlag || targetRepo == "" || targetRepo == "." {
+		return
+	}
+	createRoutingNoticeOnce.Do(func() {
+		reason, fix := routingNoticeText(rule)
+		fmt.Fprintf(os.Stderr, "note: auto-routed create: the bead goes to %s (workspace %s); %s. Fix: %s\n",
+			targetRepo, beadsDir, reason, fix)
+	})
 }
 
 // ensureBeadsDirForPath ensures a beads directory exists at the target path,
