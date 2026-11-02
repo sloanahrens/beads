@@ -278,11 +278,145 @@ func TestRunHookGroupSignalRefusedEnumerationError(t *testing.T) {
 	}
 }
 
+// TestKillTimedOutHook pins the timeout kill's dispatch with an injected
+// killer and lister, so no real process is started: the group signal goes
+// first, only EPERM takes the per-member path, and every refusal on that path
+// is returned rather than swallowed. Every signal is recorded, so a path that
+// falls back when it should not, or signals a pid the table did not offer, is
+// visible.
+func TestKillTimedOutHook(t *testing.T) {
+	const hookPid = 4242
+	errEnum := errors.New("unreadable process table")
+	errSignal := errors.New("signal refused")
+
+	tests := []struct {
+		name        string
+		groupErr    error
+		listErr     error
+		members     []int
+		hookErr     error
+		memberErr   func(pid int) error
+		wantSignals []int
+		wantList    bool
+		wantErr     string
+		wantCause   error
+	}{
+		{
+			name:        "group signal succeeds",
+			wantSignals: []int{-hookPid},
+		},
+		{
+			name:        "group signal answers ESRCH",
+			groupErr:    syscall.ESRCH,
+			wantSignals: []int{-hookPid},
+		},
+		{
+			name:        "group signal answers another error",
+			groupErr:    syscall.EACCES,
+			wantSignals: []int{-hookPid},
+			wantErr:     "kill process group",
+			wantCause:   syscall.EACCES,
+		},
+		{
+			name:        "EPERM signals the hook and every member",
+			groupErr:    syscall.EPERM,
+			members:     []int{11, 12},
+			wantSignals: []int{-hookPid, hookPid, 11, 12},
+			wantList:    true,
+		},
+		{
+			name:        "EPERM with an unreadable listing",
+			groupErr:    syscall.EPERM,
+			listErr:     errEnum,
+			wantSignals: []int{-hookPid, hookPid},
+			wantList:    true,
+			wantErr:     "kill process group members",
+			wantCause:   errEnum,
+		},
+		{
+			name:        "EPERM with the hook's own signal refused",
+			groupErr:    syscall.EPERM,
+			hookErr:     errSignal,
+			members:     []int{11},
+			wantSignals: []int{-hookPid, hookPid, 11},
+			wantList:    true,
+			wantErr:     "kill hook",
+			wantCause:   errSignal,
+		},
+		{
+			name:     "EPERM with a member that survives",
+			groupErr: syscall.EPERM,
+			members:  []int{11, 12},
+			memberErr: func(pid int) error {
+				if pid == 11 {
+					return errSignal
+				}
+				return nil
+			},
+			wantSignals: []int{-hookPid, hookPid, 11, 12},
+			wantList:    true,
+			wantErr:     "kill member 11",
+			wantCause:   errSignal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var signals []int
+			listCalls := 0
+			runner := &Runner{
+				signalKill: func(pid int, sig syscall.Signal) error {
+					signals = append(signals, pid)
+					if pid < 0 {
+						return tt.groupErr
+					}
+					if pid == hookPid {
+						return tt.hookErr
+					}
+					if tt.memberErr != nil {
+						return tt.memberErr(pid)
+					}
+					return nil
+				},
+				groupMembers: func(int) ([]int, error) {
+					listCalls++
+					if tt.listErr != nil {
+						return nil, tt.listErr
+					}
+					return tt.members, nil
+				},
+			}
+
+			err := runner.killTimedOutHook(hookPid)
+
+			if !slices.Equal(signals, tt.wantSignals) {
+				t.Errorf("signals = %v, want %v", signals, tt.wantSignals)
+			}
+			if listCalled := listCalls > 0; listCalled != tt.wantList {
+				t.Errorf("process table read = %v, want %v", listCalled, tt.wantList)
+			}
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("killTimedOutHook = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("killTimedOutHook = %v, want %q", err, tt.wantErr)
+			}
+			if !errors.Is(err, tt.wantCause) {
+				t.Errorf("killTimedOutHook = %v, want it to wrap %v", err, tt.wantCause)
+			}
+		})
+	}
+}
+
 // TestKillGroupMembers pins the member sweep's edges: every member is
 // signalled, a member that already exited (ESRCH) is not an error, a member
 // forked after the sweep that listed it is caught by the next sweep, one
-// refused member does not stop the rest, a failed enumeration is returned, and
-// a group that keeps producing members is reported rather than swept forever.
+// refused member does not stop the rest, a non-positive entry from the table
+// is reported and never signalled, a failed enumeration is returned, and a
+// group that keeps producing members is reported rather than swept forever.
 func TestKillGroupMembers(t *testing.T) {
 	errEnum := errors.New("unreadable process table")
 	errSignal := errors.New("signal refused")
@@ -332,6 +466,13 @@ func TestKillGroupMembers(t *testing.T) {
 			},
 			want:    []int{11, 12},
 			wantErr: "kill member 11",
+		},
+		{
+			name:    "a non-positive member is refused",
+			members: []int{11, -12, 0},
+			signal:  func(int) error { return nil },
+			want:    []int{11},
+			wantErr: "non-positive pid",
 		},
 		{
 			name:    "members keep appearing",
