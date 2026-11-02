@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -320,14 +321,40 @@ func SharedDoltDir() (string, error) {
 	return dir, nil
 }
 
+// sharedFallbackWarnOnce and sharedFallbackWarnOut carry the warning printed
+// when shared server mode is on but SharedServerDir fails. The warning is said
+// once per process because every later call would reach the same fallback.
+var (
+	sharedFallbackWarnOnce           = &sync.Once{}
+	sharedFallbackWarnOut  io.Writer = os.Stderr
+)
+
+// resetSharedFallbackWarn restores the warning state and redirects its output.
+// It exists for tests, which must not depend on whether an earlier call in the
+// same process already printed the warning.
+func resetSharedFallbackWarn(w io.Writer) {
+	sharedFallbackWarnOnce = &sync.Once{}
+	if w == nil {
+		w = os.Stderr
+	}
+	sharedFallbackWarnOut = w
+}
+
 // resolveServerDir returns the canonical server directory for dolt state files.
 // In shared server mode, returns ~/.beads/shared-server/ instead of the
-// project's .beads/ directory.
+// project's .beads/ directory. If the shared directory is unavailable, it falls
+// back to beadsDir and warns once per process: that fallback puts this project's
+// data on its own server, where the shared server cannot reach it.
 func resolveServerDir(beadsDir string) string {
 	if IsSharedServerMode() {
 		dir, err := SharedServerDir()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: shared server directory unavailable, using per-project mode: %v\n", err)
+			sharedFallbackWarnOnce.Do(func() {
+				fmt.Fprintf(sharedFallbackWarnOut,
+					"Warning: shared server directory unavailable (%v); using per-project mode with %s. "+
+						"This project's data is not on the shared server and is not reachable from other projects.\n",
+					err, beadsDir)
+			})
 			return beadsDir
 		}
 		return dir
