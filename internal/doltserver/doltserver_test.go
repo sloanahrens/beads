@@ -1,6 +1,7 @@
 package doltserver
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -1467,6 +1468,63 @@ func TestResolveServerDir_SharedMode(t *testing.T) {
 	expected := filepath.Join(home, ".beads", "shared-server")
 	if result != expected {
 		t.Errorf("resolveServerDir with shared mode = %q, want %q", result, expected)
+	}
+}
+
+// A shared-server failure keeps the per-project fallback, but the warning names
+// the error and the directory, and says the project's data is off the shared
+// server. Two calls print it once.
+func TestResolveServerDir_SharedFallbackWarnsOnce(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	sharedDir := filepath.Join(blocker, "shared-server")
+	t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
+	t.Setenv("BEADS_SHARED_SERVER_DIR", sharedDir)
+
+	var out bytes.Buffer
+	resetSharedFallbackWarn(&out)
+	t.Cleanup(func() { resetSharedFallbackWarn(nil) })
+
+	beadsDir := "/some/project/.beads"
+	for i := 0; i < 2; i++ {
+		if got := resolveServerDir(beadsDir); got != beadsDir {
+			t.Fatalf("call %d: resolveServerDir = %q, want fallback %q", i+1, got, beadsDir)
+		}
+	}
+
+	line := out.String()
+	if n := strings.Count(line, "shared server directory unavailable"); n != 1 {
+		t.Fatalf("warning printed %d times, want once; output:\n%s", n, line)
+	}
+	for _, want := range []string{
+		"cannot create shared server directory", // the failing error
+		sharedDir,                               // what could not be created
+		beadsDir,                                // the per-project directory now used
+		"not reachable from other projects",     // the consequence
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("warning does not mention %q; output:\n%s", want, line)
+		}
+	}
+}
+
+// A shared directory that resolves leaves the warning silent.
+func TestResolveServerDir_SharedModeQuiet(t *testing.T) {
+	sharedDir := t.TempDir()
+	t.Setenv("BEADS_DOLT_SHARED_SERVER", "1")
+	t.Setenv("BEADS_SHARED_SERVER_DIR", sharedDir)
+
+	var out bytes.Buffer
+	resetSharedFallbackWarn(&out)
+	t.Cleanup(func() { resetSharedFallbackWarn(nil) })
+
+	if got := resolveServerDir("/some/project/.beads"); got != sharedDir {
+		t.Fatalf("resolveServerDir = %q, want shared dir %q", got, sharedDir)
+	}
+	if out.Len() != 0 {
+		t.Errorf("shared dir available but warning printed: %q", out.String())
 	}
 }
 
