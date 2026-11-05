@@ -24,16 +24,18 @@ Limits, stated once:
 - Each tool call is written about twice in the transcript files. The table gives distinct commands (deduplicated on the verb plus the next 45 characters), which undercounts repeated identical calls and is the number to read. A raw line count is in the last column of the table.
 - Only Bash tool calls are counted. A verb run inside a script the agent did not type, or by a Go `exec.Command` that builds its argv from variables, is not seen. Source G found none for these verbs.
 - Calls by absolute path (`.../bd defer`) were checked separately: 3 hits, all prose.
-- Classification of each match is by the token after the verb: an id, `$var`, `2>&1` or a flag counts as an execution; `--help` as a help probe; a plain word as prose (the verb was mentioned in a note, a grep pattern or an echo label). This is a heuristic. I read the 18 town matches and corrected the heuristic by hand in two places: `bd audit --actor, ...` is prose (so `audit` has no executions), and `bd unclaim --force before redispatch` and `bd defer --until now wakes` are prose (one each off the `unclaim` and `defer` counts). The overseer and bird matches (250 lines) were classified by the heuristic and spot-read, not read line by line.
+- Classification of each match is by the token after the verb, by the rules in `classify2.awk` below: an id, `$var`, `2>&1` or a flag counts as an execution; `--help` as a help probe; a plain word as prose. Seven matches that the rules call an execution are sentences; the awk forces them to prose, and they are the only hand step. I read every line classed as an execution for the nine verbs that have any. The sample check of the overseer and bird lines is therefore complete for executions; prose and help lines were not read one by one.
 
 ## Commands that produced the counts
 
 ```
-C1  find ~/gt/.claude-town/projects -name '*.jsonl' -mtime -31 -print0 | xargs -0 grep -a -h -o -E "$RE"
-C2  find ~/.claude/projects        -name '*.jsonl' -mtime -31 -print0 | xargs -0 grep -a -h -o -E "$RE"
-    where RE='"command":"([^"\\]|\\.)*((^|[ ;&|("])|\\[nt])bd (VERBS)[ \\"].{0,45}'
-    and VERBS is the 36 names joined with |
-C3  sort -u | awk -f classify.awk | sort | uniq -c      (classify.awk is printed below)
+    V=$(paste -sd'|' verbs.txt)      # the 36 verb names, one per line in verbs.txt
+    RE='"command":"([^"\\\\]|\\\\.)*((^|[ ;&|("])|\\\\[nt])bd ('"$V"')[ \\\\"].{0,45}'
+C1  find ~/gt/.claude-town/projects -name '*.jsonl' -mtime -31 -print0 | xargs -0 grep -a -h -o -E "$RE" > c1-t.txt
+C2  find ~/.claude/projects        -name '*.jsonl' -mtime -31 -print0 | xargs -0 grep -a -h -o -E "$RE" > c1-o.txt
+C2b cat c1-t.txt c1-o.txt | grep -a -o -E "bd ($V)[ \\\\\"].{0,45}\$" > c2-raw.txt       # drops the "command":"... prefix, keeps `bd <verb>` plus 45 characters
+C3  sort -u c2-raw.txt | awk -f classify2.awk | sort | uniq -c > c3-distinct.txt     # distinct = verb plus 45 characters, T and O together
+    awk -f classify2.awk c2-raw.txt | sort | uniq -c > c3-raw.txt                    # raw = every matched line
 C4  git -C <gastown clone> grep -n -a -E '(^|[^a-z])bd (VERBS)([ `"'\''\\]|$)' origin/main -- . ':!*.md' ':!docs' ':!*_test.go'
 C5  grep -a -c -E "(^|[ ;\"'])bd (VERBS)( |$)" ~/gt/daemon/daemon.log
 C6  for f in .beads om/mayor/rig/.beads beads/mayor/rig/.beads gastown/mayor/rig/.beads; do   (run in ~/gt)
@@ -42,24 +44,68 @@ C6  for f in .beads om/mayor/rig/.beads beads/mayor/rig/.beads gastown/mayor/rig
     done
 ```
 
-The C3 classifier, in full (its input is the lines `bd <verb> <rest>` that C1 and C2 print; it reads the first word after the verb):
+The C3 classifier `classify2.awk`, in full. Its input is the lines `bd <verb> <rest>` that C2b writes; it reads the first word after the verb. The last `if` is the only hand step in the whole count: five patterns that the rules call an execution but that are sentences, found by reading every line classed as an execution for the verbs `audit`, `comment`, `defer`, `heartbeat`, `provenance`, `statuses`, `supersede`, `undefer` and `unclaim`. They are 7 distinct matches: 2 `audit`, 1 `defer`, 2 `unclaim`, 1 `heartbeat`, 1 `undefer`.
 
 ```
 { verb=$2; rest=$0; sub(/^bd [^ ]+ ?/,"",rest); split(rest,t," "); n=t[1]
   c="prose"
   if (n ~ /^--help/ || n ~ /^-h$/) c="help"
   else if (n ~ /^[a-z]{1,8}-[a-z0-9.]+/ || n ~ /^\$/ || n ~ /^\\"?\$/ || n ~ /^2>/ || n ~ /^--[a-z-]+/ || n ~ /^(list|--json)$/ || rest ~ /^$/ ) c="exec"
+  # hand step: seven matches the rules above call exec that are sentences, read one by one
+  if ($0 ~ /^bd audit --actor/ || $0 ~ /^bd defer --until now wakes/ || $0 ~ /^bd unclaim --force (before|can say)/ || $0 ~ /^bd heartbeat ma-0f3\)/ || $0 ~ /^bd undefer claude-sig\.1\. /) c="prose"
   print verb "\t" c }
 ```
 
-The Command column therefore reproduces a count up to the by-hand corrections listed under "Limits" (3 matches reclassified as prose). Results are exact only for the files present on 2026-11-05; transcript files change.
+Run exactly as printed (the commands above, `verbs.txt` and `classify2.awk` in the current directory) on 2026-11-05, the pipeline gives the per-verb counts in the table, with nothing adjusted afterwards. The working files are in `~/gt/.runtime/dipper/bd-verb/`. Transcript files keep growing, so a later run may show a few more lines.
+
+Literal output of the two C3 commands (`uniq -c`: count, verb, class), so a reader can diff a rerun against the table. `c3-distinct.txt` gives the exec, help and prose columns; the exec lines of `c3-raw.txt` give the raw column.
+
+```
+c3-distinct.txt
+   1 admin	help
+   1 admin	prose
+   1 audit	help
+   3 audit	prose
+   1 comment	exec
+   3 comment	help
+  10 comment	prose
+   1 comment\nqueued:	prose
+  25 defer	exec
+   4 defer	help
+   3 defer	prose
+   1 find-duplicates	help
+   1 flatten	prose
+   3 heartbeat	exec
+   1 heartbeat	help
+   1 heartbeat	prose
+   2 import	prose
+   1 link	prose
+   1 provenance	exec
+   1 rules	prose
+   4 setup	prose
+   1 setup\\|codex-hook\\|cursor-hook'	prose
+   1 stale	help
+   4 statuses	exec
+   4 supersede	exec
+   1 supersede	help
+  28 unclaim	exec
+   3 unclaim	help
+   4 unclaim	prose
+   7 undefer	exec
+   4 undefer	help
+   6 undefer	prose
+
+c3-raw.txt, exec lines only
+```
+
+Two output rows carry a literal `\n` or `\\|` in the verb field (`comment\nqueued:` and `setup\\|codex-hook...`); the table folds them into `comment` (10 + 1 = 11 prose) and `setup` (4 + 1 = 5 prose).
 
 The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it matches, and on `bd show` and `bd comments` (147 and 87 matches in a 40-file sample). The working files are in `~/gt/.runtime/dipper/bd-verb/`.
 
 ## Results by source
 
 - **T (polecats and town seats):** 18 matching lines in 31 days, which is 14 distinct commands after deduplication: 3 executions (`bd comment list <id>` once, written on 3 lines; `bd provenance <id>` once; `bd statuses` once), 4 `--help` probes, 7 prose mentions. The table counts distinct commands; the 18 is the raw line count (5 execution lines, 6 help lines, 7 prose lines). Almost none of the 36 verbs is run by a polecat.
-- **O (overseer, birds, crew):** 250 matching lines, 119 distinct commands before the hand corrections. Real use is concentrated in a few verbs: `unclaim`, `defer`, `undefer`, `supersede`, `heartbeat`, `statuses`.
+- **O (overseer, birds, crew):** 250 matching lines, 119 distinct commands from O alone. Real use is concentrated in a few verbs: `unclaim`, `defer`, `undefer`, `supersede`, `heartbeat`, `statuses`.
 - **G (programs):** a text search finds no call to any of the 36 verbs in code, formulas, templates, plugins or scripts; the hits are comments, a profile comment and recorded event data under `.beads/backup`. A second search for the verb as a quoted Go string found one program that runs verbs through an argv slice: the golden recorder, `cmd/bdshim-record` in the gastown repo (not in the beads repo, so not in this checkout; gastown `origin/main`, paths re-checked at e606d6314). `exec.go` runs `bd import -i <fixture>` to seed its scratch database, and `table.go` lists `defer`, `undefer`, `unclaim` and `comment` as rows it records against a fixture. These are test-tooling calls on a scratch copy, so the table counts them under G and not as agent use. `internal/bdshim` has handlers for the same verbs (`flags.go`, `handlers_*.go`); they answer calls agents make and are not independent evidence of use.
 - **D (daemon log):** 0 hits for all 36 verbs.
 - **A (audit writer):** four interactions files exist (the town `.beads` and the `mayor/rig/.beads` of the beads, gastown and om rigs, read with C6; polecat worktrees were not read). In the 31 days only the beads rig file has lines: 34 entries, all `llm_call` with the actor `test-actor`. I treat `test-actor` as test output, not as real use, because that actor string is what the beads integration tests pass to the store (`cmd/bd/*_integration_test.go`); no other actor appears in the window. Excluding it leaves 0 entries in the window, and the last remaining entry in every file is dated 2026-09-10 (`field_change`, actors `daemon`, `mayor` and the witness and refinery seats). `bd audit` was never executed (one `--help` probe). The writer is still called from `close.go` (`audit.LogFieldChange`).
@@ -76,14 +122,14 @@ The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it ma
 | batch | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd batch` | G 0, D 0, A 0 |
 | comment | 1 | 3 | 11 | 3 | ask | usage alone says delete: 1 distinct execution (`bd comment list <id>`, written on 3 raw lines; a misuse of the singular verb, agents mean `comments`) and 3 distinct `--help` probes (5 raw lines). The tracker shim and the golden recorder still carry it, which is test tooling, not use; the operator decides | C1+C2 piped to C3, filtered on `bd comment` | G 1 (recorder `table.go`), D 0 |
 | conflicts | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd conflicts` | G 0, D 0, A 0 |
-| defer | 24 | 4 | 4 | 56 | keep | used daily by the overseer and birds; the shim has a handler | C1+C2 piped to C3, filtered on `bd defer` | G 1 (recorder `table.go`), D 0 |
+| defer | 25 | 4 | 3 | 56 | keep | used daily by the overseer and birds; the shim has a handler | C1+C2 piped to C3, filtered on `bd defer` | G 1 (recorder `table.go`), D 0 |
 | diff | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd diff` | G 0, D 0, A 0 |
 | duplicate | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd duplicate` | G 0, D 0, A 0 |
 | duplicates | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd duplicates` | G 0, D 0, A 0 |
 | find-duplicates | 0 | 1 | 0 | 0 | delete | one `--help` probe | C1+C2 piped to C3, filtered on `bd find-duplicates` | G 0, D 0, A 0 |
-| flatten | 0 | 0 | 2 | 0 | ask | not run as `bd flatten` in the window; the town flattened Dolt history on 2026-10-25 by a route I did not read | C1+C2 piped to C3, filtered on `bd flatten` | G 0, D 0, A 0 |
+| flatten | 0 | 0 | 1 | 0 | ask | not run as `bd flatten` in the window; the town flattened Dolt history on 2026-10-25 by a route I did not read | C1+C2 piped to C3, filtered on `bd flatten` | G 0, D 0, A 0 |
 | graph | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd graph` | G 0, D 0, A 0 |
-| heartbeat | 4 | 1 | 0 | 9 | keep | run by seats and the overseer; the shim lists the alias `hb` | C1+C2 piped to C3, filtered on `bd heartbeat` | G 0, D 0, A 0 |
+| heartbeat | 3 | 1 | 1 | 7 | keep | run by seats and the overseer; the shim lists the alias `hb` | C1+C2 piped to C3, filtered on `bd heartbeat` | G 0, D 0, A 0 |
 | import | 0 | 0 | 2 | 0 | ask | no agent ran it in the window (2 prose mentions). Only the golden recorder runs `bd import -i`, to seed a scratch database; that is test tooling, not use, so by this doc's criterion it is not a keep. The operator decides whether to keep it for the recorder | C1+C2 piped to C3, filtered on `bd import` | G 1 (recorder, `exec.go`), D 0 |
 | link | 0 | 0 | 1 | 0 | delete | | C1+C2 piped to C3, filtered on `bd link` | G 0, D 0, A 0 |
 | lint | 0 | 0 | 0 | 0 | delete | `gt spec lint` is a different command and is not counted | C1+C2 piped to C3, filtered on `bd lint` | G 0, D 0, A 0 |
@@ -104,8 +150,8 @@ The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it ma
 | swarm | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd swarm` | G 0, D 0, A 0 |
 | tag | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd tag` | G 0, D 0, A 0 |
 | types | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd types` | G 0, D 0, A 0 |
-| unclaim | 29 | 3 | 3 | 63 | keep | most used of the group; the shim has a handler | C1+C2 piped to C3, filtered on `bd unclaim` | G 1 (recorder `table.go`), D 0 |
-| undefer | 8 | 4 | 5 | 16 | keep | the shim has a handler | C1+C2 piped to C3, filtered on `bd undefer` | G 1 (recorder `table.go`), D 0 |
+| unclaim | 28 | 3 | 4 | 59 | keep | most used of the group; the shim has a handler | C1+C2 piped to C3, filtered on `bd unclaim` | G 1 (recorder `table.go`), D 0 |
+| undefer | 7 | 4 | 6 | 14 | keep | the shim has a handler | C1+C2 piped to C3, filtered on `bd undefer` | G 1 (recorder `table.go`), D 0 |
 | `internal/audit` (writer) | | | | | ask | 34 lines in 31 days, all actor `test-actor` (excluded as test output; see A above), so 0 real entries; last real entry 2026-09-10; `close.go` still calls `LogFieldChange` | C6 (interactions.jsonl, last 31 days) | A: 34 test-actor, 0 real |
 
 Totals over the 36 verbs: 25 delete, 6 keep (defer, heartbeat, statuses, supersede, unclaim, undefer), 5 ask (audit, comment, flatten, import, provenance). The `internal/audit` writer is a 37th row and is also ask.
