@@ -20,10 +20,7 @@ import (
 	"github.com/steveyegge/beads/internal/storage/schema"
 )
 
-const (
-	defaultBranch           = "main"
-	defaultProxyIdleTimeout = 30 * time.Second
-)
+const defaultBranch = "main"
 
 type doltSQLProvider struct {
 	defaultBranch string
