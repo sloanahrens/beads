@@ -75,4 +75,4 @@ ranks 1-2), `beads-storage.md` (Delete candidates), `synthesis.md` section 5.
 - [ ] Update docs that name deleted commands so docsync and doc-freshness pass.
 - [ ] Gates by exit code: build, vet, `make ci-pr-lint`, tidy no-diff, `go test -timeout 45m` over touched packages + `./cmd/bd/...`.
 - [ ] `om review -base origin/main`; fix blockers and majors.
-- [ ] Attribution grep empty; `git push origin crew/sloan/be-delete`.
+- [ ] Attribution grep empty; `git push origin crew/operator/be-delete`.
