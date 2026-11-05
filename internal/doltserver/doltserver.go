@@ -1224,8 +1224,7 @@ func EnsureRunningDetailed(beadsDir string) (port int, startedByUs bool, err err
 // trace, debug, info, warning, error, fatal.
 const doltServerLogLevel = "warning"
 
-// ServerSpawnEnv returns the environment for a spawned dolt sql-server (the
-// directly-managed spawn here and the proxied one in dbproxy/server). The
+// ServerSpawnEnv returns the environment for a spawned dolt sql-server. The
 // server runs CALL DOLT_PUSH/FETCH itself, so the guards must be in the
 // child's environment: templated git hooks disabled (GH#4272; approach from
 // PR #4281 by pmgledhill102) and stderr-directed git tracing scrubbed (see
@@ -1599,8 +1598,7 @@ func Start(beadsDir string) (*State, error) {
 				}
 				// filepath.Abs defensively: the child's cwd is doltDir (cmd.Dir
 				// below), so a relative configPath would resolve against the
-				// wrong directory (matches the sibling dbproxy/server path,
-				// which abs's its configPath in NewDoltServer).
+				// wrong directory.
 				absConfigPath, absErr := filepath.Abs(doltServerConfigPath(beadsDir))
 				if absErr != nil {
 					lastErr = fmt.Errorf("resolving managed sql-server config path: %w", absErr)
