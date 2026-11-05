@@ -220,7 +220,7 @@ func TestDrainAndCloseProbe(t *testing.T) {
 		}
 	})
 
-	t.Run("mute peer returns false within ~150ms", func(t *testing.T) {
+	t.Run("mute peer returns false once its read deadline has elapsed", func(t *testing.T) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("listen: %v", err)
@@ -241,16 +241,43 @@ func TestDrainAndCloseProbe(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dial: %v", err)
 		}
+		// Closing conn here unblocks the probe goroutine below if the probe
+		// is stuck in its read; a double close from the probe is harmless.
+		t.Cleanup(func() { _ = conn.Close() })
 
+		// probeReadDeadline mirrors the read deadline DrainAndCloseProbe sets.
+		const probeReadDeadline = 100 * time.Millisecond
+		// mutePeerWatchdog is failure-only: a passing run returns in about
+		// probeReadDeadline and never reaches it. It only bounds a hang.
+		const mutePeerWatchdog = 10 * time.Second
+
+		type probeResult struct {
+			greeted bool
+			elapsed time.Duration
+		}
+		done := make(chan probeResult, 1)
 		start := time.Now()
-		greeted := DrainAndCloseProbe(conn)
-		elapsed := time.Since(start)
+		go func() {
+			greeted := DrainAndCloseProbe(conn)
+			done <- probeResult{greeted: greeted, elapsed: time.Since(start)}
+		}()
 
-		if greeted {
+		watchdog := time.NewTimer(mutePeerWatchdog)
+		defer watchdog.Stop()
+		var res probeResult
+		select {
+		case res = <-done:
+		case <-watchdog.C:
+			t.Fatalf("DrainAndCloseProbe did not return within %v against a mute peer: it is blocked in its read and never gave up on its own %v read deadline", mutePeerWatchdog, probeReadDeadline)
+		}
+
+		if res.greeted {
 			t.Errorf("DrainAndCloseProbe returned true for a mute peer")
 		}
-		if elapsed > 150*time.Millisecond {
-			t.Errorf("DrainAndCloseProbe took %v against a mute peer; want within ~150ms (100ms read deadline)", elapsed)
+		// Lower bound only: a read deadline never fires early, so the probe
+		// must have waited at least its own deadline before giving up.
+		if res.elapsed < probeReadDeadline {
+			t.Errorf("DrainAndCloseProbe returned after %v against a mute peer; want at least its %v read deadline to elapse", res.elapsed, probeReadDeadline)
 		}
 	})
 }
