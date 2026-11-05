@@ -62,8 +62,8 @@ func TestClassifyInitSchemaErrorKeepsBootstrapPreparationErrorsDistinct(t *testi
 
 // expectNoSessionDatabase mocks the opening question of the pre-lock
 // convergence probe on the shape every production seat presents: initSchema
-// pins its connection from a pool opened with an EMPTY DSN database (see
-// openAndInitSchema), so DATABASE() is NULL until something issues USE.
+// pins its connection from a pool opened with an EMPTY DSN database (the shape the removed
+// proxied-server open path presented), so DATABASE() is NULL until something issues USE.
 func expectNoSessionDatabase(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT DATABASE()")).
 		WillReturnRows(sqlmock.NewRows([]string{"DATABASE()"}).AddRow(nil))
@@ -138,7 +138,7 @@ func TestInitSchemaAcquiresMigrationLockBeforeBootstrapDDL(t *testing.T) {
 }
 
 // TestInitSchemaConvergenceProbeRunsWithNoSessionDatabase is the caller-side
-// regression for the fast path that could not fire. openAndInitSchema opens
+// regression for the fast path that could not fire. the removed proxied-server open path opened
 // its schema-init pool with an EMPTY DSN database and the USE happens only
 // inside the locked bootstrap preparation, so when the pre-lock convergence
 // probe asked DATABASE() it read NULL on every production seat's open, gave

@@ -37,7 +37,7 @@ func alreadyConverged(ctx context.Context, db DBConn, databaseName string, selec
 	}
 
 	// Put the session on the target database first. The hot path — the proxied
-	// CLI open in uow.openAndInitSchema — pins its schema-init pool with an
+	// CLI open (the proxied-server open path, since removed) — pins its schema-init pool with an
 	// EMPTY DSN database and only USEs the database after GET_LOCK, so a probe
 	// that merely ASKED whether the session was already on databaseName read
 	// NULL from DATABASE() and declined on every single invocation: the fast

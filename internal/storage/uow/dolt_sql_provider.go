@@ -165,7 +165,7 @@ func (p *doltSQLProvider) BeginTx(ctx context.Context) (Tx, error) {
 }
 
 // selectProbeDatabase lets schema's pre-lock convergence probe reach the
-// database on a session that is not yet on one. openAndInitSchema pins its
+// database on a session that is not yet on one. The proxied-server open path (since removed) pinned its
 // schema-init pool with an EMPTY DSN database, so without this the probe reads
 // NULL from DATABASE(), declines, and every invocation queues on the
 // server-wide migration lock it exists to skip.
@@ -375,7 +375,7 @@ type pinger interface {
 }
 
 // pingAttemptTimeout bounds a single ping attempt. The DSN sets a dial
-// Timeout (5s, internal/storage/dbproxy/util/dsn.go) but no ReadTimeout, so a
+// Timeout (5s, set where the DSN is built) but no ReadTimeout, so a
 // server that accepts the TCP connection and then stalls mid-handshake is
 // otherwise bounded only by the caller's context. Kept above the dial timeout
 // so a genuine dial timeout still surfaces as itself instead of being masked
