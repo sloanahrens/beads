@@ -15,17 +15,12 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	db "github.com/steveyegge/beads/internal/storage/domain/db"
 	"github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/storage/schema"
 )
 
-const (
-	defaultBranch           = "main"
-	defaultProxyIdleTimeout = 30 * time.Second
-)
+const defaultBranch = "main"
 
 type doltSQLProvider struct {
 	defaultBranch string
@@ -167,7 +162,7 @@ func (p *doltSQLProvider) BeginTx(ctx context.Context) (Tx, error) {
 }
 
 // selectProbeDatabase lets schema's pre-lock convergence probe reach the
-// database on a session that is not yet on one. openAndInitSchema pins its
+// database on a session that is not yet on one. The proxied-server open path (since removed) pinned its
 // schema-init pool with an EMPTY DSN database, so without this the probe reads
 // NULL from DATABASE(), declines, and every invocation queues on the
 // server-wide migration lock it exists to skip.
@@ -369,18 +364,6 @@ func (b *bootstrapPreparer) prepare(ctx context.Context, conn *sql.Conn) (*schem
 	return b.heal, nil
 }
 
-func buildDSN(ep proxy.Endpoint, database, user, password, tlsConfigName string) string {
-	return util.DoltServerDSN{
-		Host:            ep.Host,
-		Port:            ep.Port,
-		User:            user,
-		Password:        password,
-		Database:        database,
-		TLSConfigName:   tlsConfigName,
-		ClientFoundRows: true,
-	}.String()
-}
-
 // pinger is the subset of *sql.DB that pingWithRetry needs, narrowed so
 // tests can script a sequence of transient failures without a real
 // connection.
@@ -389,7 +372,7 @@ type pinger interface {
 }
 
 // pingAttemptTimeout bounds a single ping attempt. The DSN sets a dial
-// Timeout (5s, internal/storage/dbproxy/util/dsn.go) but no ReadTimeout, so a
+// Timeout (5s, set where the DSN is built) but no ReadTimeout, so a
 // server that accepts the TCP connection and then stalls mid-handshake is
 // otherwise bounded only by the caller's context. Kept above the dial timeout
 // so a genuine dial timeout still surfaces as itself instead of being masked
@@ -477,43 +460,4 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 		return nil, errors.Join(fmt.Errorf("uow: ping db: %w", err), conn.Close())
 	}
 	return conn, nil
-}
-
-func openAndInitSchema(ctx context.Context, ep proxy.Endpoint, database, rootUser, rootPassword, tlsConfigName string, teamServer bool, expectedProjectID string, opts providerOptions) (UnitOfWorkProvider, error) {
-	initDB, err := openDB(ctx, buildDSN(ep, "", rootUser, rootPassword, tlsConfigName))
-	if err != nil {
-		return nil, err
-	}
-
-	initProvider := &doltSQLProvider{
-		defaultBranch:     defaultBranch,
-		db:                initDB,
-		serverEndpoint:    "tcp:" + ep.Address(),
-		teamServer:        teamServer,
-		expectedProjectID: expectedProjectID,
-		preview:           opts.preview,
-	}
-
-	if err := initProvider.initSchema(ctx, database); err != nil {
-		_ = initDB.Close()
-		return nil, fmt.Errorf("uow: init schema: %w", err)
-	}
-
-	if err := initDB.Close(); err != nil {
-		return nil, fmt.Errorf("uow: close init db: %w", err)
-	}
-
-	dbConn, err := openDB(ctx, buildDSN(ep, database, rootUser, rootPassword, tlsConfigName))
-	if err != nil {
-		return nil, err
-	}
-
-	return &doltSQLProvider{
-		defaultBranch:     defaultBranch,
-		db:                dbConn,
-		serverEndpoint:    "tcp:" + ep.Address(),
-		teamServer:        teamServer,
-		expectedProjectID: expectedProjectID,
-		preview:           opts.preview,
-	}, nil
 }

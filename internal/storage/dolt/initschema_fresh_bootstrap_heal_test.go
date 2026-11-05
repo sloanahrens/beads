@@ -19,8 +19,8 @@ import (
 // TestFreshBootstrapHealSelfHealsAfterMidPassFailure is the server-mode
 // (internal/storage/dolt) regression test for gastownhall/beads#5012,
 // porting the proxied/uow path's
-// TestNewExternalDoltServerUOWProvider_FreshInitSelfHealsAfterMidPassFailure
-// (merged #5042) to initSchemaOnDBWithRetryAndGateOwnership.
+// fresh-init self-heal test of the proxied provider (merged #5042; that
+// provider and its test have since been removed) to initSchemaOnDBWithRetryAndGateOwnership.
 //
 // The shape of the failure: New's openServerConnection proves this open
 // created the fresh target database (bare CREATE DATABASE succeeds), but the

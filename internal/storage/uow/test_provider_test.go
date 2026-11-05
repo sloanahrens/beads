@@ -48,7 +48,7 @@ func newTestUOWProvider(t *testing.T) UnitOfWorkProvider {
 	require.NoError(t, err, "open the beads connection")
 
 	// teamServer, expectedProjectID and preview are the zero values
-	// openAndInitSchema gives a plain local server, so only the fields that
+	// the removed proxied-server open path gave a plain local server, so only the fields that
 	// differ from the zero value are set here.
 	provider := &doltSQLProvider{
 		defaultBranch:  defaultBranch,
@@ -142,7 +142,7 @@ func freePlainServerPort() (int, error) {
 }
 
 // plainServerDSN builds the connection string the uow backend uses against a
-// plain server, mirroring the fields buildDSN sets.
+// plain server, mirroring the fields the removed DSN builder set.
 func plainServerDSN(server plainServer, database string) string {
 	cfg := mysql.Config{
 		User:                 "root",

@@ -208,7 +208,7 @@ func TestMigrateUpWithLockSkipsLockWhenAlreadyConverged(t *testing.T) {
 }
 
 // TestMigrateUpWithLockSkipsLockOnAnUnselectedSession is the regression test
-// for the reason this fast path did not work: uow.openAndInitSchema opens the
+// for the reason this fast path did not work: the proxied-server open path (since removed) opened the
 // schema-init pool with an EMPTY DSN database and only issues USE after
 // GET_LOCK, so on every production seat's path DATABASE() was NULL when the
 // probe ran. A probe that merely ASKS whether the session is on the target
