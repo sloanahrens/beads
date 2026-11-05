@@ -51,45 +51,45 @@ The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it ma
 
 `exec` = distinct executed commands over T and O. `help` = `--help` probes. `prose` = mentions. `raw` = executed lines before deduplication. All rows come from C1 to C3 filtered on `bd <verb>`; the G, D and A columns are in the section above.
 
-| Verb | exec | help | prose | raw | Verdict | Note |
-|---|---|---|---|---|---|---|
-| admin | 0 | 1 | 1 | 0 | delete | one `--help` probe |
-| assign | 0 | 0 | 0 | 0 | delete | |
-| audit | 0 | 1 | 3 | 0 | ask | the command is unused; the writer is covered below |
-| batch | 0 | 0 | 0 | 0 | delete | |
-| comment | 1 | 3 | 11 | 3 | keep | agents type the singular form (executed once in T as `bd comment list`, probably a misuse); the shim has a handler and a golden row |
-| conflicts | 0 | 0 | 0 | 0 | delete | |
-| defer | 24 | 4 | 4 | 56 | keep | used daily by the overseer and birds; the shim has a handler |
-| diff | 0 | 0 | 0 | 0 | delete | |
-| duplicate | 0 | 0 | 0 | 0 | delete | |
-| duplicates | 0 | 0 | 0 | 0 | delete | |
-| find-duplicates | 0 | 1 | 0 | 0 | delete | one `--help` probe |
-| flatten | 0 | 0 | 2 | 0 | ask | not run as `bd flatten` in the window; the town flattened Dolt history on 2026-10-25 by a route I did not read |
-| graph | 0 | 0 | 0 | 0 | delete | |
-| heartbeat | 4 | 1 | 0 | 9 | keep | run by seats and the overseer; the shim lists the alias `hb` |
-| import | 0 | 0 | 2 | 0 | keep | the golden recorder runs `bd import -i`; also used to seed rehearsals |
-| link | 0 | 0 | 1 | 0 | delete | |
-| lint | 0 | 0 | 0 | 0 | delete | `gt spec lint` is a different command and is not counted |
-| orphans | 0 | 0 | 0 | 0 | delete | |
-| ping | 0 | 0 | 0 | 0 | delete | |
-| preflight | 0 | 0 | 0 | 0 | delete | |
-| promote | 0 | 0 | 0 | 0 | delete | |
-| provenance | 1 | 0 | 0 | 1 | ask | one execution by one agent |
-| prune | 0 | 0 | 0 | 0 | delete | |
-| recompute-blocked | 0 | 0 | 0 | 0 | delete | |
-| restore | 0 | 0 | 0 | 0 | delete | |
-| rules | 0 | 0 | 1 | 0 | delete | |
-| setup | 0 | 0 | 5 | 0 | delete | already scheduled (be-xu2.6 slice 3); prose only |
-| ship | 0 | 0 | 0 | 0 | delete | |
-| stale | 0 | 1 | 0 | 0 | delete | one `--help` probe |
-| statuses | 4 | 0 | 0 | 7 | keep | agents run it to read the status set |
-| supersede | 4 | 1 | 0 | 8 | keep | used by the overseer and birds |
-| swarm | 0 | 0 | 0 | 0 | delete | |
-| tag | 0 | 0 | 0 | 0 | delete | |
-| types | 0 | 0 | 0 | 0 | delete | |
-| unclaim | 29 | 3 | 3 | 63 | keep | most used of the group; the shim has a handler |
-| undefer | 8 | 4 | 5 | 16 | keep | the shim has a handler |
-| `internal/audit` (writer) | | | | | ask | 0 real entries in 30 days; last real entry 2026-09-10; `close.go` still calls `LogFieldChange` |
+| Verb | exec | help | prose | raw | Verdict | Note | Command |
+|---|---|---|---|---|---|---|---|
+| admin | 0 | 1 | 1 | 0 | delete | one `--help` probe | C1+C2 piped to C3, filtered on `bd admin` |
+| assign | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd assign` |
+| audit | 0 | 1 | 3 | 0 | ask | the command is unused; the writer is covered below | C1+C2 piped to C3, filtered on `bd audit` |
+| batch | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd batch` |
+| comment | 1 | 3 | 11 | 3 | keep | agents type the singular form (executed once in T as `bd comment list`, probably a misuse); the shim has a handler and a golden row | C1+C2 piped to C3, filtered on `bd comment` |
+| conflicts | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd conflicts` |
+| defer | 24 | 4 | 4 | 56 | keep | used daily by the overseer and birds; the shim has a handler | C1+C2 piped to C3, filtered on `bd defer` |
+| diff | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd diff` |
+| duplicate | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd duplicate` |
+| duplicates | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd duplicates` |
+| find-duplicates | 0 | 1 | 0 | 0 | delete | one `--help` probe | C1+C2 piped to C3, filtered on `bd find-duplicates` |
+| flatten | 0 | 0 | 2 | 0 | ask | not run as `bd flatten` in the window; the town flattened Dolt history on 2026-10-25 by a route I did not read | C1+C2 piped to C3, filtered on `bd flatten` |
+| graph | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd graph` |
+| heartbeat | 4 | 1 | 0 | 9 | keep | run by seats and the overseer; the shim lists the alias `hb` | C1+C2 piped to C3, filtered on `bd heartbeat` |
+| import | 0 | 0 | 2 | 0 | keep | the golden recorder runs `bd import -i`; also used to seed rehearsals | C1+C2 piped to C3, filtered on `bd import` |
+| link | 0 | 0 | 1 | 0 | delete | | C1+C2 piped to C3, filtered on `bd link` |
+| lint | 0 | 0 | 0 | 0 | delete | `gt spec lint` is a different command and is not counted | C1+C2 piped to C3, filtered on `bd lint` |
+| orphans | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd orphans` |
+| ping | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd ping` |
+| preflight | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd preflight` |
+| promote | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd promote` |
+| provenance | 1 | 0 | 0 | 1 | ask | one execution by one agent | C1+C2 piped to C3, filtered on `bd provenance` |
+| prune | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd prune` |
+| recompute-blocked | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd recompute-blocked` |
+| restore | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd restore` |
+| rules | 0 | 0 | 1 | 0 | delete | | C1+C2 piped to C3, filtered on `bd rules` |
+| setup | 0 | 0 | 5 | 0 | delete | already scheduled (be-xu2.6 slice 3); prose only | C1+C2 piped to C3, filtered on `bd setup` |
+| ship | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd ship` |
+| stale | 0 | 1 | 0 | 0 | delete | one `--help` probe | C1+C2 piped to C3, filtered on `bd stale` |
+| statuses | 4 | 0 | 0 | 7 | keep | agents run it to read the status set | C1+C2 piped to C3, filtered on `bd statuses` |
+| supersede | 4 | 1 | 0 | 8 | keep | used by the overseer and birds | C1+C2 piped to C3, filtered on `bd supersede` |
+| swarm | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd swarm` |
+| tag | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd tag` |
+| types | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd types` |
+| unclaim | 29 | 3 | 3 | 63 | keep | most used of the group; the shim has a handler | C1+C2 piped to C3, filtered on `bd unclaim` |
+| undefer | 8 | 4 | 5 | 16 | keep | the shim has a handler | C1+C2 piped to C3, filtered on `bd undefer` |
+| `internal/audit` (writer) | | | | | ask | 0 real entries in 30 days; last real entry 2026-09-10; `close.go` still calls `LogFieldChange` | C6 (interactions.jsonl, last 30 days) |
 
 Totals over the 36 verbs: 25 delete, 8 keep (comment, defer, heartbeat, import, statuses, supersede, unclaim, undefer), 3 ask (audit, flatten, provenance). The `internal/audit` writer is a 37th row and is also ask.
 
