@@ -88,7 +88,7 @@ Precedence: `BEADS_DIR` (canonicalized, redirect-followed) > discovery from cwd 
 - [ ] `go build ./...`, `make ci-pr-lint` or `go vet ./...`, `go test` for workspace, beads, config, workspacegate and `./cmd/bd/...` (touched packages plus importers), by exit code.
 - [ ] `om review -base origin/main`; fix blockers and majors.
 - [ ] Manual read-only check from `~/gt/gastown/polecats/amber/gastown` with the scratch binary.
-- [ ] Attribution grep empty; `git push origin crew/sloan/be-resolver`.
+- [ ] Attribution grep empty; `git push origin crew/operator/be-resolver`.
 
 ## Out of scope
 
