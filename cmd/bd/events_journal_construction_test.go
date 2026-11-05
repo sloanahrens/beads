@@ -53,10 +53,6 @@ var storeConstructors = map[string]map[string]bool{
 		"NewFromConfigWithOptions":    true,
 		"NewFromConfigWithCLIOptions": true,
 	},
-	"github.com/steveyegge/beads/internal/storage/uow": {
-		"NewDoltServerUOWProvider":         true,
-		"NewExternalDoltServerUOWProvider": true,
-	},
 }
 
 // activationCalls are the helpers that apply a workspace's configured

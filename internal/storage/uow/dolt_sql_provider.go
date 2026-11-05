@@ -15,8 +15,6 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	db "github.com/steveyegge/beads/internal/storage/domain/db"
 	"github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/storage/schema"
@@ -369,18 +367,6 @@ func (b *bootstrapPreparer) prepare(ctx context.Context, conn *sql.Conn) (*schem
 	return b.heal, nil
 }
 
-func buildDSN(ep proxy.Endpoint, database, user, password, tlsConfigName string) string {
-	return util.DoltServerDSN{
-		Host:            ep.Host,
-		Port:            ep.Port,
-		User:            user,
-		Password:        password,
-		Database:        database,
-		TLSConfigName:   tlsConfigName,
-		ClientFoundRows: true,
-	}.String()
-}
-
 // pinger is the subset of *sql.DB that pingWithRetry needs, narrowed so
 // tests can script a sequence of transient failures without a real
 // connection.
@@ -477,43 +463,4 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 		return nil, errors.Join(fmt.Errorf("uow: ping db: %w", err), conn.Close())
 	}
 	return conn, nil
-}
-
-func openAndInitSchema(ctx context.Context, ep proxy.Endpoint, database, rootUser, rootPassword, tlsConfigName string, teamServer bool, expectedProjectID string, opts providerOptions) (UnitOfWorkProvider, error) {
-	initDB, err := openDB(ctx, buildDSN(ep, "", rootUser, rootPassword, tlsConfigName))
-	if err != nil {
-		return nil, err
-	}
-
-	initProvider := &doltSQLProvider{
-		defaultBranch:     defaultBranch,
-		db:                initDB,
-		serverEndpoint:    "tcp:" + ep.Address(),
-		teamServer:        teamServer,
-		expectedProjectID: expectedProjectID,
-		preview:           opts.preview,
-	}
-
-	if err := initProvider.initSchema(ctx, database); err != nil {
-		_ = initDB.Close()
-		return nil, fmt.Errorf("uow: init schema: %w", err)
-	}
-
-	if err := initDB.Close(); err != nil {
-		return nil, fmt.Errorf("uow: close init db: %w", err)
-	}
-
-	dbConn, err := openDB(ctx, buildDSN(ep, database, rootUser, rootPassword, tlsConfigName))
-	if err != nil {
-		return nil, err
-	}
-
-	return &doltSQLProvider{
-		defaultBranch:     defaultBranch,
-		db:                dbConn,
-		serverEndpoint:    "tcp:" + ep.Address(),
-		teamServer:        teamServer,
-		expectedProjectID: expectedProjectID,
-		preview:           opts.preview,
-	}, nil
 }
