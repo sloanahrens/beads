@@ -36,7 +36,10 @@ C2  find ~/.claude/projects        -name '*.jsonl' -mtime -31 -print0 | xargs -0
 C3  sort -u | awk -f classify.awk | sort | uniq -c      (classify.awk is printed below)
 C4  git -C <gastown clone> grep -n -a -E '(^|[^a-z])bd (VERBS)([ `"'\''\\]|$)' origin/main -- . ':!*.md' ':!docs' ':!*_test.go'
 C5  grep -a -c -E "(^|[ ;\"'])bd (VERBS)( |$)" ~/gt/daemon/daemon.log
-C6  read each interactions.jsonl; count lines whose created_at is within 31 days, by kind and actor
+C6  for f in .beads om/mayor/rig/.beads beads/mayor/rig/.beads gastown/mayor/rig/.beads; do   (run in ~/gt)
+      jq -r 'select(.created_at >= "2026-10-05") | [.kind,.actor]|@tsv' $f/interactions.jsonl | sort | uniq -c
+      jq -r 'select(.actor!="test-actor")|.created_at' $f/interactions.jsonl | sort | tail -1     # last non-test entry
+    done
 ```
 
 The C3 classifier, in full (its input is the lines `bd <verb> <rest>` that C1 and C2 print; it reads the first word after the verb):
@@ -57,9 +60,9 @@ The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it ma
 
 - **T (polecats and town seats):** 18 matching lines in 31 days, which is 14 distinct commands after deduplication: 3 executions (`bd comment list <id>` once, written on 3 lines; `bd provenance <id>` once; `bd statuses` once), 4 `--help` probes, 7 prose mentions. The table counts distinct commands; the 18 is the raw line count (5 execution lines, 6 help lines, 7 prose lines). Almost none of the 36 verbs is run by a polecat.
 - **O (overseer, birds, crew):** 250 matching lines, 119 distinct commands before the hand corrections. Real use is concentrated in a few verbs: `unclaim`, `defer`, `undefer`, `supersede`, `heartbeat`, `statuses`.
-- **G (programs):** a text search finds no call to any of the 36 verbs in code, formulas, templates, plugins or scripts; the hits are comments, a profile comment and recorded event data under `.beads/backup`. A second search for the verb as a quoted Go string found one program that runs verbs through an argv slice: the golden recorder in `cmd/bdshim-record`. `exec.go` runs `bd import -i <fixture>` to seed its scratch database, and `table.go` lists `defer`, `undefer`, `unclaim` and `comment` as rows it records against a fixture. These are test-tooling calls on a scratch copy, so the table counts them under G and not as agent use. `internal/bdshim` has handlers for the same verbs (`flags.go`, `handlers_*.go`); they answer calls agents make and are not independent evidence of use.
+- **G (programs):** a text search finds no call to any of the 36 verbs in code, formulas, templates, plugins or scripts; the hits are comments, a profile comment and recorded event data under `.beads/backup`. A second search for the verb as a quoted Go string found one program that runs verbs through an argv slice: the golden recorder, `cmd/bdshim-record` in the gastown repo (not in the beads repo, so not in this checkout; gastown `origin/main`, paths re-checked at e606d6314). `exec.go` runs `bd import -i <fixture>` to seed its scratch database, and `table.go` lists `defer`, `undefer`, `unclaim` and `comment` as rows it records against a fixture. These are test-tooling calls on a scratch copy, so the table counts them under G and not as agent use. `internal/bdshim` has handlers for the same verbs (`flags.go`, `handlers_*.go`); they answer calls agents make and are not independent evidence of use.
 - **D (daemon log):** 0 hits for all 36 verbs.
-- **A (audit writer):** four interactions files exist (town, beads, gastown and om rigs; polecat worktrees were not read). In the 31 days only the beads rig file has lines: 34 entries, all `llm_call` with the actor `test-actor`. I treat `test-actor` as test output, not as real use, because that actor string is what the beads integration tests pass to the store (`cmd/bd/*_integration_test.go`); no other actor appears in the window. Excluding it leaves 0 entries in the window, and the last remaining entry in every file is dated 2026-09-10 (`field_change`, actors `daemon`, `mayor` and the witness and refinery seats). `bd audit` was never executed (one `--help` probe). The writer is still called from `close.go` (`audit.LogFieldChange`).
+- **A (audit writer):** four interactions files exist (the town `.beads` and the `mayor/rig/.beads` of the beads, gastown and om rigs, read with C6; polecat worktrees were not read). In the 31 days only the beads rig file has lines: 34 entries, all `llm_call` with the actor `test-actor`. I treat `test-actor` as test output, not as real use, because that actor string is what the beads integration tests pass to the store (`cmd/bd/*_integration_test.go`); no other actor appears in the window. Excluding it leaves 0 entries in the window, and the last remaining entry in every file is dated 2026-09-10 (`field_change`, actors `daemon`, `mayor` and the witness and refinery seats). `bd audit` was never executed (one `--help` probe). The writer is still called from `close.go` (`audit.LogFieldChange`).
 
 ## Table: the 36 verbs
 
@@ -71,7 +74,7 @@ The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it ma
 | assign | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd assign` | G 0, D 0, A 0 |
 | audit | 0 | 1 | 3 | 0 | ask | the command is unused; the writer is covered below | C1+C2 piped to C3, filtered on `bd audit` | G 0, D 0, A: see writer row |
 | batch | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd batch` | G 0, D 0, A 0 |
-| comment | 1 | 3 | 11 | 3 | ask | usage alone says delete: the one execution in T was `bd comment list <id>`, a misuse of the singular verb (agents mean `comments`), and 3 of 5 help lines are the same confusion. It is not a delete yet only because the shim and the golden recorder still carry it, which is a dependency and not use; the operator decides | C1+C2 piped to C3, filtered on `bd comment` | G 1 (recorder `table.go`), D 0 |
+| comment | 1 | 3 | 11 | 3 | ask | usage alone says delete: 1 distinct execution (`bd comment list <id>`, written on 3 raw lines; a misuse of the singular verb, agents mean `comments`) and 3 distinct `--help` probes (5 raw lines). The tracker shim and the golden recorder still carry it, which is test tooling, not use; the operator decides | C1+C2 piped to C3, filtered on `bd comment` | G 1 (recorder `table.go`), D 0 |
 | conflicts | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd conflicts` | G 0, D 0, A 0 |
 | defer | 24 | 4 | 4 | 56 | keep | used daily by the overseer and birds; the shim has a handler | C1+C2 piped to C3, filtered on `bd defer` | G 1 (recorder `table.go`), D 0 |
 | diff | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd diff` | G 0, D 0, A 0 |
@@ -81,7 +84,7 @@ The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it ma
 | flatten | 0 | 0 | 2 | 0 | ask | not run as `bd flatten` in the window; the town flattened Dolt history on 2026-10-25 by a route I did not read | C1+C2 piped to C3, filtered on `bd flatten` | G 0, D 0, A 0 |
 | graph | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd graph` | G 0, D 0, A 0 |
 | heartbeat | 4 | 1 | 0 | 9 | keep | run by seats and the overseer; the shim lists the alias `hb` | C1+C2 piped to C3, filtered on `bd heartbeat` | G 0, D 0, A 0 |
-| import | 0 | 0 | 2 | 0 | keep | no agent ran it in the window (2 prose mentions); the golden recorder runs `bd import -i` to seed its scratch database, a test-tooling call counted in G. Keep while the recorder exists | C1+C2 piped to C3, filtered on `bd import` | G 1 (recorder, `exec.go`), D 0 |
+| import | 0 | 0 | 2 | 0 | ask | no agent ran it in the window (2 prose mentions). Only the golden recorder runs `bd import -i`, to seed a scratch database; that is test tooling, not use, so by this doc's criterion it is not a keep. The operator decides whether to keep it for the recorder | C1+C2 piped to C3, filtered on `bd import` | G 1 (recorder, `exec.go`), D 0 |
 | link | 0 | 0 | 1 | 0 | delete | | C1+C2 piped to C3, filtered on `bd link` | G 0, D 0, A 0 |
 | lint | 0 | 0 | 0 | 0 | delete | `gt spec lint` is a different command and is not counted | C1+C2 piped to C3, filtered on `bd lint` | G 0, D 0, A 0 |
 | orphans | 0 | 0 | 0 | 0 | delete | | C1+C2 piped to C3, filtered on `bd orphans` | G 0, D 0, A 0 |
@@ -105,13 +108,13 @@ The regex was proved on a multi-line command (`cd x\nbd defer abc`), which it ma
 | undefer | 8 | 4 | 5 | 16 | keep | the shim has a handler | C1+C2 piped to C3, filtered on `bd undefer` | G 1 (recorder `table.go`), D 0 |
 | `internal/audit` (writer) | | | | | ask | 34 lines in 31 days, all actor `test-actor` (excluded as test output; see A above), so 0 real entries; last real entry 2026-09-10; `close.go` still calls `LogFieldChange` | C6 (interactions.jsonl, last 31 days) | A: 34 test-actor, 0 real |
 
-Totals over the 36 verbs: 25 delete, 7 keep (defer, heartbeat, import, statuses, supersede, unclaim, undefer), 4 ask (audit, comment, flatten, provenance). The `internal/audit` writer is a 37th row and is also ask.
+Totals over the 36 verbs: 25 delete, 6 keep (defer, heartbeat, statuses, supersede, unclaim, undefer), 5 ask (audit, comment, flatten, import, provenance). The `internal/audit` writer is a 37th row and is also ask.
 
 ## What the verdicts mean for the deletion beads
 
 - Delete candidates have zero executions by agents, no program call site and no daemon log hit in 31 days. A deletion bead should still run its own importer grep and, for any verb that has a shim handler or a row in the differential test, remove that too.
-- Keep means an agent ran it in the window, except `import`, which is kept for the golden recorder. `defer`, `undefer`, `unclaim`, `supersede`, `heartbeat` and `statuses` should not be on any hold list for deletion; the shim and the tracker must keep answering them.
-- Ask needs the operator: `audit` and the writer (keep or delete the whole `internal/audit` package given no real entries since 2026-09-10), `comment` (usage says delete; the shim and recorder still carry it), `flatten` (find out how the 2026-10-25 flatten was run before deleting), `provenance` (one use).
+- Keep means an agent ran it in the window. `defer`, `undefer`, `unclaim`, `supersede`, `heartbeat` and `statuses` should not be on any hold list for deletion; the shim and the tracker must keep answering them.
+- Ask needs the operator: `audit` and the writer (keep or delete the whole `internal/audit` package given no real entries since 2026-09-10), `comment` and `import` (usage says delete; only the shim and the golden recorder use them), `flatten` (find out how the 2026-10-25 flatten was run before deleting), `provenance` (one use).
 
 ## Not verified
 
