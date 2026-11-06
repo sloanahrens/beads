@@ -19,8 +19,7 @@ In machine mode bd:
   package init, so the terminal background probe never runs);
 - resolves metrics as disabled: no user-config bootstrap, no queue, no detached
   upload child, no first-run notice;
-- skips the molecules loader (`molecules.NewLoader(...).LoadAll`) in the root
-  pre-run, skips Dolt auto-push, skips tips;
+- skips Dolt auto-push and tips;
 - replaces `os.Stdin` with `/dev/null` unless an argument asks for stdin (`-`,
   `--flag=-`, `--stdin`), so no prompt or implicit piped read can block;
 - refuses `--watch`/`--follow` style streaming modes with

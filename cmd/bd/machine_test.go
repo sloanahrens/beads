@@ -2,8 +2,6 @@ package main
 
 import (
 	"testing"
-
-	"github.com/spf13/cobra"
 )
 
 func TestMachineRequested(t *testing.T) {
@@ -86,18 +84,6 @@ func TestJSONFromConfigOutsideMachineMode(t *testing.T) {
 	withMachineMode(t, false)
 	if jsonFromConfig(false) || !jsonFromConfig(true) {
 		t.Fatal("outside machine mode jsonFromConfig must return the configured value")
-	}
-}
-
-func TestMachineModeSkipsMoleculeScan(t *testing.T) {
-	show := &cobra.Command{Use: "show"}
-	withMachineMode(t, false)
-	if !shouldLoadMolecules(show) {
-		t.Fatal("molecule scan skipped outside machine mode")
-	}
-	machineMode = true
-	if shouldLoadMolecules(show) {
-		t.Fatal("molecule scan still runs under machine mode")
 	}
 }
 

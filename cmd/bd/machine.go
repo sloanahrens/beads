@@ -11,8 +11,8 @@ import (
 
 // Machine mode is the non-interactive surface a program drives bd through
 // (BD_MACHINE=1 or --machine). It never blocks and never probes the terminal:
-// JSON output is implied, colors, tips, the molecules scan and Dolt auto-push
-// are skipped, and stdin is closed unless an argument asks for it.
+// JSON output is implied, colors, tips and Dolt auto-push are skipped, and
+// stdin is closed unless an argument asks for it.
 // See engdocs/design/d1-machine-surface.md.
 
 // machineEnvVar turns machine mode on for every bd call a program makes.
@@ -106,13 +106,6 @@ func machineRefusesInteractive(what string) error {
 		return nil
 	}
 	return newCLIError(kindInvalidArgs, "%s is interactive or streaming and is refused in machine mode (%s / --machine)", what, machineEnvVar)
-}
-
-// shouldLoadMolecules reports whether the root pre-run scans molecule
-// catalogs into the store. The scan runs on every command today and nothing a
-// machine caller asks for depends on it, so machine mode skips it.
-func shouldLoadMolecules(cmd *cobra.Command) bool {
-	return cmd.Name() != "import" && !machineModeActive()
 }
 
 // configureMachineCobra makes cobra's own argument and flag failures typed

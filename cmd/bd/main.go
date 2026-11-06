@@ -29,7 +29,6 @@ import (
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/hooks"
 	"github.com/steveyegge/beads/internal/migration"
-	"github.com/steveyegge/beads/internal/molecules"
 	"github.com/steveyegge/beads/internal/remotecache"
 	"github.com/steveyegge/beads/internal/routing"
 	"github.com/steveyegge/beads/internal/storage"
@@ -1748,21 +1747,6 @@ var rootCmd = &cobra.Command{
 
 		// Warn if multiple databases detected in directory hierarchy
 		warnMultipleDatabases(dbPath)
-
-		// Load molecule templates from hierarchical catalog locations
-		// Templates are loaded after auto-import to ensure the database is up-to-date.
-		// Skip for import command to avoid conflicts during import operations.
-		if shouldLoadMolecules(cmd) && store != nil {
-			// Reuse the resolved .beads directory (see the hook runner note
-			// above) so a registered WorkspaceIsBeadsDir workspace loads
-			// .beads/molecules.jsonl rather than <repo>/molecules.jsonl.
-			loader := molecules.NewLoader(store)
-			if result, err := loader.LoadAll(rootCtx, beadsDir); err != nil {
-				debug.Logf("warning: failed to load molecules: %v", err)
-			} else if result.Loaded > 0 {
-				debug.Logf("loaded %d molecules from %v", result.Loaded, result.Sources)
-			}
-		}
 
 		// Sync all state to CommandContext for unified access.
 		syncCommandContext()
