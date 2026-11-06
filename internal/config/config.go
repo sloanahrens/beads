@@ -230,7 +230,6 @@ func Initialize() error {
 	// is for a consumer that wants the floors respected on reads but wants to
 	// own deletion itself. Env: BD_EVENTS_JOURNAL_AUTO_PRUNE.
 	v.SetDefault("events-journal-auto-prune", true)
-	v.SetDefault("audit.enabled", false)
 	v.SetDefault("no-db", false)
 	v.SetDefault("no-hooks", false)
 	v.SetDefault("db", "")

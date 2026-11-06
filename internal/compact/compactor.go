@@ -15,11 +15,9 @@ const (
 
 // Config holds configuration for the compaction process.
 type Config struct {
-	APIKey       string
-	Concurrency  int
-	DryRun       bool
-	AuditEnabled bool
-	Actor        string
+	APIKey      string
+	Concurrency int
+	DryRun      bool
 }
 
 // Compactor handles issue compaction using AI summarization.
@@ -71,10 +69,6 @@ func New(store compactableStore, apiKey string, config *Config) (*Compactor, err
 				return nil, fmt.Errorf("failed to create Haiku client: %w", err)
 			}
 		}
-	}
-	if hc, ok := haiClient.(*haikuClient); ok && hc != nil {
-		hc.auditEnabled = config.AuditEnabled
-		hc.auditActor = config.Actor
 	}
 
 	return &Compactor{

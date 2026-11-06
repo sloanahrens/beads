@@ -289,31 +289,6 @@ func TestSummarizeTier1_CancelledContext(t *testing.T) {
 	}
 }
 
-func TestSummarizeTier1_WithAuditEnabled(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("MINIMAX_API_KEY", "")
-	client, err := newHaikuClient("test-key-fake")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	client.auditEnabled = true
-	client.auditActor = "test-actor"
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	issue := &types.Issue{
-		ID:          "bd-audit",
-		Title:       "Audit Test",
-		Description: "Test audit logging",
-	}
-
-	_, err = client.SummarizeTier1(ctx, issue)
-	if err == nil {
-		t.Fatal("expected error from cancelled context")
-	}
-}
-
 func TestCallWithRetry_ImmediateContextCancel(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("MINIMAX_API_KEY", "")
