@@ -10,6 +10,31 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
+// GraphNode represents a node in the rendered graph
+type GraphNode struct {
+	Issue     *types.Issue
+	Layer     int      // Horizontal layer (topological order)
+	Position  int      // Vertical position within layer
+	DependsOn []string // IDs this node depends on (blocks dependencies only)
+}
+
+// GraphLayout holds the computed graph layout
+type GraphLayout struct {
+	Nodes    map[string]*GraphNode
+	Layers   [][]string // Layer index -> node IDs in that layer
+	MaxLayer int
+	RootID   string
+}
+
+// truncateTitle truncates a title to max length (rune-safe)
+func truncateTitle(title string, maxLen int) string {
+	runes := []rune(title)
+	if len(runes) <= maxLen {
+		return title
+	}
+	return string(runes[:maxLen-1]) + "…"
+}
+
 // renderGraphDOT renders the graph in Graphviz DOT format.
 // Output can be piped to graphviz: bd graph --dot <id> | dot -Tsvg > graph.svg
 func renderGraphDOT(out io.Writer, layout *GraphLayout, subgraph *TemplateSubgraph) error {

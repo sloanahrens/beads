@@ -155,7 +155,6 @@ var readOnlyCommands = map[string]bool{
 	"count":    true,
 	"search":   true,
 	"query":    true,
-	"graph":    true,
 	"comments": true, // list comments (not add)
 	"current":  true, // bd sync mode current
 	"backup":   true, // reads from Dolt, writes only to .beads/backup/
