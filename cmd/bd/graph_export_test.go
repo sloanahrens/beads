@@ -43,8 +43,24 @@ func makeTestSubgraph() (*TemplateSubgraph, *GraphLayout) {
 		},
 	}
 
-	layout := computeLayout(subgraph)
+	layout := makeTestLayout(subgraph)
 	return subgraph, layout
+}
+
+// makeTestLayout places every issue in layer 0. The export renderers read only
+// Nodes and Layers, so a fixed layout is enough to exercise them.
+func makeTestLayout(subgraph *TemplateSubgraph) *GraphLayout {
+	layout := &GraphLayout{Nodes: map[string]*GraphNode{}}
+	layer := make([]string, 0, len(subgraph.Issues))
+	for _, issue := range subgraph.Issues {
+		layout.Nodes[issue.ID] = &GraphNode{Issue: issue}
+		layer = append(layer, issue.ID)
+	}
+	if len(layer) > 0 {
+		layout.Layers = [][]string{layer}
+		layout.RootID = layer[0]
+	}
+	return layout
 }
 
 func TestRenderGraphDOT(t *testing.T) {
@@ -274,63 +290,6 @@ func TestDotEdgeStyle(t *testing.T) {
 		t.Errorf("related edge should have no style, got %q", related)
 	}
 }
-
-func TestMergeSubgraphsForHTML_SingleDOCTYPE(t *testing.T) {
-	t.Parallel()
-
-	// Create two disconnected subgraphs (separate components)
-	issueA := &types.Issue{
-		ID: "comp-a", Title: "Component A", Status: types.StatusOpen,
-		Priority: 1, IssueType: types.TypeTask,
-	}
-	issueB := &types.Issue{
-		ID: "comp-b", Title: "Component B", Status: types.StatusInProgress,
-		Priority: 2, IssueType: types.TypeTask,
-	}
-
-	sg1 := &TemplateSubgraph{
-		Root:     issueA,
-		Issues:   []*types.Issue{issueA},
-		IssueMap: map[string]*types.Issue{"comp-a": issueA},
-	}
-	sg2 := &TemplateSubgraph{
-		Root:     issueB,
-		Issues:   []*types.Issue{issueB},
-		IssueMap: map[string]*types.Issue{"comp-b": issueB},
-	}
-
-	merged := mergeSubgraphsForHTML([]*TemplateSubgraph{sg1, sg2})
-	layout := computeLayout(merged)
-
-	var output bytes.Buffer
-	if err := renderGraphHTML(&output, layout, merged); err != nil {
-		t.Fatalf("renderGraphHTML: %v", err)
-	}
-	got := output.String()
-
-	// Must contain exactly one DOCTYPE declaration
-	count := strings.Count(got, "<!DOCTYPE html>")
-	if count != 1 {
-		t.Errorf("expected exactly 1 <!DOCTYPE html>, got %d", count)
-	}
-
-	// Both issues must appear in the single document
-	if !strings.Contains(got, "comp-a") {
-		t.Error("merged HTML should contain comp-a")
-	}
-	if !strings.Contains(got, "comp-b") {
-		t.Error("merged HTML should contain comp-b")
-	}
-
-	// links must be [] not null — null breaks d3.forceLink (GH#3592)
-	if strings.Contains(got, "const links = null") {
-		t.Error("links must be [] not null for d3 compatibility")
-	}
-	if !strings.Contains(got, "const links = []") {
-		t.Error("empty links should serialize as [] not null")
-	}
-}
-
 func TestRenderGraphHTML_EmptyEdgesNotNull(t *testing.T) {
 	t.Parallel()
 	// Verify that a single-node graph emits [] not null for links (GH#3592)
@@ -344,7 +303,7 @@ func TestRenderGraphHTML_EmptyEdgesNotNull(t *testing.T) {
 		Issues:   []*types.Issue{issue},
 		IssueMap: map[string]*types.Issue{"solo-1": issue},
 	}
-	layout := computeLayout(subgraph)
+	layout := makeTestLayout(subgraph)
 
 	var output bytes.Buffer
 	if err := renderGraphHTML(&output, layout, subgraph); err != nil {
@@ -418,82 +377,51 @@ func TestRenderGraphHTMLWriterError(t *testing.T) {
 	}
 }
 
-func TestGraphExportDispatchPropagatesWriterErrors(t *testing.T) {
-	oldDOT, oldHTML := graphDOT, graphHTML
-	oldOpen, oldCompact, oldBox := graphOpen, graphCompact, graphBox
-	oldJSON := jsonOutput
-	t.Cleanup(func() {
-		graphDOT, graphHTML = oldDOT, oldHTML
-		graphOpen, graphCompact, graphBox = oldOpen, oldCompact, oldBox
-		jsonOutput = oldJSON
-	})
-	graphOpen, graphCompact, graphBox, jsonOutput = false, false, false, false
+func TestTruncateTitle(t *testing.T) {
+	tests := []struct {
+		name   string
+		title  string
+		maxLen int
+		want   string
+	}{
+		{
+			name:   "no truncation needed",
+			title:  "Short title",
+			maxLen: 20,
+			want:   "Short title",
+		},
+		{
+			name:   "exact length",
+			title:  "Exact",
+			maxLen: 5,
+			want:   "Exact",
+		},
+		{
+			name:   "needs truncation",
+			title:  "This is a very long title that needs to be truncated",
+			maxLen: 20,
+			want:   "This is a very long…",
+		},
+		{
+			name:   "unicode safe",
+			title:  "日本語タイトル",
+			maxLen: 5,
+			want:   "日本語タ…",
+		},
+		{
+			name:   "empty string",
+			title:  "",
+			maxLen: 10,
+			want:   "",
+		},
+	}
 
-	t.Run("single DOT", func(t *testing.T) {
-		graphDOT, graphHTML = true, false
-		subgraph, _ := makeTestSubgraph()
-		writer := &graphFailWriter{err: io.ErrClosedPipe, failAt: 1}
-
-		err := renderGraphSingleSubgraph(writer, subgraph)
-		if !errors.Is(err, io.ErrClosedPipe) {
-			t.Fatalf("renderGraphSingleSubgraph error = %v, want %v", err, io.ErrClosedPipe)
-		}
-	})
-
-	t.Run("all HTML", func(t *testing.T) {
-		graphDOT, graphHTML = false, true
-		subgraph, _ := makeTestSubgraph()
-		writer := &graphFailWriter{err: io.ErrClosedPipe, failAt: 1}
-
-		err := renderGraphAllSubgraphs(writer, []*TemplateSubgraph{subgraph})
-		if !errors.Is(err, io.ErrClosedPipe) {
-			t.Fatalf("renderGraphAllSubgraphs error = %v, want %v", err, io.ErrClosedPipe)
-		}
-	})
-
-	t.Run("all empty message", func(t *testing.T) {
-		graphDOT, graphHTML, graphOpen = false, false, false
-		var out bytes.Buffer
-
-		if err := renderGraphAllSubgraphs(&out, nil); err != nil {
-			t.Fatalf("renderGraphAllSubgraphs: %v", err)
-		}
-		if got, want := out.String(), "No open issues found\n"; got != want {
-			t.Fatalf("empty all output = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("all empty message error", func(t *testing.T) {
-		graphDOT, graphHTML, graphOpen = false, false, false
-		writer := &graphFailWriter{err: io.ErrClosedPipe, failAt: 1}
-
-		err := renderGraphAllSubgraphs(writer, nil)
-		if !errors.Is(err, io.ErrClosedPipe) {
-			t.Fatalf("renderGraphAllSubgraphs error = %v, want %v", err, io.ErrClosedPipe)
-		}
-	})
-
-	t.Run("single empty open message", func(t *testing.T) {
-		graphDOT, graphHTML, graphOpen = false, false, true
-		subgraph := &TemplateSubgraph{Issues: []*types.Issue{{ID: "closed", Status: types.StatusClosed}}}
-		var out bytes.Buffer
-
-		if err := renderGraphSingleSubgraph(&out, subgraph); err != nil {
-			t.Fatalf("renderGraphSingleSubgraph: %v", err)
-		}
-		if got, want := out.String(), "No open issues in subgraph\n"; got != want {
-			t.Fatalf("empty single output = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("single empty open message error", func(t *testing.T) {
-		graphDOT, graphHTML, graphOpen = false, false, true
-		subgraph := &TemplateSubgraph{Issues: []*types.Issue{{ID: "closed", Status: types.StatusClosed}}}
-		writer := &graphFailWriter{err: io.ErrClosedPipe, failAt: 1}
-
-		err := renderGraphSingleSubgraph(writer, subgraph)
-		if !errors.Is(err, io.ErrClosedPipe) {
-			t.Fatalf("renderGraphSingleSubgraph error = %v, want %v", err, io.ErrClosedPipe)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateTitle(tt.title, tt.maxLen)
+			if got != tt.want {
+				t.Errorf("truncateTitle(%q, %d) = %q, want %q", tt.title, tt.maxLen, got, tt.want)
+			}
+		})
+	}
 }

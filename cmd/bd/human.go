@@ -59,7 +59,6 @@ SUBCOMMANDS:
 		printCmd("dep add <a> <b>", "Add dependency (a depends on b)")
 		printCmd("dep remove <a> <b>", "Remove a dependency")
 		printCmd("dep tree <id>", "Show dependency tree")
-		printCmd("graph", "Display visual dependency graph")
 		printCmd("blocked", "Show all blocked issues")
 		fmt.Println()
 
