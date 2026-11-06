@@ -2469,16 +2469,24 @@ func openServerConnectionWithDriver(ctx context.Context, cfg *Config, driverName
 
 	// Without CreateIfMissing nothing is created, so the pool connection is the
 	// existence probe: a successful ping proves the database exists, and an
-	// "Unknown database" refusal is the not-found answer. The no-database admin
-	// connection and its SHOW DATABASES are skipped, saving a server connection
-	// on every open. alreadyExisted is true and created false, as the probe
-	// path reports them.
+	// "Unknown database" refusal (1049) is the not-found answer. The no-database
+	// admin connection and its SHOW DATABASES are skipped, saving a server
+	// connection on every open. alreadyExisted is true and created false, as the
+	// probe path reports them.
+	//
+	// The ping is one attempt with no retry: the probe it replaces failed at
+	// once, and isRetryableError treats connection refused as transient, which
+	// would hold a plain open for the create path's 10 s budget. Any other
+	// failure keeps the text the old probe gave it, "failed to check if
+	// database ... exists on server", since the old probe's query met the same
+	// refusal (a login failure, a refused connection) before it could answer.
 	if !cfg.CreateIfMissing {
-		if err := pingDatabase(ctx, db, false); err != nil {
+		if err := db.PingContext(ctx); err != nil {
 			if isUnknownDatabaseError(err) {
 				return nil, "", serverConnFacts{}, databaseNotFoundError(cfg)
 			}
-			return nil, "", serverConnFacts{}, fmt.Errorf("database %q not available after CREATE DATABASE: %w", cfg.Database, err)
+			return nil, "", serverConnFacts{}, fmt.Errorf("failed to check if database %q exists on server %s:%d: %w",
+				cfg.Database, cfg.ServerHost, cfg.ServerPort, err)
 		}
 		connReady = true
 		return db, connStr, serverConnFacts{alreadyExisted: true}, nil
@@ -2564,7 +2572,19 @@ func openServerConnectionWithDriver(ctx context.Context, cfg *Config, driverName
 	// database on disk but hasn't updated its catalog yet. Pinging db (which
 	// has the database in the DSN) will fail with "Unknown database" until the
 	// catalog catches up. We retry with exponential backoff. (GH-1851)
-	if err := pingDatabase(ctx, db, true); err != nil {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 100 * time.Millisecond
+	bo.MaxElapsedTime = 10 * time.Second
+	if err := backoff.Retry(func() error {
+		pingErr := db.PingContext(ctx)
+		if pingErr != nil && isRetryableError(pingErr) {
+			return pingErr // retryable — backoff will retry
+		}
+		if pingErr != nil {
+			return backoff.Permanent(pingErr)
+		}
+		return nil
+	}, backoff.WithContext(bo, ctx)); err != nil {
 		return nil, "", serverConnFacts{}, fmt.Errorf("database %q not available after CREATE DATABASE: %w", cfg.Database, err)
 	}
 
@@ -2589,26 +2609,6 @@ func openServerConnectionWithDriver(ctx context.Context, cfg *Config, driverName
 		bootstrapHeal:  bootstrapHeal,
 		alreadyExisted: dbExists,
 	}, nil
-}
-
-// pingDatabase pings the pool connection until the database answers. Transient
-// errors are retried (GH-1851: the server catalog can lag a CREATE DATABASE).
-// With retryUnknownDatabase false, "Unknown database" is returned at once: no
-// CREATE ran, so it is the not-found answer rather than catalog lag.
-func pingDatabase(ctx context.Context, db *sql.DB, retryUnknownDatabase bool) error {
-	bo := backoff.NewExponentialBackOff()
-	bo.InitialInterval = 100 * time.Millisecond
-	bo.MaxElapsedTime = 10 * time.Second
-	return backoff.Retry(func() error {
-		pingErr := db.PingContext(ctx)
-		if pingErr != nil && isRetryableError(pingErr) && (retryUnknownDatabase || !isUnknownDatabaseError(pingErr)) {
-			return pingErr // retryable — backoff will retry
-		}
-		if pingErr != nil {
-			return backoff.Permanent(pingErr)
-		}
-		return nil
-	}, backoff.WithContext(bo, ctx))
 }
 
 // isUnknownDatabaseError reports whether err is the server's "Unknown database"

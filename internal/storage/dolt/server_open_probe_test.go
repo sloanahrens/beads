@@ -206,8 +206,53 @@ func TestNewServerModeNoCreateMissingDatabase(t *testing.T) {
 	}
 }
 
+// TestNewServerModeNoCreateRefusedOpenKeepsError: a refusal other than 1049
+// keeps the text the old admin-connection probe gave it, "failed to check if
+// database ... exists on server host:port: <server error>", and is never read
+// as database-not-found or as a failed CREATE (none ran). The text is pinned
+// whole, so a change to it fails here.
 func TestNewServerModeNoCreateRefusedOpenKeepsError(t *testing.T) {
-	server := &fakeDoltServer{openErr: &mysql.MySQLError{Number: 1044, Message: "Access denied for user"}}
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"login refused", &mysql.MySQLError{Number: 1045, Message: "Access denied for user"}},
+		{"connection refused", errors.New("dial tcp 127.0.0.1:3309: connect: connection refused")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &fakeDoltServer{openErr: tc.err}
+			cfg := fakeOpenConfig(t, false)
+
+			db, _, _, err := openServerConnectionWithDriver(context.Background(), cfg, registerFakeDoltServer(t, server))
+			if err == nil {
+				_ = db.Close()
+				t.Fatal("openServerConnectionWithDriver succeeded on a refused open, want error")
+			}
+			want := fmt.Sprintf("failed to check if database %q exists on server %s:%d: %v", cfg.Database, cfg.ServerHost, cfg.ServerPort, tc.err)
+			if err.Error() != want {
+				t.Errorf("error = %q, want %q", err.Error(), want)
+			}
+			if !errors.Is(err, tc.err) {
+				t.Errorf("error %v does not wrap the server's refusal %v", err, tc.err)
+			}
+			if strings.Contains(err.Error(), "CREATE DATABASE") {
+				t.Errorf("error %q names a CREATE that never ran", err)
+			}
+		})
+	}
+}
+
+// TestNewServerModeNoCreateDoesNotRetryConnectionRefused: the no-create probe
+// is one attempt. isRetryableError treats connection refused as transient, so a
+// ping inside the create path's backoff would keep retrying for 10 s; the probe
+// it replaced failed at once. The guard line makes sure the error used here is
+// the kind the retry loop would retry.
+func TestNewServerModeNoCreateDoesNotRetryConnectionRefused(t *testing.T) {
+	refused := errors.New("dial tcp 127.0.0.1:3309: connect: connection refused")
+	if !isRetryableError(refused) {
+		t.Fatalf("isRetryableError(%v) = false; the test needs a retryable error", refused)
+	}
+	server := &fakeDoltServer{openErr: refused}
 	cfg := fakeOpenConfig(t, false)
 
 	db, _, _, err := openServerConnectionWithDriver(context.Background(), cfg, registerFakeDoltServer(t, server))
@@ -215,12 +260,8 @@ func TestNewServerModeNoCreateRefusedOpenKeepsError(t *testing.T) {
 		_ = db.Close()
 		t.Fatal("openServerConnectionWithDriver succeeded on a refused open, want error")
 	}
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1044 {
-		t.Errorf("error = %v, want the server's 1044 refusal wrapped", err)
-	}
-	if err.Error() == databaseNotFoundError(cfg).Error() {
-		t.Errorf("a non-1049 refusal was reported as database not found: %v", err)
+	if got := server.openCount(); got != 1 {
+		t.Errorf("connection attempts = %d, want 1 (no retry)", got)
 	}
 }
 
