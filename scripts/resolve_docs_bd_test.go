@@ -423,3 +423,80 @@ func TestResolveDocsBDUsesTheCachedBinary(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveDocsBDResolvesACommitPinWithoutFetching is the commit-pin success
+// path: a full 40-hex pin naming a commit already in the checkout is built from
+// that commit and cached under its full sha. The fetch is stubbed to fail, so
+// a script that reached for origin would exit 1 instead of printing the binary.
+func TestResolveDocsBDResolvesACommitPinWithoutFetching(t *testing.T) {
+	f := newResolvePinFixture(t)
+	sha := f.gitIn(f.repoDir, "rev-parse", "HEAD")
+	f.setPin(sha)
+	f.stubFailingFetch()
+
+	run := f.run()
+
+	if run.exitCode() != 0 {
+		t.Fatalf("commit pin in the checkout exited %d:\nstdout:\n%s\nstderr:\n%s", run.exitCode(), run.stdout, run.stderr)
+	}
+	if strings.Contains(run.stderr, "fetching") {
+		t.Errorf("commit pin attempted a fetch:\n%s", run.stderr)
+	}
+	got := strings.TrimSpace(run.stdout)
+	if want := filepath.ToSlash(filepath.Join("build", "docs-bd", sha, "bd")); !strings.HasSuffix(filepath.ToSlash(got), want) {
+		t.Errorf("stdout = %q, want a path ending in %q", got, want)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("stdout %q is not an existing binary: %v", got, err)
+	}
+}
+
+// TestResolveDocsBDCachesAnAbbreviatedCommitPinUnderTheFullSha pins that a
+// 7-character pin is keyed by the commit it names, not by its own text: the
+// binary lands in the full-sha directory, so two abbreviations of one commit
+// share one build.
+func TestResolveDocsBDCachesAnAbbreviatedCommitPinUnderTheFullSha(t *testing.T) {
+	f := newResolvePinFixture(t)
+	sha := f.gitIn(f.repoDir, "rev-parse", "HEAD")
+	f.setPin(sha[:7])
+
+	run := f.run()
+
+	if run.exitCode() != 0 {
+		t.Fatalf("abbreviated commit pin exited %d:\nstdout:\n%s\nstderr:\n%s", run.exitCode(), run.stdout, run.stderr)
+	}
+	got := strings.TrimSpace(run.stdout)
+	if want := filepath.ToSlash(filepath.Join("build", "docs-bd", sha, "bd")); !strings.HasSuffix(filepath.ToSlash(got), want) {
+		t.Errorf("stdout = %q, want the full-sha cache %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(f.repoDir, "build", "docs-bd", sha[:7])); err == nil {
+		t.Errorf("binary cached under the abbreviation %q, want only the full sha", sha[:7])
+	}
+}
+
+// TestResolveDocsBDRefusesACommitPinNotInTheCheckout: a hex pin naming no
+// commit in this checkout fails with the pin and the cause, and is never
+// fetched. Reading it as a tag would fetch refs/tags/<pin>, which is the
+// behaviour a commit pin must not have.
+func TestResolveDocsBDRefusesACommitPinNotInTheCheckout(t *testing.T) {
+	f := newResolvePinFixture(t)
+	const absent = "0123456789abcdef0123456789abcdef01234567"
+	f.setPin(absent)
+
+	run := f.run()
+
+	if run.exitCode() != 1 {
+		t.Fatalf("commit pin absent from the checkout exited %d, want 1:\nstdout:\n%s\nstderr:\n%s", run.exitCode(), run.stdout, run.stderr)
+	}
+	if strings.TrimSpace(run.stdout) != "" {
+		t.Errorf("failing commit pin printed %q to stdout; a caller takes non-empty stdout as the bd to use", run.stdout)
+	}
+	for _, want := range []string{absent, "not in this checkout", "never fetched"} {
+		if !strings.Contains(run.stderr, want) {
+			t.Errorf("diagnostic does not name %q:\n%s", want, run.stderr)
+		}
+	}
+	if strings.Contains(run.stderr, "fetching tag") || strings.Contains(run.stderr, "git fetch") {
+		t.Errorf("absent commit pin was fetched:\n%s", run.stderr)
+	}
+}

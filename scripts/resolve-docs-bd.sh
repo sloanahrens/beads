@@ -3,21 +3,25 @@
 #
 # Reads the release pin from docs/cli-docs.pin. When the pin names a tag,
 # builds (and caches) a canonical pure-Go bd from that tag's source and
-# prints the binary's absolute path on stdout. When the pin is HEAD, the pin
-# file is absent, or BD_DOCS_IGNORE_PIN=1 is set, prints nothing and exits 0:
-# callers fall back to their current-checkout behavior.
+# prints the binary's absolute path on stdout. A pin of 7 to 40 hex characters
+# names a commit instead: it is looked up in this checkout only, never
+# fetched, and built from that commit. When the pin is HEAD, the pin file is
+# absent, or BD_DOCS_IGNORE_PIN=1 is set, prints nothing and exits 0: callers
+# fall back to their current-checkout behavior.
 #
-# A pin that names a tag this repository cannot resolve is a hard failure
-# (exit 1), never an empty success. Every caller reads empty stdout as "no
-# pin, validate the current checkout", so reporting an unresolvable pin that
-# way would quietly check the wrong binary — exactly the outcome the pin
+# A pin that names a tag or commit this repository cannot resolve is a hard
+# failure (exit 1), never an empty success. Every caller reads empty stdout as
+# "no pin, validate the current checkout", so reporting an unresolvable pin
+# that way would quietly check the wrong binary — exactly the outcome the pin
 # exists to prevent. The failure names the pin file, the pin value, and why
-# the tag is missing, so the diagnostic is actionable without reading this
+# it cannot be resolved, so the diagnostic is actionable without reading this
 # script.
 #
 # The build matches CI's canonical docs build (CGO_ENABLED=0, -tags
 # gms_pure_go), so regenerated docs are reproducible in any environment.
-# The binary is cached at build/docs-bd/<pin>/bd (gitignored via /build/).
+# The binary is cached at build/docs-bd/<tag>/bd, or for a commit pin at
+# build/docs-bd/<full commit sha>/bd, so every abbreviation of one commit
+# shares one binary (gitignored via /build/).
 #
 # Usage: scripts/resolve-docs-bd.sh
 #   stdout: absolute path to the pinned bd binary, or empty when unpinned
@@ -45,13 +49,6 @@ fi
 # prints works wherever it is read.
 if [ "${BD_DOCS_IGNORE_PIN:-0}" = "1" ]; then
     echo "docs pin: BD_DOCS_IGNORE_PIN=1 — resolving no pinned bd; callers validate the current checkout." >&2
-    exit 0
-fi
-
-CACHE_DIR="$PROJECT_ROOT/build/docs-bd/$PIN"
-CACHED_BD="$CACHE_DIR/bd"
-if [ -x "$CACHED_BD" ]; then
-    echo "$CACHED_BD"
     exit 0
 fi
 
@@ -96,13 +93,20 @@ pin_fetch_cause() {
 
 # Report an unresolvable pin and exit 1. $1 is the cause; $2 is the failed
 # fetch's output, quoted so the raw git error stays visible under the
-# explanation rather than replacing it.
+# explanation rather than replacing it. A commit pin is never fetched, so it
+# has no fetch output, and its advice names this checkout rather than a tag.
 pin_unresolved() {
-    local cause="$1" fetch_error="${2:-}"
+    local cause="$1" fetch_error="${2:-}" fix
+
+    if [ "$PIN_KIND" = commit ]; then
+        fix="put commit $PIN in this checkout (commit pins are never fetched), or point docs/cli-docs.pin at a commit this checkout contains,"
+    else
+        fix="push tag $PIN to origin, or point docs/cli-docs.pin at a tag origin serves,"
+    fi
 
     {
         echo ""
-        echo "Error: the docs pipeline cannot run — docs/cli-docs.pin names a tag this repository cannot resolve."
+        echo "Error: the docs pipeline cannot run — docs/cli-docs.pin names a $PIN_KIND this repository cannot resolve."
         echo ""
         echo "  pin file:  docs/cli-docs.pin"
         echo "  pin value: $PIN"
@@ -113,19 +117,42 @@ pin_unresolved() {
             printf '%s\n' "$fetch_error" | sed 's/^/    /'
         fi
         echo ""
-        echo "The docs describe the pinned release, so validating against this checkout's"
+        echo "The docs describe the pinned build, so validating against this checkout's"
         echo "build would check the wrong binary; nothing here falls back to it. To make"
-        echo "the docs pipeline runnable, push tag $PIN to origin, point"
-        echo "docs/cli-docs.pin at a tag origin serves, or set BD_DOCS_IGNORE_PIN=1 to"
+        echo "the docs pipeline runnable, $fix or set BD_DOCS_IGNORE_PIN=1 to"
         echo "validate against the current checkout deliberately."
     } >&2
     exit 1
 }
 
+# A pin of 7 to 40 hex characters names a commit. It is resolved in this
+# checkout only: a commit origin has but this clone lacks fails here with its
+# cause rather than being downloaded. The binary is cached under the full
+# commit sha, so every abbreviation of one commit shares one build.
+COMMIT=""
+if [[ "$PIN" =~ ^[0-9a-f]{7,40}$ ]]; then
+    PIN_KIND=commit
+    if ! COMMIT="$(git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$PIN^{commit}")"; then
+        pin_unresolved "commit $PIN is not in this checkout; commit pins are looked up locally and never fetched"
+    fi
+    CACHE_KEY="$COMMIT"
+else
+    PIN_KIND=tag
+    CACHE_KEY="$PIN"
+fi
+
+CACHE_DIR="$PROJECT_ROOT/build/docs-bd/$CACHE_KEY"
+CACHED_BD="$CACHE_DIR/bd"
+if [ -x "$CACHED_BD" ]; then
+    echo "$CACHED_BD"
+    exit 0
+fi
+
 # Make sure the pinned tag exists locally; shallow CI checkouts may not have
 # fetched tags. GIT_TERMINAL_PROMPT=0 keeps a gate from blocking on a
 # credential prompt it can never answer — a hang emits no diagnostic at all.
-if ! git -C "$PROJECT_ROOT" rev-parse --verify --quiet "refs/tags/$PIN^{commit}" >/dev/null; then
+# A commit pin is already resolved above and is never fetched.
+if [ "$PIN_KIND" = tag ] && ! git -C "$PROJECT_ROOT" rev-parse --verify --quiet "refs/tags/$PIN^{commit}" >/dev/null; then
     echo "docs pin: fetching tag $PIN from origin..." >&2
     if ! FETCH_ERROR="$(GIT_TERMINAL_PROMPT=0 git -C "$PROJECT_ROOT" fetch --depth=1 origin "refs/tags/$PIN:refs/tags/$PIN" 2>&1)"; then
         pin_unresolved "$(pin_fetch_cause)" "$FETCH_ERROR"
@@ -141,7 +168,13 @@ if ! git -C "$PROJECT_ROOT" rev-parse --verify --quiet "refs/tags/$PIN^{commit}"
     fi
 fi
 
-echo "docs pin: building bd from tag $PIN (CGO_ENABLED=0 -tags gms_pure_go)..." >&2
+if [ "$PIN_KIND" = commit ]; then
+    BUILD_REF="$COMMIT"
+else
+    BUILD_REF="refs/tags/$PIN"
+fi
+
+echo "docs pin: building bd from $PIN_KIND $PIN (CGO_ENABLED=0 -tags gms_pure_go)..." >&2
 WT="$(mktemp -d)"
 cleanup() {
     git -C "$PROJECT_ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || true
@@ -149,7 +182,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git -C "$PROJECT_ROOT" worktree add --detach --quiet "$WT" "refs/tags/$PIN"
+git -C "$PROJECT_ROOT" worktree add --detach --quiet "$WT" "$BUILD_REF"
 mkdir -p "$CACHE_DIR"
 (cd "$WT" && CGO_ENABLED=0 go build -tags gms_pure_go -o "$CACHED_BD" ./cmd/bd/) >&2
 
