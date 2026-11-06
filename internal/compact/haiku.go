@@ -13,7 +13,6 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/steveyegge/beads/internal/audit"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/telemetry"
 	"github.com/steveyegge/beads/internal/types"
@@ -39,8 +38,6 @@ type haikuClient struct {
 	tier1Template  *template.Template
 	maxRetries     int
 	initialBackoff time.Duration
-	auditEnabled   bool
-	auditActor     string
 }
 
 // newHaikuClient creates a new Haiku API client.
@@ -85,21 +82,6 @@ func (h *haikuClient) SummarizeTier1(ctx context.Context, issue *types.Issue) (s
 	}
 
 	resp, callErr := h.callWithRetry(ctx, prompt)
-	if h.auditEnabled {
-		// Best-effort: never fail compaction because audit logging failed.
-		e := &audit.Entry{
-			Kind:     "llm_call",
-			Actor:    h.auditActor,
-			IssueID:  issue.ID,
-			Model:    h.model,
-			Prompt:   prompt,
-			Response: resp,
-		}
-		if callErr != nil {
-			e.Error = callErr.Error()
-		}
-		_, _ = audit.Append(e) // Best effort: audit logging must never fail compaction
-	}
 	return resp, callErr
 }
 

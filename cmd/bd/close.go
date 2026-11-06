@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/beads/internal/audit"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/storage"
@@ -207,13 +206,6 @@ the flags appear in the command line.`,
 				// step).
 				autoCloseCompletedMolecule(ctx, activeStore, id, actor, session)
 			} else {
-				// Audit log the close (survives Dolt GC flatten)
-				oldStatus := "open"
-				if issue != nil {
-					oldStatus = string(issue.Status)
-				}
-				audit.LogFieldChange(id, "status", oldStatus, "closed", actor, reason)
-
 				closedCount++
 
 				// Auto-close parent molecule if all steps are now complete.

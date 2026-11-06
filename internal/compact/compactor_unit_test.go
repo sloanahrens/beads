@@ -309,7 +309,7 @@ func TestNew_WithAPIKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("MINIMAX_API_KEY", "")
 	store := &stubStore{}
-	c, err := New(store, "test-key-123", &Config{Concurrency: 2, AuditEnabled: true, Actor: "testbot"})
+	c, err := New(store, "test-key-123", &Config{Concurrency: 2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

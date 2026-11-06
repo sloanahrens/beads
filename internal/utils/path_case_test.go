@@ -111,8 +111,8 @@ func TestResolveCanonicalCase_FastPathMatchesWalk(t *testing.T) {
 // cost must not grow with the number of entries in an ancestor directory. The
 // pre-fix component walk did an os.ReadDir of every ancestor on every call,
 // which on a $TMPDIR holding ~100k leftover test directories cost ~640ms per
-// call and turned whole test packages (internal/audit, embeddeddolt, cmd/bd)
-// into apparent hangs.
+// call and turned whole test packages (embeddeddolt, cmd/bd) into apparent
+// hangs.
 func TestCanonicalizePath_DoesNotScanAncestorDirectories(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("only darwin takes the true-case resolution path")
