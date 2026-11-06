@@ -2385,8 +2385,9 @@ type serverConnFacts struct {
 	bootstrapHeal *schema.FreshBootstrapHealCapability
 
 	// alreadyExisted reports whether the database was proven to exist on the
-	// server before this call: either the SHOW DATABASES probe found it, or
-	// our CREATE DATABASE was refused with "database exists" (1007). Callers
+	// server before this call: either the existence probe found it (SHOW
+	// DATABASES, or the pool ping when CreateIfMissing is false), or our
+	// CREATE DATABASE was refused with "database exists" (1007). Callers
 	// use it to decide whether project-identity verification applies even
 	// when CreateIfMissing is true (see the newServerMode gate around
 	// verifyProjectIdentity, GH#4637).
@@ -2397,9 +2398,15 @@ type serverConnFacts struct {
 // on a dolt sql-server via MySQL protocol. See serverConnFacts for what the
 // returned facts mean and why they are not a single bool.
 func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, serverConnFacts, error) {
+	return openServerConnectionWithDriver(ctx, cfg, "mysql")
+}
+
+// openServerConnectionWithDriver is openServerConnection with the database/sql
+// driver name injected, so tests can drive the open against a fake server.
+func openServerConnectionWithDriver(ctx context.Context, cfg *Config, driverName string) (*sql.DB, string, serverConnFacts, error) {
 	connStr := buildServerDSN(cfg, cfg.Database)
 
-	db, err := sql.Open("mysql", connStr)
+	db, err := sql.Open(driverName, connStr)
 	if err != nil {
 		return nil, "", serverConnFacts{}, fmt.Errorf("failed to open Dolt server connection: %w", err)
 	}
@@ -2443,15 +2450,6 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 		return db, connStr, serverConnFacts{}, nil
 	}
 
-	// Ensure database exists (may need to create it)
-	// First connect without database to create it
-	initConnStr := buildServerDSN(cfg, "")
-	initDB, err := sql.Open("mysql", initConnStr)
-	if err != nil {
-		return nil, "", serverConnFacts{}, fmt.Errorf("failed to open init connection: %w", err)
-	}
-	defer func() { _ = initDB.Close() }()
-
 	// Validate database name to prevent SQL injection via backtick escaping
 	if err := ValidateDatabaseName(cfg.Database); err != nil {
 		return nil, "", serverConnFacts{}, fmt.Errorf("invalid database name %q: %w", cfg.Database, err)
@@ -2469,9 +2467,36 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 			cfg.Database, cfg.ServerPort)
 	}
 
+	// Without CreateIfMissing nothing is created, so the pool connection is the
+	// existence probe: a successful ping proves the database exists, and an
+	// "Unknown database" refusal is the not-found answer. The no-database admin
+	// connection and its SHOW DATABASES are skipped, saving a server connection
+	// on every open. alreadyExisted is true and created false, as the probe
+	// path reports them.
+	if !cfg.CreateIfMissing {
+		if err := pingDatabase(ctx, db, false); err != nil {
+			if isUnknownDatabaseError(err) {
+				return nil, "", serverConnFacts{}, databaseNotFoundError(cfg)
+			}
+			return nil, "", serverConnFacts{}, fmt.Errorf("database %q not available after CREATE DATABASE: %w", cfg.Database, err)
+		}
+		connReady = true
+		return db, connStr, serverConnFacts{alreadyExisted: true}, nil
+	}
+
+	// Ensure database exists (may need to create it)
+	// First connect without database to create it
+	initConnStr := buildServerDSN(cfg, "")
+	initDB, err := sql.Open(driverName, initConnStr)
+	if err != nil {
+		return nil, "", serverConnFacts{}, fmt.Errorf("failed to open init connection: %w", err)
+	}
+	defer func() { _ = initDB.Close() }()
+
 	// Check if the database already exists before deciding whether to create it.
-	// This prevents the shadow database bug: without CreateIfMissing, connecting
-	// to a server that lacks the expected database is an error (not silent creation).
+	// This prevents the shadow database bug: the create branch below only runs
+	// for CreateIfMissing, so a server that lacks the expected database is never
+	// silently given one by a plain open (the not-found case returned above).
 	// The result also feeds the caller's identity-verification gate: a
 	// CreateIfMissing:true init that lands on an already-existing database
 	// must still verify project identity (GH#4637) — only a database this
@@ -2497,9 +2522,6 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 	// pre-existing user data (gastownhall/beads#5012).
 	created := false
 	if !dbExists {
-		if !cfg.CreateIfMissing {
-			return nil, "", serverConnFacts{}, databaseNotFoundError(cfg)
-		}
 		if cfg.RefuseNewDatabaseOnPopulatedServer && !isTestDatabaseName(cfg.Database) {
 			if err := refuseNewDatabaseOnPopulatedServer(ctx, initDB, cfg); err != nil {
 				return nil, "", serverConnFacts{}, err
@@ -2542,19 +2564,7 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 	// database on disk but hasn't updated its catalog yet. Pinging db (which
 	// has the database in the DSN) will fail with "Unknown database" until the
 	// catalog catches up. We retry with exponential backoff. (GH-1851)
-	bo := backoff.NewExponentialBackOff()
-	bo.InitialInterval = 100 * time.Millisecond
-	bo.MaxElapsedTime = 10 * time.Second
-	if err := backoff.Retry(func() error {
-		pingErr := db.PingContext(ctx)
-		if pingErr != nil && isRetryableError(pingErr) {
-			return pingErr // retryable — backoff will retry
-		}
-		if pingErr != nil {
-			return backoff.Permanent(pingErr)
-		}
-		return nil
-	}, backoff.WithContext(bo, ctx)); err != nil {
+	if err := pingDatabase(ctx, db, true); err != nil {
 		return nil, "", serverConnFacts{}, fmt.Errorf("database %q not available after CREATE DATABASE: %w", cfg.Database, err)
 	}
 
@@ -2579,6 +2589,36 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 		bootstrapHeal:  bootstrapHeal,
 		alreadyExisted: dbExists,
 	}, nil
+}
+
+// pingDatabase pings the pool connection until the database answers. Transient
+// errors are retried (GH-1851: the server catalog can lag a CREATE DATABASE).
+// With retryUnknownDatabase false, "Unknown database" is returned at once: no
+// CREATE ran, so it is the not-found answer rather than catalog lag.
+func pingDatabase(ctx context.Context, db *sql.DB, retryUnknownDatabase bool) error {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 100 * time.Millisecond
+	bo.MaxElapsedTime = 10 * time.Second
+	return backoff.Retry(func() error {
+		pingErr := db.PingContext(ctx)
+		if pingErr != nil && isRetryableError(pingErr) && (retryUnknownDatabase || !isUnknownDatabaseError(pingErr)) {
+			return pingErr // retryable — backoff will retry
+		}
+		if pingErr != nil {
+			return backoff.Permanent(pingErr)
+		}
+		return nil
+	}, backoff.WithContext(bo, ctx))
+}
+
+// isUnknownDatabaseError reports whether err is the server's "Unknown database"
+// refusal (MySQL 1049), matched by number when typed and by text otherwise.
+func isUnknownDatabaseError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1049
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "unknown database")
 }
 
 // serverEndpointIdentity returns the exact configured transport endpoint. It
