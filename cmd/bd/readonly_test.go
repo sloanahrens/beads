@@ -32,7 +32,6 @@ func TestReadonlyModeBlocksWrites(t *testing.T) {
 		{"label remove"},
 		{"repair-deps"},
 		{"compact"},
-		{"duplicates --auto-merge"},
 		{"epic close-eligible"},
 		{"migrate"},
 

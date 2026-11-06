@@ -147,21 +147,20 @@ func commandOptsOutOfStore(cmd *cobra.Command) bool {
 // readOnlyCommands lists commands that only read from the database.
 // These commands open the store in read-only mode. See GH#804.
 var readOnlyCommands = map[string]bool{
-	"list":       true,
-	"ready":      true,
-	"show":       true,
-	"stats":      true,
-	"blocked":    true,
-	"count":      true,
-	"search":     true,
-	"query":      true,
-	"graph":      true,
-	"duplicates": true,
-	"comments":   true, // list comments (not add)
-	"current":    true, // bd sync mode current
-	"backup":     true, // reads from Dolt, writes only to .beads/backup/
-	"export":     true, // reads from Dolt, writes JSONL to file/stdout
-	"tail":       true, // bd events tail: reads bd_events_journal, writes nothing
+	"list":     true,
+	"ready":    true,
+	"show":     true,
+	"stats":    true,
+	"blocked":  true,
+	"count":    true,
+	"search":   true,
+	"query":    true,
+	"graph":    true,
+	"comments": true, // list comments (not add)
+	"current":  true, // bd sync mode current
+	"backup":   true, // reads from Dolt, writes only to .beads/backup/
+	"export":   true, // reads from Dolt, writes JSONL to file/stdout
+	"tail":     true, // bd events tail: reads bd_events_journal, writes nothing
 }
 
 // isReadOnlyCommand returns true if the command only reads from the database.
