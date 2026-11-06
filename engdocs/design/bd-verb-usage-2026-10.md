@@ -160,7 +160,15 @@ Totals over the 36 verbs: 25 delete, 6 keep (defer, heartbeat, statuses, superse
 
 - Delete candidates have zero executions by agents, no program call site and no daemon log hit in 31 days. A deletion bead should still run its own importer grep and, for any verb that has a shim handler or a row in the differential test, remove that too.
 - Keep means an agent ran it in the window. `defer`, `undefer`, `unclaim`, `supersede`, `heartbeat` and `statuses` should not be on any hold list for deletion; the shim and the tracker must keep answering them.
-- Ask needs the operator: `audit` and the writer (keep or delete the whole `internal/audit` package given no real entries since 2026-09-10), `comment` and `import` (usage says delete; only the shim and the golden recorder use them), `flatten` (find out how the 2026-10-25 flatten was run before deleting), `provenance` (one use).
+- Ask needs the operator: `audit` and the writer (keep or delete the whole `internal/audit` package given no real entries since 2026-09-10), `comment` and `import` (usage says delete; only the shim and the golden recorder use them), `flatten` (find out how the 2026-10-25 flatten was run before deleting), `provenance` (one use). Answered on 2026-11-05; see Operator decisions below.
+
+## Operator decisions, 2026-11-05
+
+- `audit` and the `internal/audit` writer: delete (bead be-xu2.6.2).
+- `comment`: delete (bead be-xu2.6.3), after the gastown shim change gt-p85pw.131 lands.
+- `provenance`: delete (bead be-xu2.6.4).
+- `flatten`: keep until the last Dolt rig flips off Dolt.
+- `import`: keep while the golden recorder (`cmd/bdshim-record` in the gastown repo) exists.
 
 ## Not verified
 
