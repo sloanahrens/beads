@@ -10,8 +10,8 @@ import (
 
 // validateNoteArgs runs as cobra's Args validation for "note", before RunE
 // and (on the local/embedded path) before the id ever reaches
-// ResolvePartialID's fuzzy/substring matching. Mirror of validateCommentArgs
-// (#5369): "note" has no subcommands of its own — its only job is "append a
+// ResolvePartialID's fuzzy/substring matching. Same shape as the #5369 guard:
+// "note" has no subcommands of its own — its only job is "append a
 // note to <id>" — so when the id positional argument is exactly a reserved
 // word that is a common subcommand-shaped typo, the near-certain explanation
 // is not that a bead is genuinely named that word (real ids always carry a
@@ -24,8 +24,7 @@ import (
 // guard's own error text ("bd show <issue-id>"); "update" is invited by the
 // guard's own hints referencing "bd update <issue-id>" four times; and
 // edit/rm/remove/delete are common subcommand-shaped typos for mutating
-// commands. Broader-than-#5369 matches the in-repo direction of PR #5393
-// for the comment sibling.
+// commands. Broader-than-#5369 matches the direction of PR #5393.
 func validateNoteArgs(cmd *cobra.Command, args []string) error {
 	if err := cobra.MinimumNArgs(1)(cmd, args); err != nil {
 		return err
