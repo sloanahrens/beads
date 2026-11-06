@@ -21,8 +21,9 @@ import (
 type fakeDoltServer struct {
 	mu         sync.Mutex
 	databases  map[string]bool
-	openErr    error // when set, every connection attempt is refused with it
-	createErr  error // when set, CREATE DATABASE fails with it
+	denied     map[string]bool // databases this login has no grant on: connecting to one is refused with 1044
+	openErr    error           // when set, every connection attempt is refused with it
+	createErr  error           // when set, CREATE DATABASE fails with it
 	opens      int
 	statements []string
 }
@@ -37,6 +38,9 @@ func (s *fakeDoltServer) Open(dsn string) (driver.Conn, error) {
 	s.opens++
 	if s.openErr != nil {
 		return nil, s.openErr
+	}
+	if s.denied[parsed.DBName] {
+		return nil, &mysql.MySQLError{Number: 1044, Message: fmt.Sprintf("Access denied for user to database '%s'", parsed.DBName)}
 	}
 	if parsed.DBName != "" && !s.databases[parsed.DBName] {
 		return nil, &mysql.MySQLError{Number: 1049, Message: fmt.Sprintf("Unknown database '%s'", parsed.DBName)}
@@ -242,11 +246,12 @@ func TestNewServerModeNoCreateRefusedOpenKeepsError(t *testing.T) {
 	}
 }
 
-// TestNewServerModeNoCreateDoesNotRetryConnectionRefused: the no-create probe
-// is one attempt. isRetryableError treats connection refused as transient, so a
-// ping inside the create path's backoff would keep retrying for 10 s; the probe
-// it replaced failed at once. The guard line makes sure the error used here is
-// the kind the retry loop would retry.
+// TestNewServerModeNoCreateDoesNotRetryConnectionRefused: the no-create ping is
+// one attempt. isRetryableError treats connection refused as transient, so a
+// retry inside the create path's backoff would keep retrying for 10 s. The
+// refusal falls through to the probe, which fails at once: two attempts in all
+// (the ping, then the probe), never a backoff. The guard line makes sure the
+// error used here is the kind the retry loop would retry.
 func TestNewServerModeNoCreateDoesNotRetryConnectionRefused(t *testing.T) {
 	refused := errors.New("dial tcp 127.0.0.1:3309: connect: connection refused")
 	if !isRetryableError(refused) {
@@ -260,8 +265,55 @@ func TestNewServerModeNoCreateDoesNotRetryConnectionRefused(t *testing.T) {
 		_ = db.Close()
 		t.Fatal("openServerConnectionWithDriver succeeded on a refused open, want error")
 	}
-	if got := server.openCount(); got != 1 {
-		t.Errorf("connection attempts = %d, want 1 (no retry)", got)
+	if got := server.openCount(); got != 2 {
+		t.Errorf("connection attempts = %d, want 2 (one ping, one probe, no retry)", got)
+	}
+}
+
+// TestNewServerModeNoCreatePrivilegeRefusalKeepsProbeText: a login with no
+// grant on the database is refused with 1044, not 1049, so the ping alone
+// cannot say "not found". The open falls through to the SHOW DATABASES probe,
+// which does not list the database to this login, and gives the not-found
+// text the old open gave.
+func TestNewServerModeNoCreatePrivilegeRefusalKeepsProbeText(t *testing.T) {
+	server := &fakeDoltServer{databases: map[string]bool{}, denied: map[string]bool{"proj_alpha": true}}
+	cfg := fakeOpenConfig(t, false)
+
+	db, _, _, err := openServerConnectionWithDriver(context.Background(), cfg, registerFakeDoltServer(t, server))
+	if err == nil {
+		_ = db.Close()
+		t.Fatal("openServerConnectionWithDriver succeeded for a database the login cannot see, want error")
+	}
+	if want := databaseNotFoundError(cfg).Error(); err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+	if n := server.statementCount("SHOW DATABASES"); n != 1 {
+		t.Errorf("SHOW DATABASES sent %d times, want 1 (the probe answers after the 1044 refusal)", n)
+	}
+	if n := server.statementCount("CREATE DATABASE"); n != 0 {
+		t.Errorf("CREATE DATABASE sent %d times, want 0", n)
+	}
+}
+
+// TestNewServerModeIsUnknownDatabase: the 1049 mapping is by number when the
+// driver returns a typed MySQL error, and by text when it does not. A 1044
+// refusal is not the not-found answer, so it must not map.
+func TestNewServerModeIsUnknownDatabase(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"typed 1049", &mysql.MySQLError{Number: 1049, Message: "Unknown database 'proj_alpha'"}, true},
+		{"untyped text", errors.New("Error 1049: Unknown database 'proj_alpha'"), true},
+		{"typed 1044 is not not-found", &mysql.MySQLError{Number: 1044, Message: "Access denied to database"}, false},
+		{"connection refused", errors.New("dial tcp 127.0.0.1:3309: connect: connection refused"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isUnknownDatabaseError(tc.err); got != tc.want {
+				t.Errorf("isUnknownDatabaseError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 

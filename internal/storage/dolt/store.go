@@ -2469,27 +2469,25 @@ func openServerConnectionWithDriver(ctx context.Context, cfg *Config, driverName
 
 	// Without CreateIfMissing nothing is created, so the pool connection is the
 	// existence probe: a successful ping proves the database exists, and an
-	// "Unknown database" refusal (1049) is the not-found answer. The no-database
-	// admin connection and its SHOW DATABASES are skipped, saving a server
+	// "Unknown database" refusal (1049) is the not-found answer. Both skip the
+	// no-database admin connection and its SHOW DATABASES, saving a server
 	// connection on every open. alreadyExisted is true and created false, as the
 	// probe path reports them.
 	//
-	// The ping is one attempt with no retry: the probe it replaces failed at
-	// once, and isRetryableError treats connection refused as transient, which
-	// would hold a plain open for the create path's 10 s budget. Any other
-	// failure keeps the text the old probe gave it, "failed to check if
-	// database ... exists on server", since the old probe's query met the same
-	// refusal (a login failure, a refused connection) before it could answer.
+	// Any other refusal (a login or privilege refusal, a refused connection)
+	// falls through to the SHOW DATABASES probe below, so the error a user sees
+	// is still the one the probe gives. Only the probe can say whether this
+	// login sees the database as missing (a login with no grant on it does not),
+	// so that answer is not re-derived from the ping error here.
 	if !cfg.CreateIfMissing {
-		if err := db.PingContext(ctx); err != nil {
-			if isUnknownDatabaseError(err) {
-				return nil, "", serverConnFacts{}, databaseNotFoundError(cfg)
-			}
-			return nil, "", serverConnFacts{}, fmt.Errorf("failed to check if database %q exists on server %s:%d: %w",
-				cfg.Database, cfg.ServerHost, cfg.ServerPort, err)
+		pingErr := db.PingContext(ctx)
+		if pingErr == nil {
+			connReady = true
+			return db, connStr, serverConnFacts{alreadyExisted: true}, nil
 		}
-		connReady = true
-		return db, connStr, serverConnFacts{alreadyExisted: true}, nil
+		if isUnknownDatabaseError(pingErr) {
+			return nil, "", serverConnFacts{}, databaseNotFoundError(cfg)
+		}
 	}
 
 	// Ensure database exists (may need to create it)
@@ -2502,9 +2500,8 @@ func openServerConnectionWithDriver(ctx context.Context, cfg *Config, driverName
 	defer func() { _ = initDB.Close() }()
 
 	// Check if the database already exists before deciding whether to create it.
-	// This prevents the shadow database bug: the create branch below only runs
-	// for CreateIfMissing, so a server that lacks the expected database is never
-	// silently given one by a plain open (the not-found case returned above).
+	// This prevents the shadow database bug: without CreateIfMissing, connecting
+	// to a server that lacks the expected database is an error (not silent creation).
 	// The result also feeds the caller's identity-verification gate: a
 	// CreateIfMissing:true init that lands on an already-existing database
 	// must still verify project identity (GH#4637) — only a database this
@@ -2530,6 +2527,9 @@ func openServerConnectionWithDriver(ctx context.Context, cfg *Config, driverName
 	// pre-existing user data (gastownhall/beads#5012).
 	created := false
 	if !dbExists {
+		if !cfg.CreateIfMissing {
+			return nil, "", serverConnFacts{}, databaseNotFoundError(cfg)
+		}
 		if cfg.RefuseNewDatabaseOnPopulatedServer && !isTestDatabaseName(cfg.Database) {
 			if err := refuseNewDatabaseOnPopulatedServer(ctx, initDB, cfg); err != nil {
 				return nil, "", serverConnFacts{}, err
