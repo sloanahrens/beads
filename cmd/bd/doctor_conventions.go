@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/steveyegge/beads/cmd/bd/doctor"
+	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/validation"
@@ -224,4 +227,110 @@ func runConventionsOrphans(path string) []doctorCheck {
 		Fix:      "bd orphans",
 		Category: "Conventions",
 	}}
+}
+
+// The orphan conversion chain moved here with the be-xu2.6.6 verb deletions:
+// runConventionsOrphans is the only remaining caller of the shared
+// doctor.FindOrphanedIssues result, so it converts that result into the
+// doctor check output itself.
+
+// orphanIssueOutput is the result shape of findOrphanedIssues.
+type orphanIssueOutput struct {
+	IssueID             string `json:"issue_id"`
+	Title               string `json:"title"`
+	Status              string `json:"status"`
+	LatestCommit        string `json:"latest_commit,omitempty"`
+	LatestCommitMessage string `json:"latest_commit_message,omitempty"`
+}
+
+// doctorFindOrphanedIssues is the function used to find orphaned issues.
+// It accepts a git path and an IssueProvider for flexibility (cross-repo, mock testing).
+var doctorFindOrphanedIssues = doctor.FindOrphanedIssues
+
+// doltStoreProvider wraps the global Dolt store to implement types.IssueProvider.
+type doltStoreProvider struct {
+	labels    []string // AND semantics: issue must have ALL these labels
+	labelsAny []string // OR semantics: issue must have AT LEAST ONE of these labels
+}
+
+func (p *doltStoreProvider) GetOpenIssues(ctx context.Context) ([]*types.Issue, error) {
+	openStatus := types.StatusOpen
+	openIssues, err := store.SearchIssues(ctx, "", types.IssueFilter{
+		Status:    &openStatus,
+		Labels:    p.labels,
+		LabelsAny: p.labelsAny,
+	})
+	if err != nil {
+		return nil, err
+	}
+	inProgressStatus := types.StatusInProgress
+	inProgressIssues, err := store.SearchIssues(ctx, "", types.IssueFilter{
+		Status:    &inProgressStatus,
+		Labels:    p.labels,
+		LabelsAny: p.labelsAny,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(openIssues, inProgressIssues...), nil
+}
+
+func (p *doltStoreProvider) GetIssuePrefix() string {
+	// YAML config takes precedence — in shared-server mode the DB
+	// may belong to a different project (GH#2469).
+	if yamlPrefix := config.GetString("issue-prefix"); yamlPrefix != "" {
+		return yamlPrefix
+	}
+	ctx := context.Background()
+	prefix, err := store.GetConfig(ctx, "issue_prefix")
+	if err != nil || prefix == "" {
+		return "bd"
+	}
+	return prefix
+}
+
+// getIssueProviderFn is the function used to create an IssueProvider.
+// It is a variable so tests can substitute a mock without needing a real store.
+var getIssueProviderFn = func(labels, labelsAny []string) (types.IssueProvider, func(), error) {
+	if store != nil {
+		return &doltStoreProvider{labels: labels, labelsAny: labelsAny}, func() {}, nil
+	}
+	return nil, nil, fmt.Errorf("no database available")
+}
+
+// getIssueProvider returns an IssueProvider backed by the global Dolt store.
+// labels and labelsAny are passed through to SearchIssues for label filtering.
+func getIssueProvider(labels, labelsAny []string) (types.IssueProvider, func(), error) {
+	return getIssueProviderFn(labels, labelsAny)
+}
+
+// findOrphanedIssues wraps the shared doctor package function and converts to output format.
+// labels and labelsAny are passed to the issue provider to restrict which issues are considered.
+func findOrphanedIssues(path string, labels, labelsAny []string) ([]orphanIssueOutput, error) {
+	provider, cleanup, err := getIssueProvider(labels, labelsAny)
+	if err != nil {
+		return nil, fmt.Errorf("unable to find orphaned issues: %w", err)
+	}
+	defer cleanup()
+
+	return findOrphanedIssuesWithProvider(path, provider)
+}
+
+func findOrphanedIssuesWithProvider(path string, provider types.IssueProvider) ([]orphanIssueOutput, error) {
+	orphans, err := doctorFindOrphanedIssues(path, provider)
+	if err != nil {
+		return nil, fmt.Errorf("unable to find orphaned issues: %w", err)
+	}
+
+	var output []orphanIssueOutput
+	for _, orphan := range orphans {
+		output = append(output, orphanIssueOutput{
+			IssueID:             orphan.IssueID,
+			Title:               orphan.Title,
+			Status:              orphan.Status,
+			LatestCommit:        orphan.LatestCommit,
+			LatestCommitMessage: orphan.LatestCommitMessage,
+		})
+	}
+	return output, nil
 }

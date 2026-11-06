@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -13,8 +12,6 @@ import (
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/doltserver"
-	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/types"
 )
 
 // Shared helpers for server-mode tests, kept from the deleted embedded suite.
@@ -54,42 +51,6 @@ func bdRunRaw(t *testing.T, bd, dir string, envExtras []string, args ...string) 
 	}
 	t.Fatalf("bd %s unexpected non-exit error: %v\n%s", strings.Join(args, " "), err, out)
 	return string(out), -1
-}
-
-// runBatchScriptInTx is a tiny helper that mirrors what batchCmd.RunE does,
-// minus the cobra/flag plumbing, so tests can drive batch execution against
-// a *dolt.DoltStore without spawning a 'bd' subprocess.
-func runBatchScriptInTx(t *testing.T, ctx context.Context, st storage.DoltStorage, script string) error {
-	t.Helper()
-	ops, err := parseBatchScript(strings.NewReader(script))
-	if err != nil {
-		return err
-	}
-	return st.RunInTransaction(ctx, "test: bd batch", func(tx storage.Transaction) error {
-		for _, op := range ops {
-			if _, err := runBatchOp(ctx, tx, op); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// seedBatchTestIssues creates three open issues for batch tests to operate on.
-func seedBatchTestIssues(t *testing.T, ctx context.Context, st storage.DoltStorage, ids ...string) {
-	t.Helper()
-	for _, id := range ids {
-		issue := &types.Issue{
-			ID:        id,
-			Title:     "seed " + id,
-			Status:    types.StatusOpen,
-			Priority:  2,
-			IssueType: types.TypeTask,
-		}
-		if err := st.CreateIssue(ctx, issue, "test"); err != nil {
-			t.Fatalf("seed CreateIssue %s: %v", id, err)
-		}
-	}
 }
 
 // writeContractBackendConfig writes a metadata.json naming backend into a fresh
