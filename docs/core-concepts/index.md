@@ -27,7 +27,7 @@ workable next.
 
 A **bead** is one tracked unit of work: a hash ID (`bd-a1b2`), a title, a
 type (`bug`, `task`, `feature`, `epic`, `chore`, and friends — see
-[`bd types`](/cli-reference/types)), a priority (`0` critical → `4` backlog),
+`bd types`), a priority (`0` critical → `4` backlog),
 and a status moving `open` → `in_progress` → `closed`. "Bead" and "issue"
 name the same thing; the CLI says issue, the product says bead.
 
