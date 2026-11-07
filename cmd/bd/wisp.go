@@ -1002,7 +1002,7 @@ func runWispPurgeClosed(ctx context.Context, dryRun bool, force bool, excludeTyp
 	}
 
 	if !dryRun && force && !jsonOutput {
-		fmt.Printf("\nHint: Run 'bd compact --dolt' to reclaim disk space\n")
+		fmt.Printf("\nHint: Run 'bd gc' to reclaim disk space\n")
 	}
 	return nil
 }
