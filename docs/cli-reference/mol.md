@@ -1,6 +1,6 @@
 ---
 title: "bd mol"
-description: "Manage molecules - work templates for agent workflows."
+description: "Molecule commands (work templates)"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
@@ -31,7 +31,7 @@ Commands:
 Use "bd formula list" to list available formulas.
 
 ```
-bd mol [flags]
+bd mol [command]
 ```
 
 **Aliases:** protomolecule
@@ -238,7 +238,8 @@ bd mol last-activity <molecule-id> [flags]
 Pour a proto into a persistent mol - like pouring molten metal into a mold.
 
 This is the chemistry-inspired command for creating PERSISTENT work from templates.
-The resulting mol lives in .beads/ (permanent storage) and is synced with git.
+The resulting mol is stored as persistent beads in the issue database and
+syncs like any other bead (bd dolt push / pull).
 
 Phase transition: Proto (solid) -&gt; pour -&gt; Mol (liquid)
 
@@ -272,6 +273,7 @@ bd mol pour <proto-id> [flags]
       --attach strings       Proto to attach after spawning (repeatable)
       --attach-type string   Bond type for attachments: sequential, parallel, or conditional (default "sequential")
       --dry-run              Preview what would be created
+      --strict               Reject formula keys bd would drop instead of warning
       --var stringArray      Variable substitution (key=value)
 ```
 
@@ -318,6 +320,12 @@ Examples:
 bd mol ready --gated [flags]
 ```
 
+**Flags:**
+
+```
+      --gated   Find molecules ready for gate-resume dispatch (always on for this subcommand)
+```
+
 ## bd mol seed
 
 Verify that a formula is accessible and can be cooked.
@@ -330,7 +338,7 @@ Formula search paths (checked in order):
   1. &lt;resolved-beads-dir&gt;/formulas/ (active project)
   2. &lt;checkout-root&gt;/.beads/formulas/ (repo-local formulas)
   3. ~/.beads/formulas/ (user level)
-  4. $GT_ROOT/.beads/formulas/ (shared workspace root, if GT_ROOT set)
+  4. $GT_TOWN_ROOT/.beads/formulas/ (shared workspace root, if GT_TOWN_ROOT set)
 
 Examples:
   bd mol seed mol-feature                 # Verify specific formula
@@ -485,13 +493,14 @@ Subcommands:
 
 ```
 bd mol wisp [proto-id] [flags]
+bd mol wisp [command]
 ```
 
 **Flags:**
 
 ```
       --dry-run           Preview what would be created
-      --root-only         Create only the root issue (no child step issues)
+      --strict            Reject formula keys bd would drop instead of warning
       --var stringArray   Variable substitution (key=value)
 ```
 
@@ -528,7 +537,6 @@ bd mol wisp create <proto-id> [flags]
 
 ```
       --dry-run           Preview what would be created
-      --root-only         Create only the root issue (no child step issues)
       --var stringArray   Variable substitution (key=value)
 ```
 
@@ -538,13 +546,25 @@ Garbage collect old or abandoned wisps from the database.
 
 A wisp is considered abandoned if:
   - It hasn't been updated in --age duration and is not closed
+  - AND it is not live work: blocked steps (waiting on a dependency), pinned
+    beads, wisps currently hooked by a live agent (referenced as hook_bead on
+    a non-closed issue, regardless of the wisp's own status), and any step
+    whose status category is wip (in_progress, blocked, hooked) or frozen
+    (deferred, pinned) are never reclaimed by age, no matter how long they
+    have been waiting (GH#4394, be-yqp). Custom statuses count by their
+    configured category, so only plain open (active) and closed (done) steps
+    are age-reclaimable. If the blocked set, hooked set, or the custom-status
+    list cannot be read, the GC aborts rather than risk reclaiming live steps.
 
 Abandoned wisps are deleted without creating a digest. Use 'bd mol squash'
 if you want to preserve a summary before garbage collection.
 
-Use --closed to purge ALL closed wisps (regardless of age). This is the
-fastest way to reclaim space from accumulated wisp bloat. Safe by default:
-requires --force to actually delete.
+Use --closed to purge closed wisps (regardless of age). This is the fastest
+way to reclaim space from accumulated wisp bloat. Safe by default: requires
+--force to actually delete. Pinned and configured infra wisps are never
+purged, and neither is a closed wisp that is a step of a molecule which is
+not itself closed — deleting those would erase completed work from a molecule
+that is still running (be-96h).
 
 Note: This uses time-based cleanup, appropriate for ephemeral wisps.
 For graph-pressure staleness detection (blocking other work), see 'bd mol stale'.

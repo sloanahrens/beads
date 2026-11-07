@@ -225,7 +225,7 @@ Any AGENTS.md-aware tool — Codex, Cursor, Factory Droid, Mux, OpenCode — rea
 
 ### Can beads import from GitHub Issues?
 
-Yes — `bd github sync --pull-only` imports issues in bulk (`bd github pull <refs>` cherry-picks specific ones), and `bd github sync` keeps beads and GitHub in sync bidirectionally. See the [bd github reference](/cli-reference/github).
+Yes — `bd github sync --pull-only` imports issues in bulk (`bd github pull <refs>` cherry-picks specific ones), and `bd github sync` keeps beads and GitHub in sync bidirectionally. See the bd github reference.
 
 ## Migration
 

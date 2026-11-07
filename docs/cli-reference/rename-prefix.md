@@ -1,6 +1,6 @@
 ---
 title: "bd rename-prefix"
-description: "Rename the issue prefix for all issues in the database."
+description: "Rename the issue prefix for all issues in the database"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
@@ -17,7 +17,6 @@ USE CASES:
 - Migrating to team naming standards
 
 Prefix validation rules:
-- Max length: 8 characters
 - Allowed characters: lowercase letters, numbers, hyphens
 - Must start with a letter
 - Must end with a hyphen (e.g., 'kw-', 'work-')
@@ -42,6 +41,7 @@ bd rename-prefix <new-prefix> [flags]
 **Flags:**
 
 ```
-      --dry-run   Preview changes without applying them
-      --repair    Repair database with multiple prefixes by consolidating them
+      --config-only   Only set the issue_prefix config cell; refused (exit 21 under --machine) when any issue id would need rewriting
+      --dry-run       Preview changes without applying them
+      --repair        Repair database with multiple prefixes by consolidating them
 ```

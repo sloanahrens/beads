@@ -1,6 +1,6 @@
 ---
 title: "bd delete"
-description: "Delete one or more issues and clean up all references to them."
+description: "Delete one or more issues and clean up references"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
@@ -25,7 +25,7 @@ Delete from file (one ID per line):
 Preview before deleting:
   bd delete --from-file deletions.txt --dry-run
 
-DEPENDENCY HANDLING:
+DEPENDENCY HANDLING (the same on a local database and against a team server):
 Default: Fails if any issue has dependents not in deletion set
   bd delete bd-1 bd-2
 
@@ -42,8 +42,10 @@ bd delete <issue-id> [issue-id...] [flags]
 **Flags:**
 
 ```
-      --cascade            Recursively delete all dependent issues
-      --dry-run            Preview what would be deleted without making changes
-  -f, --force              Actually delete (without this flag, shows preview)
-      --from-file string   Read issue IDs from file (one per line)
+      --cascade              Recursively delete all dependent issues
+      --dry-run              Preview what would be deleted without making changes
+  -f, --force                Actually delete (without this flag, shows preview)
+      --from-file string     Read issue IDs from file (one per line)
+      --if-assignee string   Only delete while the current assignee equals this value (--if-assignee '' requires unassigned); a mismatch writes nothing for that id and exits 13 (guard_not_held)
+      --if-status string     Only delete while the current status equals this value; a mismatch writes nothing for that id and exits 13 (guard_not_held)
 ```

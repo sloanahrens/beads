@@ -1,6 +1,6 @@
 ---
 title: "bd query"
-description: "Query issues using a simple query language that supports compound filters,"
+description: "Query issues using a simple query language"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
@@ -75,8 +75,8 @@ bd query [expression] [flags]
   -a, --all           Include closed issues (default: exclude closed)
   -n, --limit int     Limit results (default: 50, 0 = unlimited) (default 50)
       --long          Show detailed multi-line output for each issue
-      --offset int    Skip the first N matching results (0-based). Only supported under --proxied-server.
+      --offset int    Not supported: any value above 0 is rejected (page with --limit).
       --parse-only    Only parse the query and show the AST (for debugging)
-  -r, --reverse       Reverse sort order
+  -r, --reverse       Invert the sort field's default direction (created/updated/closed default to newest-first, so --sort updated --reverse is oldest-first)
       --sort string   Sort by field: priority, created, updated, closed, status, id, title, type, assignee
 ```
