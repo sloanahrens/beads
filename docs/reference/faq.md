@@ -225,19 +225,19 @@ Any AGENTS.md-aware tool — Codex, Cursor, Factory Droid, Mux, OpenCode — rea
 
 ### Can beads import from GitHub Issues?
 
-Yes — `bd github sync --pull-only` imports issues in bulk (`bd github pull <refs>` cherry-picks specific ones), and `bd github sync` keeps beads and GitHub in sync bidirectionally. See the bd github reference.
+Not directly. Beads has no built-in sync with GitHub Issues. Export the issues from GitHub (usually CSV or JSON), convert them to beads' JSONL format, and run `bd import <file>`.
 
 ## Migration
 
 ### How do I migrate from GitHub Issues, Jira, or Linear?
 
-Beads has built-in bidirectional sync for all three — `bd github`, `bd jira`, and `bd linear` each provide `sync` for bulk moves, plus `pull`/`push` for specific issues by ID (GitLab, Azure DevOps, and Notion are covered by `bd gitlab`, `bd ado`, and `bd notion`). Configure credentials with `bd config set` per the [CLI reference](/cli-reference/index), then run the sync in the pull direction: `bd github sync --pull-only`, `bd jira sync --pull`, or `bd linear sync --pull`.
+Beads has no built-in sync with GitHub Issues, Jira, or Linear, so migration is a one-time export and import.
 
-For any other tracker: export from it (usually CSV or JSON), convert to beads' JSONL format, and run `bd import <file>`. See [examples](https://github.com/gastownhall/beads/tree/main/examples) for scripting patterns.
+For GitHub Issues, Jira, Linear, or any other tracker: export from it (usually CSV or JSON), convert to beads' JSONL format, and run `bd import <file>`. See [examples](https://github.com/gastownhall/beads/tree/main/examples) for scripting patterns.
 
 ### Can I export back out of beads?
 
-For GitHub, Jira, and Linear, use the same integrations in the push direction — `bd github sync --push-only`, `bd jira sync --push`, or `bd linear sync --push` for everything, or `bd <tracker> push <ids>` for specific beads. For anything else, `bd export -o issues.jsonl` produces JSONL you can convert with a script and feed to the target system's API.
+Beads has no built-in push to GitHub Issues, Jira, or Linear. `bd export -o issues.jsonl` writes the issues as JSONL; convert that file with a script and feed it to the target system's API.
 
 ## Performance
 
