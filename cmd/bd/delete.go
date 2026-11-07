@@ -280,7 +280,7 @@ func deleteIssue(ctx context.Context, issueID string) error {
 }
 
 // deleteBatch is the multi-id and cascade path, shared by `bd delete`,
-// `bd cleanup`, `bd wisp gc` and `bd mol burn`.
+// `bd wisp gc` and `bd mol burn`.
 //
 // It resolves the ids the way this front door always has - prefix matching and
 // cross-repository routing, which issueops.DeleteRequest deliberately does not

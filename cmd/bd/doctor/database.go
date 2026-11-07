@@ -589,8 +589,7 @@ func checkDatabaseSizeWithStore(store *dolt.DoltStore) DoctorCheck {
 
 // largeDatabaseWarning builds the over-threshold Large Database check. Split
 // out so tests can pin the recommended remedy to a command that actually
-// exists: 'bd prune' is the root-level lifecycle command ('cleanup' only
-// exists as 'bd admin cleanup').
+// exists: 'bd prune' is the root-level lifecycle command.
 func largeDatabaseWarning(closedIssues, threshold int) DoctorCheck {
 	return DoctorCheck{
 		Name:    "Large Database",

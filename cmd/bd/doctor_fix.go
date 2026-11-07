@@ -359,7 +359,7 @@ func applyFixList(path string, fixes []doctorCheck) {
 			err = fix.StaleClosedIssues(path)
 		case "Compaction Candidates":
 			// No auto-fix: compaction requires agent review
-			fmt.Printf("  ⚠ Run 'bd compact --analyze' to review candidates\n")
+			fmt.Printf("  ⚠ Review these candidates manually; no automatic fix is available\n")
 			continue
 		case "Large Database":
 			// No auto-fix: pruning deletes data, must be user-controlled

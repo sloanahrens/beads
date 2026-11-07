@@ -123,7 +123,7 @@ func runDoltGCPhase(ctx context.Context) (string, map[string]interface{}) {
 		fmt.Printf("  Done (%s)\n", detail)
 		if len(remoteRefs)+len(tags) > 0 {
 			fmt.Printf("  Note: %d remote-tracking ref(s) and %d tag(s) anchor history;\n", len(remoteRefs), len(tags))
-			fmt.Printf("  after a history squash, use bd flatten / bd compact so they are pruned first.\n")
+			fmt.Printf("  after a history squash, use bd flatten so they are pruned first.\n")
 		}
 	}
 	sizeInfo := map[string]interface{}{
