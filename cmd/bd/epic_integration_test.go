@@ -171,3 +171,7 @@ func TestEpicSuite(t *testing.T) {
 		}
 	})
 }
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
+}
