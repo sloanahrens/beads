@@ -1,6 +1,6 @@
 ---
 title: "bd cook"
-description: "Cook transforms a .formula.json file into a proto."
+description: "Compile a formula into a proto (ephemeral by default)"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
@@ -48,6 +48,13 @@ Examples:
 Output (default):
   JSON representation of the resolved formula with all steps.
 
+Output (machine mode, BD_MACHINE=1 or --machine, without --persist/--dry-run):
+  The cooked step tree bd would pour: extends, expansions, aspects, the
+  overlay from formula.overlay-dir and step conditions applied, vars
+  substituted (defaults plus --var; --mode=compile keeps placeholders).
+  Invalid formulas are error.kind invalid_args (exit 27) with file, key and
+  line; an unknown formula is not_found (exit 20). No database is opened.
+
 Output (--persist):
   Creates a proto bead in the database with:
   - ID matching the formula name (e.g., mol-feature)
@@ -68,5 +75,6 @@ bd cook <formula-file> [flags]
       --persist               Persist proto to database (legacy behavior)
       --prefix string         Prefix to prepend to proto ID (e.g., 'gt-' creates 'gt-mol-feature')
       --search-path strings   Additional paths to search for formula inheritance
+      --strict                Reject formula keys bd would drop (always on under machine mode)
       --var stringArray       Variable substitution (key=value), enables runtime mode
 ```

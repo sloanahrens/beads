@@ -1,27 +1,37 @@
 ---
 title: "bd search"
-description: "Search issues across title and ID (excludes closed issues by default)."
+description: "Search issues by text query"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
 
 Generated from `bd help --doc search`.
 
-Search issues across title and ID (excludes closed issues by default).
+Search issues by words across title, description, notes and ID (all
+statuses, including closed).
 
+The query is split on whitespace; every word must appear (case-insensitive
+substring) in the title, description or notes, in any order. Quoting a
+multi-word argument does not change that. Use --phrase to match the whole
+query as one adjacent phrase in the title instead.
 ID-like queries (e.g., "bd-123", "hq-319") use fast exact/prefix matching.
-Text queries search titles. Use --desc-contains for description search.
-Use --status all to include closed issues.
+Use --desc-contains for a description-only filter.
+Use --status open (etc.) to narrow; closed issues are included by default
+so "was this already filed/fixed?" cannot silently answer no. Matches
+beyond --limit are dropped status-blind, so when hunting live work in a
+large DB, narrow with --status open or raise --limit.
 
 Examples:
   bd search "authentication bug"
+  bd search "restart nudge"  # both words, any order, title/description/notes
+  bd search "overrun guard" --phrase  # adjacent phrase in the title only
   bd search "login" --status open
   bd search "database" --label backend --limit 10
   bd search --query "performance" --assignee alice
   bd search "bd-5q" # Search by partial ID (fast prefix match)
   bd search "security" --priority-min 0 --priority-max 2
   bd search "bug" --created-after 2025-01-01
-  bd search "refactor" --status all  # Include closed issues
+  bd search "refactor" --status open  # Only open issues
   bd search "bug" --sort priority
   bd search "task" --sort created --reverse
   bd search "api" --desc-contains "endpoint"
@@ -51,12 +61,13 @@ bd search [query] [flags]
       --no-assignee                  Filter issues with no assignee
       --no-labels                    Filter issues with no labels
       --notes-contains string        Filter by notes substring (case-insensitive)
+      --phrase                       Match the whole query as one adjacent phrase in the title instead of AND-ing its words
       --priority-max string          Filter by maximum priority (inclusive, 0-4 or P0-P4)
       --priority-min string          Filter by minimum priority (inclusive, 0-4 or P0-P4)
       --query string                 Search query (alternative to positional argument)
-  -r, --reverse                      Reverse sort order
+  -r, --reverse                      Invert the sort field's default direction (created/updated/closed default to newest-first, so --sort updated --reverse is oldest-first)
       --sort string                  Sort by field: priority, created, updated, closed, status, id, title, type, assignee
-  -s, --status string                Filter by stored status (open, in_progress, blocked, deferred, closed, all). Default excludes closed; use 'all' to include closed. Note: dependency-blocked issues use 'bd blocked'
+  -s, --status string                Filter by stored status (comma-separated for OR; open, in_progress, blocked, deferred, closed, all). Default searches all statuses including closed. Note: dependency-blocked issues use 'bd blocked'
   -t, --type string                  Filter by type (bug, feature, task, epic, chore, decision, merge-request, molecule, gate)
       --updated-after string         Filter issues updated after date (YYYY-MM-DD or RFC3339)
       --updated-before string        Filter issues updated before date (YYYY-MM-DD or RFC3339)
