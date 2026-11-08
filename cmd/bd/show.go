@@ -249,7 +249,7 @@ var showCmd = &cobra.Command{
 			return HandleErrorWithHintRespectJSON("no issues found matching the provided IDs",
 				"some IDs may reference deleted/purged records with no trace left in the live database — try 'bd history <id>' to check")
 		} else if foundCount > 0 {
-			maybeShowTip(store)
+			maybeShowTip(store, stdoutIsTerminal())
 		} else {
 			if len(args) > 0 {
 				SetLastTouchedID(args[0])

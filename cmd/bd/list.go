@@ -373,7 +373,7 @@ func runListCore(cmd *cobra.Command, _ []string) error {
 
 	printTruncationHint(truncated, in.effectiveLimit)
 
-	maybeShowTip(store)
+	maybeShowTip(store, stdoutIsTerminal())
 	return nil
 }
 

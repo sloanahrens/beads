@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/term"
 )
 
 type tipMetadataReader interface {
@@ -69,11 +71,20 @@ func initTipRand() {
 	})
 }
 
-// maybeShowTip selects and displays an eligible tip based on priority and probability
-// Respects --json and --quiet flags
-func maybeShowTip(store tipMetadataStore) {
-	// Skip tips in JSON output mode or quiet mode
-	if jsonOutput || quietFlag {
+// stdoutIsTerminal reports whether standard output is a terminal.
+// Tips are for a person reading the command output; a script that pipes or
+// redirects stdout must not receive them.
+func stdoutIsTerminal() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// maybeShowTip selects and displays an eligible tip based on priority and probability.
+// Respects --json and --quiet flags, and writes only when stdout is a terminal.
+// stdoutTTY is the result of stdoutIsTerminal, injected so tests do not depend
+// on how they were invoked.
+func maybeShowTip(store tipMetadataStore, stdoutTTY bool) {
+	// Skip tips in JSON output mode, quiet mode, or when stdout is not a terminal
+	if jsonOutput || quietFlag || !stdoutTTY {
 		return
 	}
 

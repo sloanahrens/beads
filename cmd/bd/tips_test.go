@@ -354,7 +354,7 @@ func TestMaybeShowTip_RespectsFlags(t *testing.T) {
 
 	// Test 1: Should not show in JSON mode
 	jsonOutput = true
-	output := captureStdout(t, func() error { maybeShowTip(store); return nil })
+	output := captureStdout(t, func() error { maybeShowTip(store, true); return nil })
 	if output != "" || tipRand != nil || len(store.readKeys) != 0 || len(store.writes) != 0 {
 		t.Fatalf("JSON mode output=%q rand=%v reads=%v writes=%v", output, tipRand, store.readKeys, store.writes)
 	}
@@ -362,13 +362,13 @@ func TestMaybeShowTip_RespectsFlags(t *testing.T) {
 
 	// Test 2: Should not show in quiet mode
 	quietFlag = true
-	output = captureStdout(t, func() error { maybeShowTip(store); return nil })
+	output = captureStdout(t, func() error { maybeShowTip(store, true); return nil })
 	if output != "" || tipRand != nil || len(store.readKeys) != 0 || len(store.writes) != 0 {
 		t.Fatalf("quiet mode output=%q rand=%v reads=%v writes=%v", output, tipRand, store.readKeys, store.writes)
 	}
 	quietFlag = false
 
-	output = captureStdout(t, func() error { maybeShowTip(store); return nil })
+	output = captureStdout(t, func() error { maybeShowTip(store, true); return nil })
 	if output != "\n💡 Tip: Always show tip\n" || tipRand == nil || len(store.readKeys) != 1 || len(store.writes) != 1 {
 		t.Fatalf("normal mode output=%q rand=%v reads=%v writes=%v", output, tipRand, store.readKeys, store.writes)
 	}
@@ -806,4 +806,94 @@ func TestClaudeSetupTipCondition(t *testing.T) {
 	// If setup is complete, should be false; if not complete, should be true
 	// Just verify it returns a valid boolean
 	_ = conditionResult
+}
+
+// useAlwaysShowTip replaces the registry with one always-eligible tip of
+// probability 1.0, so the probability roll can never decline it.
+func useAlwaysShowTip() {
+	tipsMutex.Lock()
+	tips = []Tip{
+		{
+			ID:          "always_show",
+			Condition:   func() bool { return true },
+			Message:     "Always show tip",
+			Frequency:   1 * time.Hour,
+			Priority:    100,
+			Probability: 1.0,
+		},
+	}
+	tipsMutex.Unlock()
+}
+
+func TestMaybeShowTipSkipsAPipe(t *testing.T) {
+	resetTipTestState(t)
+	t.Setenv("BEADS_TIP_SEED", "12345")
+	useAlwaysShowTip()
+
+	store := &tipMetadataRecorder{values: map[string]string{}}
+	output := captureStdout(t, func() error {
+		maybeShowTip(store, false) // stdout is a pipe or a redirected file
+		return nil
+	})
+
+	if output != "" {
+		t.Fatalf("stdout not a terminal printed %q, want no tip", output)
+	}
+	if len(store.writes) != 0 {
+		t.Fatalf("stdout not a terminal recorded last-shown writes %#v, want none", store.writes)
+	}
+}
+
+func TestMaybeShowTipOnATerminalIsUnchanged(t *testing.T) {
+	resetTipTestState(t)
+	t.Setenv("BEADS_TIP_SEED", "12345")
+
+	t.Run("terminal shows the tip", func(t *testing.T) {
+		useAlwaysShowTip()
+		store := &tipMetadataRecorder{values: map[string]string{}}
+
+		output := captureStdout(t, func() error {
+			maybeShowTip(store, true)
+			return nil
+		})
+
+		if output != "\n💡 Tip: Always show tip\n" {
+			t.Fatalf("terminal output = %q, want the tip", output)
+		}
+		if len(store.writes) != 1 {
+			t.Fatalf("terminal recorded %#v, want the last-shown time written once", store.writes)
+		}
+	})
+
+	t.Run("json suppresses on a terminal", func(t *testing.T) {
+		useAlwaysShowTip()
+		jsonOutput = true
+		t.Cleanup(func() { jsonOutput = false })
+		store := &tipMetadataRecorder{values: map[string]string{}}
+
+		output := captureStdout(t, func() error {
+			maybeShowTip(store, true)
+			return nil
+		})
+
+		if output != "" || len(store.writes) != 0 {
+			t.Fatalf("json mode output = %q writes = %#v, want neither", output, store.writes)
+		}
+	})
+
+	t.Run("quiet suppresses on a terminal", func(t *testing.T) {
+		useAlwaysShowTip()
+		quietFlag = true
+		t.Cleanup(func() { quietFlag = false })
+		store := &tipMetadataRecorder{values: map[string]string{}}
+
+		output := captureStdout(t, func() error {
+			maybeShowTip(store, true)
+			return nil
+		})
+
+		if output != "" || len(store.writes) != 0 {
+			t.Fatalf("quiet mode output = %q writes = %#v, want neither", output, store.writes)
+		}
+	})
 }
