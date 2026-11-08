@@ -250,7 +250,7 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			} else {
 				fmt.Printf("\n%s No open issues\n\n", ui.RenderPass("✨"))
 			}
-			maybeShowTip(store)
+			maybeShowTip(store, stdoutIsTerminal())
 			return nil
 		}
 		parentEpicMap := buildParentEpicMap(ctx, activeStore, issues)
@@ -279,7 +279,7 @@ This is useful for agents executing molecules to see which steps can run next.`,
 			fmt.Printf("%s\n\n", ui.RenderMuted(fmt.Sprintf("Showing %d of %d ready issues. Use -n to show more.", len(issues), totalReady)))
 		}
 
-		maybeShowTip(store)
+		maybeShowTip(store, stdoutIsTerminal())
 		return nil
 	},
 }

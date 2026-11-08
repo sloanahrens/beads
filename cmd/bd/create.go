@@ -641,7 +641,7 @@ var createCmd = &cobra.Command{
 			debug.PrintNormal("  Priority: P%d\n", created.Priority)
 			debug.PrintNormal("  Status: %s\n", created.Status)
 
-			maybeShowTip(store)
+			maybeShowTip(store, stdoutIsTerminal())
 		}
 
 		SetLastTouchedID(created.ID)
