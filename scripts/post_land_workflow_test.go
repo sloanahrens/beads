@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,14 +65,7 @@ func readPostLandWorkflow(t *testing.T) postLandWorkflow {
 func TestPostLandWorkflowDefinition(t *testing.T) {
 	workflow := readPostLandWorkflow(t)
 
-	jobs := postLandField(workflow.root, "jobs")
-	if jobs == nil || jobs.Kind != yaml.MappingNode {
-		t.Fatalf("workflow has no jobs mapping")
-	}
-	if keys := postLandMappingKeys(jobs); len(keys) != 1 || keys[0] != postLandJobKey {
-		t.Fatalf("workflow jobs = %v, want exactly one job %q", keys, postLandJobKey)
-	}
-	job := jobs.Content[1]
+	job := postLandOnlyJob(t, workflow.root)
 
 	t.Run("name is post-land", func(t *testing.T) {
 		name := postLandField(workflow.root, "name")
@@ -180,6 +174,12 @@ func TestPostLandWorkflowDefinition(t *testing.T) {
 		}
 	})
 
+	t.Run("has no continue-on-error", func(t *testing.T) {
+		for _, path := range postLandContinueOnErrorPaths(workflow.root) {
+			t.Errorf("workflow sets continue-on-error at %s; a failed gate would still post a passing status", path)
+		}
+	})
+
 	t.Run("holds no secrets or credentials", func(t *testing.T) {
 		if bytes.Contains(workflow.raw, []byte("secrets.")) {
 			t.Errorf("workflow references a secrets. expression")
@@ -188,6 +188,61 @@ func TestPostLandWorkflowDefinition(t *testing.T) {
 			t.Errorf("workflow defines credential-shaped key %q", key)
 		}
 	})
+}
+
+// TestPostLandRefusesContinueOnError mutates a scratch copy of the reviewed
+// text the way a well-meaning retry step would and expects the pin to name the
+// key at each level. A job that may fail without failing the run would let the
+// post-land status read green after a red gate, which defeats the verdict.
+func TestPostLandRefusesContinueOnError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, root *yaml.Node) []string
+	}{
+		{
+			name: "reviewed text",
+			mutate: func(*testing.T, *yaml.Node) []string {
+				return nil
+			},
+		},
+		{
+			name: "job level",
+			mutate: func(t *testing.T, root *yaml.Node) []string {
+				postLandSetScalar(postLandOnlyJob(t, root), "continue-on-error", "true")
+				return []string{"jobs." + postLandJobKey + ".continue-on-error"}
+			},
+		},
+		{
+			name: "step level",
+			mutate: func(t *testing.T, root *yaml.Node) []string {
+				for i, step := range postLandSteps(postLandOnlyJob(t, root)) {
+					if run := postLandField(step, "run"); run != nil && strings.TrimSpace(run.Value) == postLandGateCommand {
+						postLandSetScalar(step, "continue-on-error", "true")
+						return []string{fmt.Sprintf("jobs.%s.steps[%d].continue-on-error", postLandJobKey, i)}
+					}
+				}
+				t.Fatalf("no step runs %q", postLandGateCommand)
+				return nil
+			},
+		},
+		{
+			name: "key set twice",
+			mutate: func(t *testing.T, root *yaml.Node) []string {
+				job := postLandOnlyJob(t, root)
+				postLandSetScalar(job, "continue-on-error", "true")
+				postLandSetScalar(job, "continue-on-error", "false")
+				return []string{"jobs." + postLandJobKey + ".continue-on-error"}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workflow := readPostLandWorkflow(t)
+			want := tc.mutate(t, workflow.root)
+			if got := postLandContinueOnErrorPaths(workflow.root); !reflect.DeepEqual(got, want) {
+				t.Errorf("continue-on-error paths = %v, want %v", got, want)
+			}
+		})
+	}
 }
 
 // TestPostLandWorkflowLiveCopyMatches fails once the live workflow exists and
@@ -258,6 +313,68 @@ func postLandField(mapping *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+// postLandOnlyJob returns the workflow's single job, failing the test when the
+// jobs mapping does not hold exactly postLandJobKey.
+func postLandOnlyJob(t *testing.T, root *yaml.Node) *yaml.Node {
+	t.Helper()
+
+	jobs := postLandField(root, "jobs")
+	if jobs == nil || jobs.Kind != yaml.MappingNode {
+		t.Fatalf("workflow has no jobs mapping")
+	}
+	if keys := postLandMappingKeys(jobs); len(keys) != 1 || keys[0] != postLandJobKey {
+		t.Fatalf("workflow jobs = %v, want exactly one job %q", keys, postLandJobKey)
+	}
+	return jobs.Content[1]
+}
+
+// postLandContinueOnErrorPaths returns the dotted path of every
+// continue-on-error key in the workflow, at any depth. A job or step that may
+// fail without failing the run would let a failed gate post a passing status,
+// so the pin refuses the key wherever it appears.
+func postLandContinueOnErrorPaths(node *yaml.Node) []string {
+	var paths []string
+	var walk func(node *yaml.Node, path string)
+	walk = func(node *yaml.Node, path string) {
+		if node == nil {
+			return
+		}
+		switch node.Kind {
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				key := node.Content[i].Value
+				childPath := key
+				if path != "" {
+					childPath = path + "." + key
+				}
+				if key == "continue-on-error" {
+					paths = append(paths, childPath)
+				}
+				walk(node.Content[i+1], childPath)
+			}
+		case yaml.SequenceNode:
+			for i, child := range node.Content {
+				walk(child, fmt.Sprintf("%s[%d]", path, i))
+			}
+		}
+	}
+	walk(node, "")
+	return paths
+}
+
+// postLandSetScalar sets key to a string scalar on mapping, replacing an
+// existing value so the document never carries a duplicate key.
+func postLandSetScalar(mapping *yaml.Node, key, value string) {
+	if existing := postLandField(mapping, key); existing != nil {
+		*existing = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+		return
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
 }
 
 // postLandMappingKeys returns a mapping's keys in document order.
