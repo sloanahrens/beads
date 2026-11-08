@@ -1,0 +1,41 @@
+# The post-land check for this rig.
+#
+# What it is: `make gate` runs on main after every landing, so the town can
+# read main as green or red instead of UNKNOWN (post_land_command is still the
+# placeholder `true`).
+#
+# The live copy is .forgejo/workflows/post-land.yml. Committing it is a HUMAN
+# step: the workflow-protect hook refuses an agent push into that directory.
+# Until then this file is the reviewed text the operator copies over verbatim.
+# scripts/post_land_workflow_test.go fails if the two copies differ.
+#
+# The workflow name and the single job key are the status context
+# `post-land / check (push)`: Forgejo builds it from the two names. Renaming
+# either orphans the rig setting merge_queue.post_land_status_context, and the
+# check would stop reporting for this rig.
+#
+# There is no `concurrency` block on purpose: a cancelled or replaced run would
+# leave a false red, or no status at all, for the landing it superseded.
+#
+# runs-on is the host runner's ci-base image, the same one the gate workflow
+# (.forgejo/workflows/gate.yml) uses, so `make gate` has the Go, dolt, jq and
+# CGO/ICU toolchain it needs. The run is ci-pr-lint plus the unit tier; the
+# integration tier is excluded because it needs Docker and a Dolt container and
+# is far slower. Versions
+# are stamped from git, so the checkout takes full history and fetches tags.
+name: post-land
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ci-base
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch tags
+        run: git fetch --force --tags
+      - name: Gate
+        run: make gate
