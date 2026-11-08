@@ -474,6 +474,58 @@ func TestResolveDocsBDCachesAnAbbreviatedCommitPinUnderTheFullSha(t *testing.T) 
 	}
 }
 
+// TestResolveDocsBDReadsOnlyAWholeHexPinAsACommit pins the commit-pin test
+// itself — `^[0-9a-f]{7,40}$` — from the tag side. Every row is a pin the
+// script must treat as a tag, so it must be fetched, and the fetch failing
+// must read as a tag failure rather than "not in this checkout". A commit pin
+// never reaches origin, so "fetching tag <pin> from origin" naming the whole
+// pin is what proves the tag branch ran.
+func TestResolveDocsBDReadsOnlyAWholeHexPinAsACommit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pin  string
+	}{
+		// Mutation: the length floor lowered, {7,40} -> {6,40}.
+		{name: "six hex characters is a tag", pin: "abc123"},
+		// Mutation: the length ceiling raised, {7,40} -> {7,64}.
+		{name: "forty-one hex characters is a tag", pin: strings.Repeat("a", 41)},
+		// Mutation: the class widened to accept upper case, [0-9a-f] -> [0-9a-fA-F].
+		{name: "upper-case hex is a tag", pin: "ABCDEF1"},
+		// Mutation: the leading ^ dropped, so a hex run at a tag name's end matches.
+		{name: "a tag name ending in hex is a tag", pin: "rc-abcdef1"},
+		// Mutation: the trailing $ dropped, so a hex run at a tag name's start matches.
+		{name: "a tag name starting with hex is a tag", pin: "abcdef1-rc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newResolvePinFixture(t)
+			f.setPin(tc.pin)
+			f.stubFailingFetch()
+
+			run := f.run()
+
+			if run.exitCode() != 1 {
+				t.Fatalf("pin %q exited %d, want the failed tag fetch's 1:\nstdout:\n%s\nstderr:\n%s",
+					tc.pin, run.exitCode(), run.stdout, run.stderr)
+			}
+			if strings.TrimSpace(run.stdout) != "" {
+				t.Errorf("failing tag pin printed %q to stdout; a caller takes non-empty stdout as the bd to use", run.stdout)
+			}
+			for _, want := range []string{
+				"fetching tag " + tc.pin + " from origin",
+				"names a tag this repository cannot resolve",
+				"push tag " + tc.pin + " to origin",
+			} {
+				if !strings.Contains(run.stderr, want) {
+					t.Errorf("pin %q was not read as a tag: diagnostic does not contain %q:\n%s", tc.pin, want, run.stderr)
+				}
+			}
+			if strings.Contains(run.stderr, "commit pins are looked up locally") {
+				t.Errorf("pin %q was read as a commit:\n%s", tc.pin, run.stderr)
+			}
+		})
+	}
+}
+
 // TestResolveDocsBDRefusesACommitPinNotInTheCheckout: a hex pin naming no
 // commit in this checkout fails with the pin and the cause, and is never
 // fetched. Reading it as a tag would fetch refs/tags/<pin>, which is the
