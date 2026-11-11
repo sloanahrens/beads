@@ -37,16 +37,20 @@ var _ samplesops.Samples = (*samples)(nil)
 // Add validates BEFORE the unit of work is opened, so a refusal cannot be
 // mistaken at the call site for a write that rolled back, then runs the shared
 // AddInTx on this unit of work's own statement runner.
+//
+// The row is PREPARED before RunTxResult so every retry attempt inserts the
+// same id: a retried commit whose first result was lost lands no second row.
 func (s *samples) Add(ctx context.Context, request samplesops.AddRequest) (samplesops.AddResult, error) {
 	if err := samplesops.ValidateAddRequest(request); err != nil {
 		return samplesops.AddResult{}, err
 	}
+	row := storesamples.Prepare(request)
 	return RunTxResult(ctx, s.provider, func(ctx context.Context, uw UnitOfWork) (samplesops.AddResult, string, error) {
 		runner, err := statementRunner(uw)
 		if err != nil {
 			return samplesops.AddResult{}, "", err
 		}
-		result, err := storesamples.AddInTx(ctx, runner, request)
+		result, err := storesamples.AddInTx(ctx, runner, row)
 		if err != nil {
 			return samplesops.AddResult{}, "", err
 		}

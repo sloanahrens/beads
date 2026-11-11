@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,11 @@ import (
 	"github.com/steveyegge/beads/samplesops"
 )
 
+// sampleOpen is the verb's seam to the samples role. The package-level
+// openSamples is the production value; a unit test passes its own so no
+// package-global state steers the behaviour under test.
+type sampleOpen func(directRequirement string) (samplesops.Samples, error)
+
 // openSamples hands back the generic-samples role for this invocation.
 //
 // directRequirement is the message ensureDirectMode reports when a workspace is
@@ -24,6 +30,75 @@ func openSamples(directRequirement string) (samplesops.Samples, error) {
 		return nil, err
 	}
 	return store.Samples()
+}
+
+// sampleOpenError marks a failure to open the role, so the verb can print the
+// open diagnostic rather than the write diagnostic.
+type sampleOpenError struct{ err error }
+
+func (e *sampleOpenError) Error() string { return e.err.Error() }
+func (e *sampleOpenError) Unwrap() error { return e.err }
+
+// samplePayloadError marks a failure to read --json's source, so the verb
+// prints the read diagnostic rather than the write diagnostic.
+type samplePayloadError struct{ err error }
+
+func (e *samplePayloadError) Error() string { return e.err.Error() }
+func (e *samplePayloadError) Unwrap() error { return e.err }
+
+// sampleReadPayload is the verb's seam to --json's source. The package-level
+// readSamplePayload is the production value.
+type sampleReadPayload func(source string) ([]byte, error)
+
+// sampleAdd validates and stores one sample. Everything the verb refuses is
+// checked BEFORE open runs, so a caller's mistake never opens the role.
+func sampleAdd(ctx context.Context, open sampleOpen, readPayload sampleReadPayload, kind, atRaw, payloadSource string) (samplesops.Sample, error) {
+	if payloadSource == "" {
+		return samplesops.Sample{}, fmt.Errorf("%w: --json is required (<file|->)", samplesops.ErrValidation)
+	}
+	at, err := samplesops.ParseAt(atRaw)
+	if err != nil {
+		return samplesops.Sample{}, err
+	}
+	payload, err := readPayload(payloadSource)
+	if err != nil {
+		return samplesops.Sample{}, &samplePayloadError{err: err}
+	}
+	request := samplesops.AddRequest{Kind: kind, At: at, Payload: payload}
+	if err := samplesops.ValidateAddRequest(request); err != nil {
+		return samplesops.Sample{}, err
+	}
+	samples, err := open("sample add requires direct database access")
+	if err != nil {
+		return samplesops.Sample{}, &sampleOpenError{err: err}
+	}
+	result, err := samples.Add(ctx, request)
+	if err != nil {
+		return samplesops.Sample{}, err
+	}
+	return result.Sample, nil
+}
+
+// sampleList validates and reads one kind's samples, newest first. As in
+// sampleAdd, every refusal happens before open runs.
+func sampleList(ctx context.Context, open sampleOpen, kind, sinceRaw string, limit int) ([]samplesops.Sample, error) {
+	since, err := samplesops.ParseSince(sinceRaw)
+	if err != nil {
+		return nil, err
+	}
+	request := samplesops.ListRequest{Kind: kind, Since: since, Limit: limit}
+	if err := samplesops.ValidateListRequest(request); err != nil {
+		return nil, err
+	}
+	samples, err := open("sample list requires direct database access")
+	if err != nil {
+		return nil, &sampleOpenError{err: err}
+	}
+	result, err := samples.List(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return result.Samples, nil
 }
 
 // noteDirectSampleWrite marks the invocation as having written, which is what
@@ -44,8 +119,9 @@ provider balance or a usage record — in the beads database.
 
 A sample has a kind, an event time and a JSON-object payload. Kinds are opaque
 strings chosen by the producer; bd validates their shape, never their
-vocabulary. The payload is stored verbatim and listed back byte-for-byte, so a
-consumer can compare samples without a normalization step.
+vocabulary. The database stores the payload bytes as given; bd sample list
+--json embeds the stored value as compact JSON, so whitespace and key order are
+normalized on output.
 
 The plane is append-only: there is no delete or retention verb.`,
 }
@@ -61,7 +137,7 @@ var sampleAddCmd = &cobra.Command{
 --at is the event time as an RFC3339 timestamp and is stored in UTC. --json is
 the payload: a path to a file holding a JSON object, or "-" to read standard
 input. The payload is size-capped at 65536 bytes, validated as a JSON object,
-and stored verbatim.
+and stored as the exact bytes given.
 
 Examples:
   bd sample add --kind deepseek_balance --at 2026-11-11T09:30:00Z --json balance.json
@@ -76,31 +152,19 @@ Examples:
 		atRaw, _ := cmd.Flags().GetString("at")
 		payloadSource, _ := cmd.Flags().GetString("json")
 
-		// Everything is parsed and validated BEFORE this verb opens the samples
+		// sampleAdd reads, parses and validates BEFORE it opens the samples
 		// role, so a caller's mistake is refused without a write and cannot be
 		// mistaken for a write that rolled back.
-		at, err := samplesops.ParseAt(atRaw)
+		sample, err := sampleAdd(rootCtx, openSamples, readSamplePayload, kind, atRaw, payloadSource)
 		if err != nil {
-			return sampleValidationError(err, false)
-		}
-		if payloadSource == "" {
-			return sampleValidationError(fmt.Errorf("%w: --json is required (<file|->)", samplesops.ErrValidation), false)
-		}
-		payload, err := readSamplePayload(payloadSource)
-		if err != nil {
-			return HandleErrorRespectJSON("%v", err)
-		}
-		request := samplesops.AddRequest{Kind: kind, At: at, Payload: payload}
-		if err := samplesops.ValidateAddRequest(request); err != nil {
-			return sampleValidationError(err, false)
-		}
-
-		samples, err := openSamples("sample add requires direct database access")
-		if err != nil {
-			return HandleError("%v", err)
-		}
-		result, err := samples.Add(rootCtx, request)
-		if err != nil {
+			var openErr *sampleOpenError
+			if errors.As(err, &openErr) {
+				return HandleError("%v", openErr.err)
+			}
+			var payloadErr *samplePayloadError
+			if errors.As(err, &payloadErr) {
+				return HandleErrorRespectJSON("%v", payloadErr.err)
+			}
 			if errors.Is(err, samplesops.ErrValidation) {
 				return sampleValidationError(err, false)
 			}
@@ -108,7 +172,7 @@ Examples:
 		}
 		noteDirectSampleWrite()
 
-		fmt.Printf("Added sample %s\n", result.Sample.ID)
+		fmt.Printf("Added sample %s\n", sample.ID)
 		return nil
 	},
 }
@@ -129,7 +193,8 @@ the default, is uncapped. With --json the output is the usual envelope:
              "payload": {"used": 1200}, "created_at": "..."}]}
 
 at and created_at are RFC3339 timestamps in UTC; payload is the stored JSON
-object, returned byte-for-byte as it was added.
+object embedded as compact JSON — the value is unchanged, but the encoder
+normalizes whitespace and key order, so the bytes may differ from those added.
 
 Examples:
   bd sample list --kind deepseek_balance --limit 10 --json
@@ -142,27 +207,18 @@ Examples:
 		sinceRaw, _ := cmd.Flags().GetString("since")
 		limit, _ := cmd.Flags().GetInt("limit")
 
-		since, err := samplesops.ParseSince(sinceRaw)
+		samples, err := sampleList(rootCtx, openSamples, kind, sinceRaw, limit)
 		if err != nil {
-			return sampleValidationError(err, jsonOutput)
-		}
-		request := samplesops.ListRequest{Kind: kind, Since: since, Limit: limit}
-		if err := samplesops.ValidateListRequest(request); err != nil {
-			return sampleValidationError(err, jsonOutput)
-		}
-
-		samples, err := openSamples("sample list requires direct database access")
-		if err != nil {
-			return HandleError("%v", err)
-		}
-		result, err := samples.List(rootCtx, request)
-		if err != nil {
+			var openErr *sampleOpenError
+			if errors.As(err, &openErr) {
+				return HandleError("%v", openErr.err)
+			}
 			if errors.Is(err, samplesops.ErrValidation) {
 				return sampleValidationError(err, jsonOutput)
 			}
 			return HandleErrorRespectJSON("listing samples: %v", err)
 		}
-		return printSampleList(result.Samples)
+		return printSampleList(samples)
 	},
 }
 
@@ -195,7 +251,7 @@ func trimValidationPrefix(message string) string {
 // reading an arbitrarily large file into memory.
 func readSamplePayload(source string) ([]byte, error) {
 	if source == "-" {
-		payload, err := io.ReadAll(io.LimitReader(os.Stdin, samplesops.MaxPayloadBytes+1))
+		payload, err := readSamplePayloadFrom(os.Stdin)
 		if err != nil {
 			return nil, fmt.Errorf("reading payload from standard input: %w", err)
 		}
@@ -206,15 +262,25 @@ func readSamplePayload(source string) ([]byte, error) {
 		return nil, fmt.Errorf("opening payload %s: %w", source, err)
 	}
 	defer file.Close()
-	payload, err := io.ReadAll(io.LimitReader(file, samplesops.MaxPayloadBytes+1))
+	payload, err := readSamplePayloadFrom(file)
 	if err != nil {
 		return nil, fmt.Errorf("reading payload %s: %w", source, err)
 	}
 	return payload, nil
 }
 
+// readSamplePayloadFrom is readSamplePayload's reader seam: it reads at most
+// one byte past the cap, so the value it returns is enough for validation to
+// tell an oversize payload from a payload at the limit without buffering the
+// whole source.
+func readSamplePayloadFrom(r io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, samplesops.MaxPayloadBytes+1))
+}
+
 // sampleJSON is one row of `bd sample list --json`. Payload is embedded as raw
-// JSON, not as a string, so a consumer reads the object it stored.
+// JSON, not as a string, so a consumer reads the object it stored. encoding/json
+// compacts a RawMessage while encoding the envelope, so the bytes on the wire
+// are a normalized form of the stored value, not necessarily the same bytes.
 type sampleJSON struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`

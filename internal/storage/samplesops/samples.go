@@ -27,30 +27,62 @@ import (
 	"github.com/steveyegge/beads/samplesops"
 )
 
-// AddInTx appends one validated sample inside the caller's transaction and
-// returns the row as it was stored.
+// Prepared is one validated add with the fields the plane mints already fixed.
+//
+// It exists so the id and created_at survive a retried transaction: a caller
+// prepares the row ONCE, before it opens (or reopens) its write transaction,
+// and every attempt inserts the same row instead of minting a fresh id.
+type Prepared struct {
+	ID        string
+	Kind      string
+	At        time.Time
+	Payload   string
+	CreatedAt time.Time
+}
+
+// Prepare fixes the row's server-minted fields for one add.
 //
 // The id and created_at are minted here rather than left to a column DEFAULT so
 // the value Add returns is the value that went into the row: a DEFAULT would
 // make the returned row a guess at what the engine chose. id is a random UUID
 // because the plane has no natural key — two samples may share a kind, an
 // instant and a payload, and both are legitimate observations.
-func AddInTx(ctx context.Context, runner db.Runner, request samplesops.AddRequest) (samplesops.AddResult, error) {
+//
+// Callers must call this ONCE per add and pass the result to every attempt of
+// the transaction. AddInTx's insert is idempotent on ID, so a retry after an
+// ambiguous commit lands no second row.
+func Prepare(request samplesops.AddRequest) Prepared {
 	// Both timestamps are truncated to the DATETIME(6) precision the columns
 	// store BEFORE the insert, so the row Add returns is the row that was
 	// written rather than a nanosecond-precision value the engine then rounded.
-	row := samplesops.Sample{
+	return Prepared{
 		ID:        uuid.NewString(),
 		Kind:      request.Kind,
 		At:        request.At.UTC().Truncate(time.Microsecond),
 		Payload:   string(request.Payload),
 		CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
-	const insert = `INSERT INTO samples (id, kind, at, payload, created_at) VALUES (?, ?, ?, ?, ?)`
+}
+
+// AddInTx appends one prepared sample inside the caller's transaction and
+// returns the row as it was stored.
+//
+// The insert is IDEMPOTENT on the primary key: if a previous attempt committed
+// but its result was lost, the retry carrying the same Prepared row inserts
+// nothing and cannot double-count an observation. ON DUPLICATE KEY UPDATE is
+// the MySQL/Dolt spelling of that no-op.
+func AddInTx(ctx context.Context, runner db.Runner, row Prepared) (samplesops.AddResult, error) {
+	const insert = `INSERT INTO samples (id, kind, at, payload, created_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`
 	if _, err := runner.ExecContext(ctx, insert, row.ID, row.Kind, row.At, row.Payload, row.CreatedAt); err != nil {
 		return samplesops.AddResult{}, fmt.Errorf("storing sample %s: %w", row.ID, err)
 	}
-	return samplesops.AddResult{Sample: row}, nil
+	return samplesops.AddResult{Sample: samplesops.Sample{
+		ID:        row.ID,
+		Kind:      row.Kind,
+		At:        row.At,
+		Payload:   row.Payload,
+		CreatedAt: row.CreatedAt,
+	}}, nil
 }
 
 // ListInTx reads one kind's samples inside the caller's transaction, newest

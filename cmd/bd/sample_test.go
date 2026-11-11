@@ -3,42 +3,72 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/steveyegge/beads/samplesops"
 )
 
 // The store-backed round trip for bd sample lives in
 // sample_integration_test.go. The tests here stay in the unit tier: every
-// refusal happens inside the verb before it opens the samples role, so driving
-// RunE directly needs no Dolt server and no database.
+// refusal happens inside the verb before it opens the samples role, and these
+// tests pass the role and the --json source in as seams, so no package-level
+// state steers the behaviour under test.
 
-// newSampleUnitEnv pins the globals the sample verbs read and deliberately
-// leaves `store` nil: a refusal that reached the store would fail differently,
-// which is exactly what the tests below must not allow.
-func newSampleUnitEnv(t *testing.T) *parityEnv {
+// sampleFake is the samples role a unit test injects. It records the request
+// the verb built so the test can assert what the role was asked to do.
+type sampleFake struct {
+	addCalls    int
+	addRequest  samplesops.AddRequest
+	addResult   samplesops.AddResult
+	addErr      error
+	listCalls   int
+	listRequest samplesops.ListRequest
+	listResult  samplesops.ListResult
+	listErr     error
+}
+
+func (f *sampleFake) Add(_ context.Context, request samplesops.AddRequest) (samplesops.AddResult, error) {
+	f.addCalls++
+	f.addRequest = request
+	if f.addErr != nil {
+		return samplesops.AddResult{}, f.addErr
+	}
+	return f.addResult, nil
+}
+
+func (f *sampleFake) List(_ context.Context, request samplesops.ListRequest) (samplesops.ListResult, error) {
+	f.listCalls++
+	f.listRequest = request
+	if f.listErr != nil {
+		return samplesops.ListResult{}, f.listErr
+	}
+	return f.listResult, nil
+}
+
+// openThatMustNotRun fails the test if the verb reaches the role: every
+// refusal below is supposed to happen first.
+func openThatMustNotRun(t *testing.T) sampleOpen {
 	t.Helper()
-	saveAndRestoreGlobals(t)
-	ensureCleanGlobalState(t)
+	return func(string) (samplesops.Samples, error) {
+		t.Helper()
+		t.Fatal("the verb opened the samples role before refusing")
+		return nil, nil
+	}
+}
 
-	savedCtx, savedJSON, savedReadonly := rootCtx, jsonOutput, readonlyMode
-	t.Cleanup(func() {
-		rootCtx, jsonOutput, readonlyMode = savedCtx, savedJSON, savedReadonly
-	})
-
-	rootCtx = context.Background()
-	jsonOutput = false
-	readonlyMode = false
-	store = nil
-	storeActive = false
-	return &parityEnv{t: t}
+func readPayloadReturning(payload []byte) sampleReadPayload {
+	return func(string) ([]byte, error) { return payload, nil }
 }
 
 // writePayload writes payload under the test's temp dir and returns its path.
+// It is shared with the integration tier, which drives the real --json flag.
 func writePayload(t *testing.T, payload []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "payload.json")
@@ -53,65 +83,80 @@ func TestSampleAddRefusesBadInputBeforeOpeningTheStore(t *testing.T) {
 	oversize = append(oversize, []byte(`"}`)...)
 
 	tests := []struct {
-		name    string
-		payload []byte
-		flags   map[string]string
-		want    []string
+		name        string
+		kind        string
+		at          string
+		payload     []byte
+		payloadPath string
+		want        []string
 	}{
 		{
-			name:    "bad at",
-			payload: []byte(`{"ok":true}`),
-			flags:   map[string]string{"kind": "usage_record", "at": "yesterday"},
-			want:    []string{"--at", "RFC3339"},
+			name:        "bad at",
+			kind:        "usage_record",
+			at:          "yesterday",
+			payload:     []byte(`{"ok":true}`),
+			payloadPath: "payload.json",
+			want:        []string{"--at", "RFC3339"},
 		},
 		{
-			name:    "missing at",
-			payload: []byte(`{"ok":true}`),
-			flags:   map[string]string{"kind": "usage_record", "at": ""},
-			want:    []string{"--at", "required"},
+			name:        "missing at",
+			kind:        "usage_record",
+			at:          "",
+			payload:     []byte(`{"ok":true}`),
+			payloadPath: "payload.json",
+			want:        []string{"--at", "required"},
 		},
 		{
-			name:    "non-object payload",
-			payload: []byte(`[1,2,3]`),
-			flags:   map[string]string{"kind": "usage_record", "at": "2026-11-11T09:30:00Z"},
-			want:    []string{"payload", "JSON object"},
+			name:        "non-object payload",
+			kind:        "usage_record",
+			at:          "2026-11-11T09:30:00Z",
+			payload:     []byte(`[1,2,3]`),
+			payloadPath: "payload.json",
+			want:        []string{"payload", "JSON object"},
 		},
 		{
-			name:    "oversize payload",
-			payload: oversize,
-			flags:   map[string]string{"kind": "usage_record", "at": "2026-11-11T09:30:00Z"},
-			want:    []string{"payload", "65536-byte cap"},
+			name:        "oversize payload",
+			kind:        "usage_record",
+			at:          "2026-11-11T09:30:00Z",
+			payload:     oversize,
+			payloadPath: "payload.json",
+			want:        []string{"payload", "65536-byte cap"},
 		},
 		{
-			name:    "empty kind",
-			payload: []byte(`{"ok":true}`),
-			flags:   map[string]string{"kind": "", "at": "2026-11-11T09:30:00Z"},
-			want:    []string{"kind", "required"},
+			name:        "empty kind",
+			kind:        "",
+			at:          "2026-11-11T09:30:00Z",
+			payload:     []byte(`{"ok":true}`),
+			payloadPath: "payload.json",
+			want:        []string{"kind", "required"},
 		},
 		{
-			name:    "empty payload source",
-			payload: []byte(`{"ok":true}`),
-			flags:   map[string]string{"kind": "usage_record", "at": "2026-11-11T09:30:00Z", "json": ""},
-			want:    []string{"--json", "required"},
+			name:        "empty payload source",
+			kind:        "usage_record",
+			at:          "2026-11-11T09:30:00Z",
+			payload:     []byte(`{"ok":true}`),
+			payloadPath: "",
+			want:        []string{"--json", "required"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := newSampleUnitEnv(t)
-			flags := map[string]string{"json": writePayload(t, tt.payload)}
-			for k, v := range tt.flags {
-				flags[k] = v
+			fake := &sampleFake{}
+			open := openThatMustNotRun(t)
+			_, err := sampleAdd(context.Background(), open, readPayloadReturning(tt.payload), tt.kind, tt.at, tt.payloadPath)
+			if err == nil {
+				t.Fatalf("sampleAdd accepted %s, want a refusal", tt.name)
 			}
-			env.setFlags(sampleAddCmd, flags)
-
-			result := env.run(sampleAddCmd)
-			if result.exitCode == 0 {
-				t.Fatalf("bd sample add exited 0, want a refusal (stdout: %q)", result.stdout)
+			if !errors.Is(err, samplesops.ErrValidation) {
+				t.Fatalf("sampleAdd error = %v, want errors.Is(err, ErrValidation)", err)
 			}
 			for _, want := range tt.want {
-				if !strings.Contains(result.stderr, want) {
-					t.Errorf("stderr %q does not name %q", result.stderr, want)
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %q", err.Error(), want)
 				}
+			}
+			if fake.addCalls != 0 {
+				t.Errorf("refused add still called the role %d times", fake.addCalls)
 			}
 		})
 	}
@@ -120,50 +165,157 @@ func TestSampleAddRefusesBadInputBeforeOpeningTheStore(t *testing.T) {
 func TestSampleListRefusesBadInputBeforeOpeningTheStore(t *testing.T) {
 	tests := []struct {
 		name  string
-		flags map[string]string
+		kind  string
+		since string
+		limit int
 		want  []string
 	}{
 		{
 			name:  "bad since",
-			flags: map[string]string{"kind": "usage_record", "since": "2026-11-11 09:30"},
+			kind:  "usage_record",
+			since: "2026-11-11 09:30",
 			want:  []string{"--since", "RFC3339"},
 		},
 		{
 			name:  "negative limit",
-			flags: map[string]string{"kind": "usage_record", "limit": "-1"},
+			kind:  "usage_record",
+			limit: -1,
 			want:  []string{"limit", "negative"},
 		},
 		{
-			name:  "empty kind",
-			flags: map[string]string{"kind": ""},
-			want:  []string{"kind", "required"},
+			name: "empty kind",
+			kind: "",
+			want: []string{"kind", "required"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := newSampleUnitEnv(t)
-			env.setFlags(sampleListCmd, tt.flags)
-
-			result := env.run(sampleListCmd)
-			if result.exitCode == 0 {
-				t.Fatalf("bd sample list exited 0, want a refusal (stdout: %q)", result.stdout)
+			fake := &sampleFake{}
+			open := openThatMustNotRun(t)
+			_, err := sampleList(context.Background(), open, tt.kind, tt.since, tt.limit)
+			if err == nil {
+				t.Fatalf("sampleList accepted %s, want a refusal", tt.name)
+			}
+			if !errors.Is(err, samplesops.ErrValidation) {
+				t.Fatalf("sampleList error = %v, want errors.Is(err, ErrValidation)", err)
 			}
 			for _, want := range tt.want {
-				if !strings.Contains(result.stderr, want) {
-					t.Errorf("stderr %q does not name %q", result.stderr, want)
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %q", err.Error(), want)
 				}
+			}
+			if fake.listCalls != 0 {
+				t.Errorf("refused list still called the role %d times", fake.listCalls)
 			}
 		})
 	}
 }
 
-// TestSampleCommandDocumentsBothVerbs pins acceptance box 4's CLI half: the
+func TestSampleAddPassesTheParsedRequestToTheRole(t *testing.T) {
+	fake := &sampleFake{addResult: samplesops.AddResult{Sample: samplesops.Sample{ID: "smp-1"}}}
+	open := func(requirement string) (samplesops.Samples, error) {
+		if requirement == "" {
+			t.Error("the verb opened the role with an empty direct-access requirement")
+		}
+		return fake, nil
+	}
+	payload := []byte(`{"used":1200}`)
+
+	sample, err := sampleAdd(context.Background(), open, readPayloadReturning(payload), "usage_record", "2026-11-11T09:30:00+02:00", "payload.json")
+	if err != nil {
+		t.Fatalf("sampleAdd: %v", err)
+	}
+	if sample.ID != "smp-1" {
+		t.Errorf("returned sample id = %q, want the role's row", sample.ID)
+	}
+	if got, want := fake.addRequest.Kind, "usage_record"; got != want {
+		t.Errorf("role kind = %q, want %q", got, want)
+	}
+	if got, want := fake.addRequest.At.Format(time.RFC3339), "2026-11-11T07:30:00Z"; got != want {
+		t.Errorf("role at = %s, want the UTC-normalized %s", got, want)
+	}
+	if got := string(fake.addRequest.Payload); got != string(payload) {
+		t.Errorf("role payload = %q, want the bytes as given", got)
+	}
+}
+
+func TestSampleListPassesTheParsedRequestToTheRole(t *testing.T) {
+	fake := &sampleFake{listResult: samplesops.ListResult{Samples: []samplesops.Sample{{ID: "smp-1"}}}}
+	open := func(string) (samplesops.Samples, error) { return fake, nil }
+
+	samples, err := sampleList(context.Background(), open, "usage_record", "2026-11-11T00:00:00Z", 5)
+	if err != nil {
+		t.Fatalf("sampleList: %v", err)
+	}
+	if len(samples) != 1 || samples[0].ID != "smp-1" {
+		t.Errorf("sampleList returned %#v, want the role's rows", samples)
+	}
+	if fake.listRequest.Since == nil {
+		t.Fatal("role since = nil, want the parsed --since")
+	}
+	if got, want := fake.listRequest.Since.Format(time.RFC3339), "2026-11-11T00:00:00Z"; got != want {
+		t.Errorf("role since = %s, want %s", got, want)
+	}
+	if got, want := fake.listRequest.Limit, 5; got != want {
+		t.Errorf("role limit = %d, want %d", got, want)
+	}
+}
+
+// TestSampleAddReadsAtMostOneBytePastTheCap pins the seam that keeps an
+// oversize --json file from being buffered whole: the reader stops one byte
+// past the cap, which is exactly what validation needs to refuse it.
+func TestSampleAddReadsAtMostOneBytePastTheCap(t *testing.T) {
+	source := bytes.Repeat([]byte("x"), 4*samplesops.MaxPayloadBytes)
+	payload, err := readSamplePayloadFrom(bytes.NewReader(source))
+	if err != nil {
+		t.Fatalf("readSamplePayloadFrom: %v", err)
+	}
+	if got, want := len(payload), samplesops.MaxPayloadBytes+1; got != want {
+		t.Fatalf("read %d bytes from an oversize source, want %d", got, want)
+	}
+}
+
+func TestSampleAddReportsASourceReadFailureSeparately(t *testing.T) {
+	read := func(string) ([]byte, error) { return nil, errors.New("open payload: permission denied") }
+	_, err := sampleAdd(context.Background(), openThatMustNotRun(t), read, "usage_record", "2026-11-11T09:30:00Z", "payload.json")
+
+	var payloadErr *samplePayloadError
+	if !errors.As(err, &payloadErr) {
+		t.Fatalf("error = %v, want a samplePayloadError so the verb prints the read diagnostic", err)
+	}
+}
+
+func TestSampleAddReportsAnOpenFailureSeparately(t *testing.T) {
+	open := func(string) (samplesops.Samples, error) { return nil, errors.New("no workspace") }
+	_, err := sampleAdd(context.Background(), open, readPayloadReturning([]byte(`{"ok":true}`)), "usage_record", "2026-11-11T09:30:00Z", "payload.json")
+
+	var openErr *sampleOpenError
+	if !errors.As(err, &openErr) {
+		t.Fatalf("error = %v, want a sampleOpenError so the verb prints the open diagnostic", err)
+	}
+}
+
+func TestSampleAddReturnsAStoreFailureAsItIs(t *testing.T) {
+	storeFailure := errors.New("connection reset by peer")
+	fake := &sampleFake{addErr: storeFailure}
+	open := func(string) (samplesops.Samples, error) { return fake, nil }
+
+	_, err := sampleAdd(context.Background(), open, readPayloadReturning([]byte(`{"ok":true}`)), "usage_record", "2026-11-11T09:30:00Z", "payload.json")
+	if !errors.Is(err, storeFailure) {
+		t.Fatalf("error = %v, want the store failure", err)
+	}
+	if errors.Is(err, samplesops.ErrValidation) {
+		t.Error("a store failure was classified as a validation refusal")
+	}
+}
+
+// TestSampleCommandDocumentsBothVerbs pins the CLI half of the docs box: the
 // parent help lists add and list, and each documents its flags. The docs page
 // is generated from this text, so a missing sentence here is a missing page.
 func TestSampleCommandDocumentsBothVerbs(t *testing.T) {
 	wanted := map[string][]string{
-		"add":  {"--kind", "--at", "--json", "RFC3339", "verbatim"},
-		"list": {"--kind", "--since", "--limit", "newest first", "payload"},
+		"add":  {"--kind", "--at", "--json", "RFC3339", "exact bytes given"},
+		"list": {"--kind", "--since", "--limit", "newest first", "compact JSON"},
 	}
 	found := map[string]bool{}
 	for _, sub := range sampleCmd.Commands() {
