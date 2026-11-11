@@ -17,7 +17,7 @@ import (
 
 // sampleOpen is the verb's seam to the samples role. The package-level
 // openSamples is the production value; a unit test passes its own so no
-// package-global state steers the behaviour under test.
+// package-global state steers the behavior under test.
 type sampleOpen func(directRequirement string) (samplesops.Samples, error)
 
 // openSamples hands back the generic-samples role for this invocation.
