@@ -340,15 +340,19 @@ func TestSampleCommandDocumentsBothVerbs(t *testing.T) {
 // TestSampleAddJsonFlagIsThePayloadNotMachineOutput pins the deliberate
 // shadowing: add takes --json <file|->, so the inherited bool must not answer
 // for it. list keeps the inherited bool, so it declares no local flag.
+//
+// LocalFlags is what separates the two. Flags also reports the flags inherited
+// from the root command once any sibling test has executed the tree, so on
+// list it answers with root's bool --json as if list had declared it.
 func TestSampleAddJsonFlagIsThePayloadNotMachineOutput(t *testing.T) {
-	flag := sampleAddCmd.Flags().Lookup("json")
+	flag := sampleAddCmd.LocalFlags().Lookup("json")
 	if flag == nil {
-		t.Fatal("bd sample add has no --json flag")
+		t.Fatal("bd sample add has no local --json flag")
 	}
 	if got := flag.Value.Type(); got != "string" {
 		t.Errorf("bd sample add --json is a %s, want a string payload source", got)
 	}
-	if flag := sampleListCmd.Flags().Lookup("json"); flag != nil {
+	if flag := sampleListCmd.LocalFlags().Lookup("json"); flag != nil {
 		t.Errorf("bd sample list declares a local --json flag (%s); it must take the inherited output flag", flag.Value.Type())
 	}
 }

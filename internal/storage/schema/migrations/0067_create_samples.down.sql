@@ -6,14 +6,13 @@
 -- or the operator has explicitly forced it.
 --
 -- Force is the session variable @bd_migrate_force = 1. bd does not execute
--- down migrations; whoever runs this file sets the variable first, from the
--- shell convention BD_MIGRATE_FORCE=1:
+-- down migrations (it embeds only *.up.sql), and the SQL engine cannot read
+-- the process environment, so nothing in this repo maps the operator's shell
+-- variable BD_MIGRATE_FORCE to it: whoever runs this file sets the session
+-- variable first, in the same session that sources it:
 --
---   dolt sql -q "SET @bd_migrate_force = 1; SOURCE 0067_create_samples.down.sql"
---
--- (or an equivalent client that runs these statements in ONE session). The SQL
--- engine cannot read the process environment, so the runner is what maps
--- BD_MIGRATE_FORCE to the variable.
+--   SET @bd_migrate_force = 1;
+--   SOURCE 0067_create_samples.down.sql;
 --
 -- THE DECISION IS MADE INSIDE SQL, not by the client stopping on an error: the
 -- statement executed below is either the DROP or a refusal, so a client that

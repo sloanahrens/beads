@@ -20,7 +20,7 @@ func TestSampleRoundTrip(t *testing.T) {
 	env := newParityEnv(t)
 	// newParityEnv installs a real store as the global; the sample verbs open
 	// it through ensureDirectMode, which requires the active flag too.
-	storeActive = true
+	setSampleGlobalFlags(t)
 
 	balance := writePayload(t, []byte(`{"balance": 12}`))
 	usage := writePayload(t, []byte(`{"used": 1200}`))
@@ -105,7 +105,7 @@ func TestSampleRoundTrip(t *testing.T) {
 // id of the row it stored, so a caller can name it later.
 func TestSampleAddReportsTheStoredID(t *testing.T) {
 	env := newParityEnv(t)
-	storeActive = true
+	setSampleGlobalFlags(t)
 
 	env.setFlags(sampleAddCmd, map[string]string{
 		"kind": "usage_record", "at": "2026-11-11T09:00:00Z", "json": writePayload(t, []byte(`{"used":1}`)),
@@ -128,7 +128,7 @@ func TestSampleAddReportsTheStoredID(t *testing.T) {
 // left no row behind.
 func TestSampleAddRefusalWritesNothing(t *testing.T) {
 	env := newParityEnv(t)
-	storeActive = true
+	setSampleGlobalFlags(t)
 
 	env.setFlags(sampleAddCmd, map[string]string{
 		"kind": "usage_record", "at": "2026-11-11T09:00:00Z", "json": writePayload(t, []byte(`[1,2]`)),
@@ -180,12 +180,25 @@ func jsonEqual(got any, want map[string]any) bool {
 	return true
 }
 
+// setSampleGlobalFlags turns on the two package globals these verbs read for
+// one test and restores both when it ends. newParityEnv snapshots globals too,
+// but a direct assignment here would make the restore a fact about a helper in
+// another file; this keeps it a fact about this test.
+func setSampleGlobalFlags(t *testing.T) {
+	t.Helper()
+	savedStoreActive, savedJSON := storeActive, jsonOutput
+	storeActive, jsonOutput = true, false
+	t.Cleanup(func() { storeActive, jsonOutput = savedStoreActive, savedJSON })
+}
+
 // requireInheritedSampleListJSONFlag keeps the list verb on its inherited
 // --json bool. It exists so a future local flag on the verb cannot make these
-// assertions pass vacuously against a non-JSON stdout.
+// assertions pass vacuously against a non-JSON stdout. LocalFlags is what
+// separates a local declaration from root's inherited bool: Flags reports the
+// inherited one too once any test has executed the command tree.
 func requireInheritedSampleListJSONFlag(t *testing.T) {
 	t.Helper()
-	if flag := sampleListCmd.Flags().Lookup("json"); flag != nil {
+	if flag := sampleListCmd.LocalFlags().Lookup("json"); flag != nil {
 		t.Fatalf("bd sample list declares a local --json flag (%s); this test sets the inherited bool", flag.Value.Type())
 	}
 }
