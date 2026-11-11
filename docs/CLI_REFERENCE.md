@@ -2360,8 +2360,9 @@ provider balance or a usage record — in the beads database.
 
 A sample has a kind, an event time and a JSON-object payload. Kinds are opaque
 strings chosen by the producer; bd validates their shape, never their
-vocabulary. The payload is stored verbatim and listed back byte-for-byte, so a
-consumer can compare samples without a normalization step.
+vocabulary. The database stores the payload bytes as given; bd sample list
+--json embeds the stored value as compact JSON, so whitespace and key order are
+normalized on output.
 
 The plane is append-only: there is no delete or retention verb.
 
@@ -2378,7 +2379,7 @@ Append one sample row.
 --at is the event time as an RFC3339 timestamp and is stored in UTC. --json is
 the payload: a path to a file holding a JSON object, or "-" to read standard
 input. The payload is size-capped at 65536 bytes, validated as a JSON object,
-and stored verbatim.
+and stored as the exact bytes given.
 
 Examples:
   bd sample add --kind deepseek_balance --at 2026-11-11T09:30:00Z --json balance.json
@@ -2410,7 +2411,8 @@ the default, is uncapped. With --json the output is the usual envelope:
              "payload": &#123;"used": 1200&#125;, "created_at": "..."&#125;]&#125;
 
 at and created_at are RFC3339 timestamps in UTC; payload is the stored JSON
-object, returned byte-for-byte as it was added.
+object embedded as compact JSON — the value is unchanged, but the encoder
+normalizes whitespace and key order, so the bytes may differ from those added.
 
 Examples:
   bd sample list --kind deepseek_balance --limit 10 --json

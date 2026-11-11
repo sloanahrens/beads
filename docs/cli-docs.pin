@@ -9,11 +9,12 @@
 # ./scripts/generate-cli-docs.sh, whenever the CLI surface changes.
 #
 # Set to HEAD to track the current checkout's source instead (the pre-pin
-# behavior).
+# behavior); that weakens the check, so the only committed value is a sha.
 #
-# It is HEAD between a CLI-surface change and the release that carries it: a
-# verb that exists only in the checkout (bd sample, be-1qqu) cannot be
-# regenerated from a pinned release, so a commit pin would make
-# ./scripts/generate-cli-docs.sh --check red until the release. Re-pin to the
-# origin/main tip at the next release.
-HEAD
+# This pin names the commit the `bd sample` pages were regenerated from
+# (be-1qqu), a commit in this branch that carries the verb. It is not a release
+# tip: an unreleased verb cannot be regenerated from the pinned release, so
+# until the release that ships bd sample, the pinned commit is the branch
+# commit that produced the docs and ./scripts/generate-cli-docs.sh --check
+# builds it from here. Re-pin to the origin/main tip at the next release.
+df958063
