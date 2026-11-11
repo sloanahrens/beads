@@ -70,7 +70,10 @@ func (c *samplesRetryConn) ExecContext(_ context.Context, query string, args []d
 	for i, arg := range args {
 		values[i] = arg.Value
 	}
-	id, _ := values[0].(string)
+	id, ok := values[0].(string)
+	if !ok || id == "" {
+		return nil, fmt.Errorf("insert carried no string id: %#v", values)
+	}
 	c.driver.insertIDs = append(c.driver.insertIDs, id)
 
 	if c.driver.attempts == 1 {
