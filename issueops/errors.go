@@ -177,6 +177,12 @@ var ErrVersionMismatch = errors.New("version mismatch")
 // ErrAssigneeMismatch, shared with UnclaimIssueIfAssignee.
 var ErrStatusMismatch = errors.New("status mismatch")
 
+// ErrAcceptanceMismatch is returned by an update given an ExpectedAcceptance
+// that does not match the issue's stored acceptance criteria, neither as the
+// full text nor as its sha256. The caller's view of the criteria is stale; the
+// issue is left untouched.
+var ErrAcceptanceMismatch = errors.New("acceptance mismatch")
+
 // ErrSelfDependency is returned when a dependency edge would point an issue at
 // itself. It is the static prefix of the formatted message, wrapped so callers
 // can errors.Is it while the human-readable text is preserved byte-for-byte.

@@ -230,6 +230,9 @@ func (s *DoltStore) updateWispChecked(ctx context.Context, id string, updates ma
 	if err := issueops.CheckExpectedFieldsInTx(ctx, tx, id, opts.ExpectedAssignee, opts.ExpectedStatus); err != nil {
 		return err
 	}
+	if err := issueops.CheckExpectedAcceptanceInTx(ctx, tx, id, opts.ExpectedAcceptance); err != nil {
+		return err
+	}
 	if _, err := issueops.UpdateIssueInTx(ctx, tx, id, updates, actor); err != nil {
 		return err
 	}

@@ -295,6 +295,11 @@ type UpdateRequest struct {
 	// ExpectedStatus requires the current status to match. It must be nil when
 	// Claim is true.
 	ExpectedStatus *Status
+	// ExpectedAcceptance requires the stored acceptance criteria to match. The
+	// value is the full prior text, or its sha256 as hex (the short form for
+	// argv). A non-nil pointer to "" means "the field must be empty". It must be
+	// nil when Claim is true. A miss refuses with ErrAcceptanceMismatch.
+	ExpectedAcceptance *string
 	// IssuePlaneOnly restricts the update to the issue plane: an ID that names
 	// a wisp is ErrNotFound rather than an ephemeral row to update. The zero
 	// value keeps the both-plane auto-resolve every caller gets today.

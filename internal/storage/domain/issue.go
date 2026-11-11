@@ -299,6 +299,12 @@ type UpdateSpec struct {
 	// whole-attempt retry re-checks the guards on the redo.
 	ExpectedAssignee *string
 	ExpectedStatus   *string
+	// ExpectedAcceptance is the `bd update --if-acceptance` guard: when non-nil,
+	// the stored acceptance criteria must equal it as text or hash to it as
+	// sha256 hex (validation.AcceptanceMatches), else ApplyUpdate refuses with
+	// storage.ErrAcceptanceMismatch. A non-nil pointer to "" means "the field
+	// must be empty". Read and checked like the other guards.
+	ExpectedAcceptance *string
 }
 
 type IssueUseCase interface {
@@ -688,7 +694,7 @@ func (u *issueUseCaseImpl) ApplyUpdate(ctx context.Context, id string, spec Upda
 		return nil, fmt.Errorf("ApplyUpdate %s: %w", id, err)
 	}
 
-	if spec.ExpectedVersion != nil || spec.ExpectedAssignee != nil || spec.ExpectedStatus != nil {
+	if spec.ExpectedVersion != nil || spec.ExpectedAssignee != nil || spec.ExpectedStatus != nil || spec.ExpectedAcceptance != nil {
 		var current *types.Issue
 		if useWisp {
 			current, err = u.GetWisp(ctx, id)
@@ -711,6 +717,10 @@ func (u *issueUseCaseImpl) ApplyUpdate(ctx context.Context, id string, spec Upda
 		if spec.ExpectedStatus != nil && string(current.Status) != *spec.ExpectedStatus {
 			return nil, fmt.Errorf("%w: %s has status %q, expected %q",
 				storage.ErrStatusMismatch, id, current.Status, *spec.ExpectedStatus)
+		}
+		if spec.ExpectedAcceptance != nil && !validation.AcceptanceMatches(current.AcceptanceCriteria, *spec.ExpectedAcceptance) {
+			return nil, fmt.Errorf("%w: %s acceptance criteria do not match the expected value",
+				storage.ErrAcceptanceMismatch, id)
 		}
 	}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/steveyegge/beads/internal/storage/domain"
 	storageissueops "github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/types"
+	"github.com/steveyegge/beads/internal/validation"
 	publicops "github.com/steveyegge/beads/issueops"
 )
 
@@ -264,6 +265,9 @@ func updatePreconditionsHold(request publicops.UpdateRequest, before *types.Issu
 	if request.ExpectedStatus != nil && *request.ExpectedStatus != before.Status {
 		return false
 	}
+	if request.ExpectedAcceptance != nil && !validation.AcceptanceMatches(before.AcceptanceCriteria, *request.ExpectedAcceptance) {
+		return false
+	}
 	return true
 }
 
@@ -354,16 +358,17 @@ func updateSpec(request publicops.UpdateRequest) (domain.UpdateSpec, error) {
 		setLabels = &labels
 	}
 	return domain.UpdateSpec{
-		Fields:           fields,
-		Claim:            request.Claim,
-		ExpectedVersion:  request.ExpectedVersion,
-		ExpectedAssignee: request.ExpectedAssignee,
-		ExpectedStatus:   statusPointer(request.ExpectedStatus),
-		Persistence:      persistence,
-		AddLabels:        append([]string(nil), patch.Labels.Add...),
-		RemoveLabels:     append([]string(nil), patch.Labels.Remove...),
-		SetLabels:        setLabels,
-		Reparent:         fieldStringPointer(patch.ParentID),
+		Fields:             fields,
+		Claim:              request.Claim,
+		ExpectedVersion:    request.ExpectedVersion,
+		ExpectedAssignee:   request.ExpectedAssignee,
+		ExpectedStatus:     statusPointer(request.ExpectedStatus),
+		ExpectedAcceptance: request.ExpectedAcceptance,
+		Persistence:        persistence,
+		AddLabels:          append([]string(nil), patch.Labels.Add...),
+		RemoveLabels:       append([]string(nil), patch.Labels.Remove...),
+		SetLabels:          setLabels,
+		Reparent:           fieldStringPointer(patch.ParentID),
 	}, nil
 }
 

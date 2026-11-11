@@ -70,8 +70,8 @@ func UpdateFields(patch publicops.IssuePatch) map[string]interface{} {
 // the canonical field values every backend must reject identically. Backends
 // call it before touching the row so an invalid patch cannot half-apply.
 func ValidateUpdateRequest(request publicops.UpdateRequest) error {
-	if request.Claim && (request.ExpectedAssignee != nil || request.ExpectedStatus != nil) {
-		return fmt.Errorf("%w: claim cannot use expected assignee or status", storage.ErrValidation)
+	if request.Claim && (request.ExpectedAssignee != nil || request.ExpectedStatus != nil || request.ExpectedAcceptance != nil) {
+		return fmt.Errorf("%w: claim cannot use expected assignee, status or acceptance", storage.ErrValidation)
 	}
 	if request.ForceAssigneeTransfer && (request.Claim || !request.Patch.Assignee.Set || request.ExpectedAssignee != nil) {
 		return fmt.Errorf("%w: invalid forced assignee transfer", storage.ErrValidation)
