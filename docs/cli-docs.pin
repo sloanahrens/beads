@@ -10,4 +10,10 @@
 #
 # Set to HEAD to track the current checkout's source instead (the pre-pin
 # behavior).
-8ccca4456d74fe770ee2e6b36f5c34ed619864af
+#
+# It is HEAD between a CLI-surface change and the release that carries it: a
+# verb that exists only in the checkout (bd sample, be-1qqu) cannot be
+# regenerated from a pinned release, so a commit pin would make
+# ./scripts/generate-cli-docs.sh --check red until the release. Re-pin to the
+# origin/main tip at the next release.
+HEAD

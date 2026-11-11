@@ -12,6 +12,7 @@ import (
 
 	"github.com/steveyegge/beads/issueops"
 	"github.com/steveyegge/beads/memoryops"
+	"github.com/steveyegge/beads/samplesops"
 )
 
 // roleAccessorNames is the capability surface every storage decorator has to
@@ -43,6 +44,7 @@ func roleAccessorNamesOf(surface reflect.Type) (names, unclassified []string) {
 	facade := map[string]bool{
 		reflect.TypeOf((*issueops.Reader)(nil)).Elem().PkgPath():    true,
 		reflect.TypeOf((*memoryops.Memories)(nil)).Elem().PkgPath(): true,
+		reflect.TypeOf((*samplesops.Samples)(nil)).Elem().PkgPath(): true,
 	}
 	errorType := reflect.TypeOf((*error)(nil)).Elem()
 
@@ -68,11 +70,11 @@ func roleAccessorNamesOf(surface reflect.Type) (names, unclassified []string) {
 }
 
 // TestEveryStoreRoleAccessorIsClassified fails when DoltStorage hands out an
-// interface the census cannot place. Every one of the twenty-eight today is a
-// facade role, so this costs nothing and closes the path where a role surface
-// grows a package and the census quietly stops covering it. (roleAccessorNames
-// is derived, so the count is prose and only this sentence goes stale — but it
-// does go stale, and the last three sweeps found it saying twenty-seven.)
+// interface the census cannot place. Every accessor today is a facade role, so
+// this costs nothing and closes the path where a role surface grows a package
+// and the census quietly stops covering it. (roleAccessorNames is derived, so
+// any count in this file is prose and goes stale — which is why this sentence
+// names none.)
 func TestEveryStoreRoleAccessorIsClassified(t *testing.T) {
 	_, unclassified := roleAccessorNamesOf(reflect.TypeOf((*DoltStorage)(nil)).Elem())
 	for _, accessor := range unclassified {
@@ -150,9 +152,9 @@ func assertRoleAccessorsAreDeclared(t *testing.T, decorator reflect.Type) {
 	}
 }
 
-// roleAccessorStore is a DoltStorage whose only real methods are the
-// twenty-eight role accessors, each answering with a distinguishable sentinel
-// so a test can tell a decorated surface from a passed-through one.
+// roleAccessorStore is a DoltStorage whose only real methods are the role
+// accessors, each answering with a distinguishable sentinel so a test can tell
+// a decorated surface from a passed-through one.
 type roleAccessorStore struct {
 	DoltStorage
 	lifecycle    issueops.Lifecycle
@@ -165,6 +167,7 @@ type roleAccessorStore struct {
 	counter      issueops.Counter
 	settings     issueops.WorkspaceConfig
 	memories     memoryops.Memories
+	samples      samplesops.Samples
 	versions     issueops.VersionReconciler
 	stats        issueops.StatsReporter
 	cycles       issueops.CycleDetector
@@ -189,6 +192,7 @@ func newRoleAccessorStore() *roleAccessorStore {
 	sentinel := &roleAccessorSentinel{}
 	return &roleAccessorStore{
 		memories:     &memoryRoleSentinel{},
+		samples:      &samplesRoleSentinel{},
 		lifecycle:    sentinel,
 		reader:       sentinel,
 		relations:    sentinel,
@@ -226,6 +230,9 @@ func (s *roleAccessorStore) WorkspaceConfig() (issueops.WorkspaceConfig, error) 
 }
 func (s *roleAccessorStore) Memories() (memoryops.Memories, error) {
 	return s.memories, s.err
+}
+func (s *roleAccessorStore) Samples() (samplesops.Samples, error) {
+	return s.samples, s.err
 }
 func (s *roleAccessorStore) VersionReconciler() (issueops.VersionReconciler, error) {
 	return s.versions, s.err
@@ -282,9 +289,9 @@ func (s *roleAccessorStore) Releaser() (issueops.Releaser, error) {
 	return s.releaser, s.err
 }
 
-// roleAccessorSentinel implements twenty-seven of the twenty-eight roles at
-// once — every one but memoryops.Memories, whose List collides with
-// issueops.Reader.List and needs the second sentinel below.
+// roleAccessorSentinel implements every issueops role at once — every accessor
+// but memoryops.Memories and samplesops.Samples, whose List methods collide
+// with issueops.Reader.List and need their own sentinels below.
 // Nothing calls its methods; identity is the whole point.
 type roleAccessorSentinel struct{}
 
@@ -408,12 +415,11 @@ func (*roleAccessorSentinel) Release(context.Context, issueops.ReleaseRequest) (
 	return issueops.ReleaseResult{}, nil
 }
 
-// memoryRoleSentinel is the memory role's sentinel, and the one role
-// memoryRoleSentinel is the remaining role's sentinel, and the one role
-// that cannot share the struct above: memoryops.Memories.List and
+// memoryRoleSentinel is the memory role's sentinel, and one of the roles that
+// cannot share the struct above: memoryops.Memories.List and
 // issueops.Reader.List are the same method name with different signatures, so
-// no single Go type can satisfy both. A second sentinel value is all the split
-// costs; identity is still the whole point.
+// no single Go type can satisfy both. A separate sentinel value is all the
+// split costs; identity is still the whole point.
 type memoryRoleSentinel struct{}
 
 func (*memoryRoleSentinel) Remember(context.Context, memoryops.RememberRequest) (memoryops.RememberResult, error) {
@@ -429,6 +435,19 @@ func (*memoryRoleSentinel) List(context.Context, memoryops.ListRequest) (memoryo
 	return memoryops.ListResult{}, nil
 }
 
+// samplesRoleSentinel is the generic-samples role's sentinel, split off for the
+// same reason as memoryRoleSentinel: samplesops.Samples.List is a third List
+// with its own signature, so no single Go type satisfies this role and the
+// issue roles together. identity is still the whole point.
+type samplesRoleSentinel struct{}
+
+func (*samplesRoleSentinel) Add(context.Context, samplesops.AddRequest) (samplesops.AddResult, error) {
+	return samplesops.AddResult{}, nil
+}
+func (*samplesRoleSentinel) List(context.Context, samplesops.ListRequest) (samplesops.ListResult, error) {
+	return samplesops.ListResult{}, nil
+}
+
 // TestHookFiringStoreWrapsTheWriteRolesAndPassesTheReadsThrough is the
 // behavioural half, and it catches what reflection cannot: an accessor that IS
 // declared but reads `return h.inner.Commenter()`. That edit compiles, keeps
@@ -442,9 +461,10 @@ func (*memoryRoleSentinel) List(context.Context, memoryops.ListRequest) (memoryo
 // ReadyCounter, Querier and InitVerifier deliberately return the inner surface
 // unwrapped,
 // each in its own hook_*.go. The ones in that column that are NOT reads are
-// WorkspaceConfig, Memories, VersionReconciler, Bootstrapper, Sweeper and
-// Deleter: a settings write changes the workspace rather than a bead, a
+// WorkspaceConfig, Memories, Samples, VersionReconciler, Bootstrapper, Sweeper
+// and Deleter: a settings write changes the workspace rather than a bead, a
 // remembered insight names no bead and there is no on_remember to fire, a
+// sample names no bead and the vocabulary has no on_sample, a
 // version marker names no bead at all, a bootstrap lands on a workspace whose
 // hooks are not installed yet, a swept row is gone, and the hook vocabulary has
 // no name for a deletion — so this decorator's issue-shaped hook vocabulary has
@@ -478,6 +498,7 @@ func TestHookFiringStoreWrapsTheWriteRolesAndPassesTheReadsThrough(t *testing.T)
 		{"Counter", func() (any, error) { return store.Counter() }, inner.counter, false},
 		{"WorkspaceConfig", func() (any, error) { return store.WorkspaceConfig() }, inner.settings, false},
 		{"Memories", func() (any, error) { return store.Memories() }, inner.memories, false},
+		{"Samples", func() (any, error) { return store.Samples() }, inner.samples, false},
 		{"VersionReconciler", func() (any, error) { return store.VersionReconciler() }, inner.versions, false},
 		{"StatsReporter", func() (any, error) { return store.StatsReporter() }, inner.stats, false},
 		{"CycleDetector", func() (any, error) { return store.CycleDetector() }, inner.cycles, false},
@@ -535,6 +556,7 @@ func TestHookFiringStoreRoleAccessorsPropagateInnerErrors(t *testing.T) {
 		{"Counter", func() (any, error) { return store.Counter() }},
 		{"WorkspaceConfig", func() (any, error) { return store.WorkspaceConfig() }},
 		{"Memories", func() (any, error) { return store.Memories() }},
+		{"Samples", func() (any, error) { return store.Samples() }},
 		{"VersionReconciler", func() (any, error) { return store.VersionReconciler() }},
 		{"StatsReporter", func() (any, error) { return store.StatsReporter() }},
 		{"CycleDetector", func() (any, error) { return store.CycleDetector() }},

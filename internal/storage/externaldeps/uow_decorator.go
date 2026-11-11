@@ -13,6 +13,7 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 	publicops "github.com/steveyegge/beads/issueops"
 	"github.com/steveyegge/beads/memoryops"
+	"github.com/steveyegge/beads/samplesops"
 )
 
 // WrapUOWProvider installs the external capability policy on the server UOW
@@ -117,6 +118,7 @@ func (p *uowProvider) VersionReconciler() (publicops.VersionReconciler, error) {
 func (p *uowProvider) MetadataCAS() (publicops.MetadataCAS, error) { return uow.NewMetadataCAS(p) }
 func (p *uowProvider) Releaser() (publicops.Releaser, error)       { return uow.NewReleaser(p) }
 func (p *uowProvider) Memories() (memoryops.Memories, error)       { return uow.NewMemories(p) }
+func (p *uowProvider) Samples() (samplesops.Samples, error)        { return uow.NewSamples(p) }
 func (p *uowProvider) EventsJournalCursor() (storage.EventsJournalCursor, error) {
 	return uow.NewEventsJournalCursor(p)
 }

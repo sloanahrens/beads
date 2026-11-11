@@ -88,6 +88,9 @@ Reference for bd Latest. Generated from `bd help --all`.
 - [bd branch](#bd-branch) — List or create branches
 - [bd export](#bd-export) — Export issues to JSONL format
 - [bd import](#bd-import) — Import issues from a JSONL file or stdin into the database
+- [bd sample](#bd-sample) — Store and read generic timestamped samples
+  - [bd sample add](#bd-sample-add) — Append one sample
+  - [bd sample list](#bd-sample-list) — List a kind's samples, newest first
 - [bd vc](#bd-vc) — Version control operations
   - [bd vc commit](#bd-vc-commit) — Create a commit with all staged changes
   - [bd vc merge](#bd-vc-merge) — Merge a branch into the current branch
@@ -1609,7 +1612,7 @@ fail, the remaining issues are still updated, every failed ID is reported on
 stderr, and the command exits nonzero.
 
 Exit codes: 1 for general failures; 13 when every failure is a stale
---if-assignee/--if-status guard (the precondition no longer held, nothing was
+--if-assignee/--if-status/--if-acceptance guard (the precondition no longer held, nothing was
 written — another actor won the race, so retrying the same guard is
 pointless).
 
@@ -1638,6 +1641,7 @@ bd update [id...] [flags]
       --external-ref string          External reference (e.g., 'gh-9', 'jira-ABC', Linear URL)
       --force                        Override two refusals: let -a/--assignee overwrite another actor's live in_progress claim (use only for abandoned claims — crashed agent, expired lease; prefer bd reclaim), and let -s/--status move the issue into closed (or a configured done status) despite open children or a live blocker (same as bd close --force)
       --history                      Clear no-history flag (re-enable Dolt commit history)
+      --if-acceptance string         Apply the update only if the current acceptance criteria equal this value, given as the full text or its sha256 in hex (--if-acceptance '' requires an empty field); a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim
       --if-assignee string           Apply the update only if the current assignee equals this value (--if-assignee '' requires unassigned); a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim
       --if-status string             Apply the update only if the current status equals this value; a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim
       --metadata string              Set custom metadata (JSON string or @file.json to read from file)
@@ -2347,6 +2351,81 @@ bd import [file|-] [flags]
       --dedup          Skip lines whose title matches an existing open issue
       --dry-run        Show what would be imported without importing
   -i, --input string   Read JSONL from a specific file
+```
+
+### bd sample
+
+Store and read generic timestamped samples — JSON observations such as a
+provider balance or a usage record — in the beads database.
+
+A sample has a kind, an event time and a JSON-object payload. Kinds are opaque
+strings chosen by the producer; bd validates their shape, never their
+vocabulary. The payload is stored verbatim and listed back byte-for-byte, so a
+consumer can compare samples without a normalization step.
+
+The plane is append-only: there is no delete or retention verb.
+
+```
+bd sample [command]
+```
+
+#### bd sample add
+
+Append one sample row.
+
+  bd sample add --kind &lt;kind&gt; --at &lt;rfc3339&gt; --json &lt;file|-&gt;
+
+--at is the event time as an RFC3339 timestamp and is stored in UTC. --json is
+the payload: a path to a file holding a JSON object, or "-" to read standard
+input. The payload is size-capped at 65536 bytes, validated as a JSON object,
+and stored verbatim.
+
+Examples:
+  bd sample add --kind deepseek_balance --at 2026-11-11T09:30:00Z --json balance.json
+  printf '&#123;"used":1200&#125;' | bd sample add --kind usage_record --at 2026-11-11T09:31:00Z --json -
+
+```
+bd sample add [flags]
+```
+
+**Flags:**
+
+```
+      --at string     Event time as an RFC3339 timestamp (required; stored in UTC)
+      --json string   Payload source: a file holding a JSON object, or - for standard input (required)
+      --kind string   Sample kind (required)
+```
+
+#### bd sample list
+
+List one kind's samples, newest first by event time.
+
+  bd sample list --kind &lt;kind&gt; [--since &lt;rfc3339&gt;] [--limit N]
+
+--since keeps rows whose event time is at or after it (inclusive); --limit 0,
+the default, is uncapped. With --json the output is the usual envelope:
+
+  &#123;"schema_version": 1,
+   "data": [&#123;"id": "...", "kind": "...", "at": "2026-11-11T09:30:00Z",
+             "payload": &#123;"used": 1200&#125;, "created_at": "..."&#125;]&#125;
+
+at and created_at are RFC3339 timestamps in UTC; payload is the stored JSON
+object, returned byte-for-byte as it was added.
+
+Examples:
+  bd sample list --kind deepseek_balance --limit 10 --json
+  bd sample list --kind usage_record --since 2026-11-11T00:00:00Z
+
+```
+bd sample list [flags]
+```
+
+**Flags:**
+
+```
+      --kind string    Sample kind to list (required)
+      --limit int      Maximum rows to return (0 = uncapped)
+      --since string   Keep rows whose event time is at or after this RFC3339 timestamp
 ```
 
 ### bd vc

@@ -12,6 +12,7 @@ import (
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/issueops"
 	"github.com/steveyegge/beads/memoryops"
+	"github.com/steveyegge/beads/samplesops"
 )
 
 // roleAccessorNames is the capability surface every storage decorator has to
@@ -41,6 +42,7 @@ func roleAccessorNamesOf(surface reflect.Type) (names, unclassified []string) {
 	facade := map[string]bool{
 		reflect.TypeOf((*issueops.Reader)(nil)).Elem().PkgPath():    true,
 		reflect.TypeOf((*memoryops.Memories)(nil)).Elem().PkgPath(): true,
+		reflect.TypeOf((*samplesops.Samples)(nil)).Elem().PkgPath(): true,
 	}
 	errorType := reflect.TypeOf((*error)(nil)).Elem()
 
@@ -92,18 +94,20 @@ func TestInstrumentedStorageDeclaresEveryRoleAccessor(t *testing.T) {
 	}
 }
 
-// roleAccessorStore is a DoltStorage whose only real methods are the
-// twenty-eight role accessors, each answering with a distinguishable sentinel
-// so a test can tell an instrumented surface from a passed-through one.
+// roleAccessorStore is a DoltStorage whose only real methods are the role
+// accessors, each answering with a distinguishable sentinel so a test can tell
+// an instrumented surface from a passed-through one.
 //
-// TWO sentinels rather than one: memoryops.Memories.List and issueops.Reader.List
-// are the same method name with different signatures, so no single Go type can
-// satisfy both roles. Every assertion below therefore names the inner surface it
-// expects rather than assuming there is only one.
+// THREE sentinels rather than one: memoryops.Memories.List, samplesops.Samples.List
+// and issueops.Reader.List are the same method name with different signatures,
+// so no single Go type can satisfy all three roles. Every assertion below
+// therefore names the inner surface it expects rather than assuming there is
+// only one.
 type roleAccessorStore struct {
 	storage.DoltStorage
 	surface  *roleAccessorSentinel
 	memories *memoryRoleSentinel
+	samples  *samplesRoleSentinel
 	err      error
 }
 
@@ -116,6 +120,9 @@ func (s *roleAccessorStore) WorkspaceConfig() (issueops.WorkspaceConfig, error) 
 }
 func (s *roleAccessorStore) Memories() (memoryops.Memories, error) {
 	return s.memories, s.err
+}
+func (s *roleAccessorStore) Samples() (samplesops.Samples, error) {
+	return s.samples, s.err
 }
 func (s *roleAccessorStore) VersionReconciler() (issueops.VersionReconciler, error) {
 	return s.surface, s.err
@@ -303,9 +310,8 @@ func (*roleAccessorSentinel) Release(context.Context, issueops.ReleaseRequest) (
 	return issueops.ReleaseResult{}, nil
 }
 
-// memoryRoleSentinel is the memory role's sentinel — see
-// memoryRoleSentinel is the remaining role's sentinel — see
-// roleAccessorStore for why it cannot be a method set on the struct above.
+// memoryRoleSentinel is the memory role's sentinel — see roleAccessorStore for
+// why it cannot be a method set on the struct above.
 type memoryRoleSentinel struct{}
 
 func (*memoryRoleSentinel) Remember(context.Context, memoryops.RememberRequest) (memoryops.RememberResult, error) {
@@ -319,6 +325,17 @@ func (*memoryRoleSentinel) Forget(context.Context, memoryops.ForgetRequest) (mem
 }
 func (*memoryRoleSentinel) List(context.Context, memoryops.ListRequest) (memoryops.ListResult, error) {
 	return memoryops.ListResult{}, nil
+}
+
+// samplesRoleSentinel is the generic-samples role's sentinel — see
+// roleAccessorStore for why it cannot be a method set on the struct above.
+type samplesRoleSentinel struct{}
+
+func (*samplesRoleSentinel) Add(context.Context, samplesops.AddRequest) (samplesops.AddResult, error) {
+	return samplesops.AddResult{}, nil
+}
+func (*samplesRoleSentinel) List(context.Context, samplesops.ListRequest) (samplesops.ListResult, error) {
+	return samplesops.ListResult{}, nil
 }
 
 // TestInstrumentedStorageInstrumentsEveryRoleAccessor catches what reflection
@@ -339,7 +356,8 @@ func TestInstrumentedStorageInstrumentsEveryRoleAccessor(t *testing.T) {
 	t.Setenv("BD_OTEL_STDOUT", "true")
 	sentinel := &roleAccessorSentinel{}
 	memorySentinel := &memoryRoleSentinel{}
-	inner := &roleAccessorStore{surface: sentinel, memories: memorySentinel}
+	samplesSentinel := &samplesRoleSentinel{}
+	inner := &roleAccessorStore{surface: sentinel, memories: memorySentinel, samples: samplesSentinel}
 	wrapped, ok := WrapStorage(inner).(*InstrumentedStorage)
 	if !ok {
 		t.Fatal("WrapStorage did not instrument the store; telemetry is disabled in this environment")
@@ -360,6 +378,7 @@ func TestInstrumentedStorageInstrumentsEveryRoleAccessor(t *testing.T) {
 		{"Counter", func() (any, error) { return wrapped.Counter() }, sentinel},
 		{"WorkspaceConfig", func() (any, error) { return wrapped.WorkspaceConfig() }, sentinel},
 		{"Memories", func() (any, error) { return wrapped.Memories() }, memorySentinel},
+		{"Samples", func() (any, error) { return wrapped.Samples() }, samplesSentinel},
 		{"VersionReconciler", func() (any, error) { return wrapped.VersionReconciler() }, sentinel},
 		{"StatsReporter", func() (any, error) { return wrapped.StatsReporter() }, sentinel},
 		{"CycleDetector", func() (any, error) { return wrapped.CycleDetector() }, sentinel},
@@ -415,6 +434,7 @@ func TestInstrumentedStorageRoleAccessorsPropagateInnerErrors(t *testing.T) {
 		{"Counter", func() (any, error) { return wrapped.Counter() }},
 		{"WorkspaceConfig", func() (any, error) { return wrapped.WorkspaceConfig() }},
 		{"Memories", func() (any, error) { return wrapped.Memories() }},
+		{"Samples", func() (any, error) { return wrapped.Samples() }},
 		{"VersionReconciler", func() (any, error) { return wrapped.VersionReconciler() }},
 		{"StatsReporter", func() (any, error) { return wrapped.StatsReporter() }},
 		{"CycleDetector", func() (any, error) { return wrapped.CycleDetector() }},

@@ -19,6 +19,7 @@ import (
 	"github.com/steveyegge/beads/issueops"
 	"github.com/steveyegge/beads/journalops"
 	"github.com/steveyegge/beads/memoryops"
+	"github.com/steveyegge/beads/samplesops"
 )
 
 // roleMethod names one method of one role interface on the public facade.
@@ -52,6 +53,7 @@ var facadePackages = map[string]string{
 	reflect.TypeOf((*issueops.Reader)(nil)).Elem().PkgPath():    "issueops",
 	reflect.TypeOf((*journalops.Journal)(nil)).Elem().PkgPath(): "journalops",
 	reflect.TypeOf((*memoryops.Memories)(nil)).Elem().PkgPath(): "memoryops",
+	reflect.TypeOf((*samplesops.Samples)(nil)).Elem().PkgPath(): "samplesops",
 }
 
 var errorType = reflect.TypeOf((*error)(nil)).Elem()

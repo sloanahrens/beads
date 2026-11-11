@@ -16,6 +16,7 @@ import (
 	"github.com/steveyegge/beads/issueops"
 	"github.com/steveyegge/beads/journalops"
 	"github.com/steveyegge/beads/memoryops"
+	"github.com/steveyegge/beads/samplesops"
 )
 
 // The guarded issue-operation error vocabulary is declared and documented by
@@ -215,6 +216,21 @@ type Storage interface {
 	// on_update and on_close and each hands a script an ISSUE. See
 	// hook_memories.go.
 	Memories() (memoryops.Memories, error)
+
+	// Samples returns the guarded generic-samples surface for this store: the
+	// append-only observation rows `bd sample add` and `bd sample list` keep in
+	// the versioned samples table, for an orchestrator that must not own a
+	// table in the beads schema (gastown ADR 0001).
+	//
+	// It is its own role rather than more WorkspaceConfig verbs because a
+	// sample is neither a setting nor an issue: it has no key, no bead and no
+	// hook, and its answer is an ordered page rather than a value or a graph.
+	//
+	// Its hook decorator recurses UNWRAPPED for the Memories reason: adding a
+	// sample is a write, but the hook vocabulary is on_create, on_update and
+	// on_close and each hands a script an ISSUE. A sample has no id a script
+	// could read back. See hook_samples.go.
+	Samples() (samplesops.Samples, error)
 
 	// VersionReconciler returns the clone-local version markers for this store:
 	// the dolt-ignored pair recording which bd binary last opened this
