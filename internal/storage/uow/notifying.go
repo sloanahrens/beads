@@ -1025,7 +1025,7 @@ func (u *recordingIssueUC) ApplyUpdate(ctx context.Context, id string, spec doma
 // than listing the writing fields: a field added to UpdateSpec then counts as a
 // write until someone says otherwise, which is the safe direction for a hook.
 func specWrites(spec domain.UpdateSpec) bool {
-	spec.ExpectedVersion, spec.ExpectedAssignee, spec.ExpectedStatus = nil, nil, nil
+	spec.ExpectedVersion, spec.ExpectedAssignee, spec.ExpectedStatus, spec.ExpectedAcceptance = nil, nil, nil, nil
 	if len(spec.Fields) == 0 {
 		spec.Fields = nil
 	}

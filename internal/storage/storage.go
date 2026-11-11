@@ -23,19 +23,20 @@ import (
 // the same values, so every storage.ErrX reference and every errors.Is site
 // keeps matching the identical error.
 var (
-	ErrAlreadyClaimed    = issueops.ErrAlreadyClaimed
-	ErrNotClaimable      = issueops.ErrNotClaimable
-	ErrAssigneeMismatch  = issueops.ErrAssigneeMismatch
-	ErrNotFound          = issueops.ErrNotFound
-	ErrValidation        = issueops.ErrValidation
-	ErrNotInitialized    = issueops.ErrNotInitialized
-	ErrPrefixMismatch    = issueops.ErrPrefixMismatch
-	ErrCloseBlocked      = issueops.ErrCloseBlocked
-	ErrCloseOpenChildren = issueops.ErrCloseOpenChildren
-	ErrAlreadyExists     = issueops.ErrAlreadyExists
-	ErrAlreadyIdentified = issueops.ErrAlreadyIdentified
-	ErrVersionMismatch   = issueops.ErrVersionMismatch
-	ErrStatusMismatch    = issueops.ErrStatusMismatch
+	ErrAlreadyClaimed     = issueops.ErrAlreadyClaimed
+	ErrNotClaimable       = issueops.ErrNotClaimable
+	ErrAssigneeMismatch   = issueops.ErrAssigneeMismatch
+	ErrNotFound           = issueops.ErrNotFound
+	ErrValidation         = issueops.ErrValidation
+	ErrNotInitialized     = issueops.ErrNotInitialized
+	ErrPrefixMismatch     = issueops.ErrPrefixMismatch
+	ErrCloseBlocked       = issueops.ErrCloseBlocked
+	ErrCloseOpenChildren  = issueops.ErrCloseOpenChildren
+	ErrAlreadyExists      = issueops.ErrAlreadyExists
+	ErrAlreadyIdentified  = issueops.ErrAlreadyIdentified
+	ErrVersionMismatch    = issueops.ErrVersionMismatch
+	ErrStatusMismatch     = issueops.ErrStatusMismatch
+	ErrAcceptanceMismatch = issueops.ErrAcceptanceMismatch
 )
 
 // CloseOpenChildrenError reports the issue and open-child count that refused a
@@ -586,6 +587,14 @@ type UpdateIssueOptions struct {
 	// and refuses (the same invariant as ExpectedVersion).
 	ExpectedAssignee *string
 	ExpectedStatus   *string
+
+	// ExpectedAcceptance is the `bd update --if-acceptance` compare-and-set
+	// guard: when non-nil, the update applies only if the stored acceptance
+	// criteria equal the expected text, or hash to it as sha256 hex, else it
+	// refuses with ErrAcceptanceMismatch and nothing is written. A non-nil
+	// pointer to "" means "the field must be empty". It is checked in the same
+	// transaction as the other guards.
+	ExpectedAcceptance *string
 }
 
 // MergeSlotStatus is returned by MergeSlotCheck and describes the current

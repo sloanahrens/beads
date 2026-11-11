@@ -26,6 +26,7 @@ func (u *recordingDirectIssueUpdater) Update(_ context.Context, request issueops
 func TestRunDirectUpdateMutationBuildsLifecycleRequest(t *testing.T) {
 	expectedAssignee := "current-owner"
 	expectedStatus := issueops.StatusOpen
+	expectedAcceptance := "- [ ] a"
 	tests := []struct {
 		name     string
 		mutation commandUpdateMutation
@@ -86,6 +87,21 @@ func TestRunDirectUpdateMutationBuildsLifecycleRequest(t *testing.T) {
 				Patch:            issueops.IssuePatch{Assignee: issueops.Field[string]{Set: true, Value: "next-owner"}},
 				ExpectedAssignee: &expectedAssignee,
 				ExpectedStatus:   &expectedStatus,
+			},
+		},
+		{
+			name: "if-acceptance guard rides to the lifecycle request",
+			mutation: commandUpdateMutation{
+				actor:              "writer",
+				issueID:            "bd-4",
+				patch:              issueops.IssuePatch{AcceptanceCriteria: issueops.Field[string]{Set: true, Value: "- [x] a"}},
+				expectedAcceptance: &expectedAcceptance,
+			},
+			want: issueops.UpdateRequest{
+				Actor:              "writer",
+				IssueID:            "bd-4",
+				Patch:              issueops.IssuePatch{AcceptanceCriteria: issueops.Field[string]{Set: true, Value: "- [x] a"}},
+				ExpectedAcceptance: &expectedAcceptance,
 			},
 		},
 	}

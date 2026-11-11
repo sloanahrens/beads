@@ -30,6 +30,7 @@ var (
 	ErrNotOwner            = storage.ErrNotOwner
 	ErrPrefixMismatch      = storage.ErrPrefixMismatch
 	ErrStatusMismatch      = storage.ErrStatusMismatch
+	ErrAcceptanceMismatch  = storage.ErrAcceptanceMismatch
 	ErrValidation          = storage.ErrValidation
 	ErrVersionMismatch     = storage.ErrVersionMismatch
 

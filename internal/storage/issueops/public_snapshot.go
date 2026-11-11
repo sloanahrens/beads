@@ -40,6 +40,7 @@ func CloneUpdateRequest(request publicops.UpdateRequest) publicops.UpdateRequest
 		status := *request.ExpectedStatus
 		clone.ExpectedStatus = &status
 	}
+	clone.ExpectedAcceptance = cloneString(request.ExpectedAcceptance)
 	return clone
 }
 

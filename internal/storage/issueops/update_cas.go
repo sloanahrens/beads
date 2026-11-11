@@ -7,7 +7,48 @@ import (
 	"fmt"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/validation"
 )
+
+// CheckExpectedAcceptanceInTx reads the stored acceptance criteria for id and
+// returns ErrAcceptanceMismatch when a non-nil expectedAcceptance does not match
+// them, the compare-and-set behind `bd update --if-acceptance`. It shares the
+// transaction, and so the row-lock retry argument, of CheckExpectedFieldsInTx.
+// Routes to the issues or wisps table. Returns ErrNotFound when the row is
+// absent.
+//
+//nolint:gosec // G201: table name comes from WispTableRouting (hardcoded constants)
+func CheckExpectedAcceptanceInTx(ctx context.Context, tx DBTX, id string, expectedAcceptance *string) error {
+	if expectedAcceptance == nil {
+		return nil
+	}
+	isWisp := IsActiveWispInTx(ctx, tx, id)
+	issueTable, _, _, _ := WispTableRouting(isWisp)
+
+	var acceptance string
+	err := tx.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT COALESCE(acceptance_criteria, '') FROM %s WHERE id = ?", issueTable), id,
+	).Scan(&acceptance)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: issue %s", storage.ErrNotFound, id)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read acceptance criteria for %s: %w", id, err)
+	}
+	return expectedAcceptanceMismatch(id, acceptance, expectedAcceptance)
+}
+
+// expectedAcceptanceMismatch is the comparison half of
+// CheckExpectedAcceptanceInTx. It returns nil when expected is nil or names
+// stored (see validation.AcceptanceMatches), and otherwise
+// ErrAcceptanceMismatch. The error names the issue but not the criteria text,
+// which can be long.
+func expectedAcceptanceMismatch(id, stored string, expected *string) error {
+	if expected == nil || validation.AcceptanceMatches(stored, *expected) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s acceptance criteria do not match the expected value", storage.ErrAcceptanceMismatch, id)
+}
 
 // CheckExpectedFieldsInTx reads the current assignee and status for id and
 // returns ErrAssigneeMismatch/ErrStatusMismatch (wrapped with actual vs

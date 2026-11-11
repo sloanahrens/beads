@@ -165,6 +165,9 @@ func ExecuteUpdate(ctx context.Context, tx *sql.Tx, request publicops.UpdateRequ
 	} else if err := CheckExpectedFieldsInTx(ctx, tx, attempt.IssueID, attempt.ExpectedAssignee, nil); err != nil {
 		return publicops.UpdateResult{}, nil, err
 	}
+	if err := CheckExpectedAcceptanceInTx(ctx, tx, attempt.IssueID, attempt.ExpectedAcceptance); err != nil {
+		return publicops.UpdateResult{}, nil, err
+	}
 	if err := AuthorizeAssigneeTransfer(ctx, tx, before, attempt); err != nil {
 		return publicops.UpdateResult{}, nil, err
 	}

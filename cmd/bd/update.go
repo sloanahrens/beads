@@ -38,6 +38,9 @@ type commandUpdateMutation struct {
 	force            bool
 	expectedAssignee *string
 	expectedStatus   *issueops.Status
+	// expectedAcceptance is the --if-acceptance guard: the expected stored
+	// acceptance criteria as text or sha256 hex, or "" for an empty field.
+	expectedAcceptance *string
 	// provenance names the history entry the write records. Empty takes the
 	// backend's default, which is what the direct route wants; the proxied
 	// route spells the message it has always written.
@@ -58,6 +61,7 @@ func runCommandUpdateMutation(ctx context.Context, updater commandIssueUpdater, 
 		ForceClosePolicy:      mutation.force,
 		ExpectedAssignee:      mutation.expectedAssignee,
 		ExpectedStatus:        mutation.expectedStatus,
+		ExpectedAcceptance:    mutation.expectedAcceptance,
 		Provenance:            mutation.provenance,
 	})
 }
@@ -80,7 +84,7 @@ fail, the remaining issues are still updated, every failed ID is reported on
 stderr, and the command exits nonzero.
 
 Exit codes: 1 for general failures; 13 when every failure is a stale
---if-assignee/--if-status guard (the precondition no longer held, nothing was
+--if-assignee/--if-status/--if-acceptance guard (the precondition no longer held, nothing was
 written — another actor won the race, so retrying the same guard is
 pointless).`,
 	// The non-interactive no-ID refusal lives in argument validation, which
@@ -392,7 +396,7 @@ pointless).`,
 		// status set as --status, mutually exclusive with --claim (which is
 		// its own compare-and-set), and only meaningful with a field update
 		// to ride on.
-		ifAssignee, ifStatus, err := updateGuardsFromFlags(cmd, claimFlag, updates)
+		ifAssignee, ifStatus, ifAcceptance, err := updateGuardsFromFlags(cmd, claimFlag, updates)
 		if err != nil {
 			return err
 		}
@@ -542,13 +546,14 @@ pointless).`,
 			// through: `--force -s closed` is now a legitimate way to ask for
 			// the close-policy half alone.
 			updateResult, updateErr := runCommandUpdateMutation(opsCtx, ops, commandUpdateMutation{
-				actor:            actor,
-				issueID:          result.ResolvedID,
-				patch:            patch,
-				claim:            claimFlag,
-				force:            forceFlag,
-				expectedAssignee: ifAssignee,
-				expectedStatus:   expectedStatus,
+				actor:              actor,
+				issueID:            result.ResolvedID,
+				patch:              patch,
+				claim:              claimFlag,
+				force:              forceFlag,
+				expectedAssignee:   ifAssignee,
+				expectedStatus:     expectedStatus,
+				expectedAcceptance: ifAcceptance,
 			})
 			if updateErr != nil {
 				fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", id, updateErr)
@@ -810,7 +815,7 @@ const ExitGuardMismatch = 13
 // refusal (stale --if-assignee/--if-status), the failure class that exits
 // ExitGuardMismatch instead of 1.
 func isGuardMismatch(err error) bool {
-	return errors.Is(err, storage.ErrAssigneeMismatch) || errors.Is(err, storage.ErrStatusMismatch)
+	return errors.Is(err, storage.ErrAssigneeMismatch) || errors.Is(err, storage.ErrStatusMismatch) || errors.Is(err, storage.ErrAcceptanceMismatch)
 }
 
 // updateIDFailure records one issue ID that could not be updated and why.
@@ -919,16 +924,17 @@ func toJSONValue(s string) json.RawMessage {
 }
 
 // updateGuardsFromFlags reads the bd-wsqvw conditional-update guards
-// (--if-assignee/--if-status) with presence detected via Changed(), so
-// `--if-assignee ""` is a real guard meaning "expected unassigned" rather than
-// "no guard" (the unclaim.go idiom). It rejects combining guards with --claim
-// (--claim is its own compare-and-set with claim-pool semantics; the guards
-// would silently duplicate or contradict it) and guards with no regular field
-// update to ride on (the CAS applies to the issues-row UPDATE; label and
-// parent edits run outside it and would not be guarded). An --if-status value
-// is validated against the same built-in + custom status set as --status, so a
-// typo fails fast instead of mismatching forever.
-func updateGuardsFromFlags(cmd *cobra.Command, claimFlag bool, updates map[string]interface{}) (ifAssignee, ifStatus *string, err error) {
+// (--if-assignee/--if-status) and the --if-acceptance guard with presence
+// detected via Changed(), so `--if-assignee ""` is a real guard meaning
+// "expected unassigned" rather than "no guard" (the unclaim.go idiom), and
+// `--if-acceptance ""` means "the criteria must be empty". It rejects combining
+// guards with --claim (--claim is its own compare-and-set with claim-pool
+// semantics; the guards would silently duplicate or contradict it) and guards
+// with no regular field update to ride on (the CAS applies to the issues-row
+// UPDATE; label and parent edits run outside it and would not be guarded). An
+// --if-status value is validated against the same built-in + custom status set
+// as --status, so a typo fails fast instead of mismatching forever.
+func updateGuardsFromFlags(cmd *cobra.Command, claimFlag bool, updates map[string]interface{}) (ifAssignee, ifStatus, ifAcceptance *string, err error) {
 	if cmd.Flags().Changed("if-assignee") {
 		v, _ := cmd.Flags().GetString("if-assignee")
 		ifAssignee = &v
@@ -942,15 +948,19 @@ func updateGuardsFromFlags(cmd *cobra.Command, claimFlag bool, updates map[strin
 			}
 		}
 		if !types.Status(v).IsValidWithCustom(customStatuses) {
-			return nil, nil, HandleErrorRespectJSON("invalid --if-status %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or configure custom statuses via 'bd config set status.custom')", v)
+			return nil, nil, nil, HandleErrorRespectJSON("invalid --if-status %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or configure custom statuses via 'bd config set status.custom')", v)
 		}
 		ifStatus = &v
 	}
-	if ifAssignee == nil && ifStatus == nil {
-		return nil, nil, nil
+	if cmd.Flags().Changed("if-acceptance") {
+		v, _ := cmd.Flags().GetString("if-acceptance")
+		ifAcceptance = &v
+	}
+	if ifAssignee == nil && ifStatus == nil && ifAcceptance == nil {
+		return nil, nil, nil, nil
 	}
 	if claimFlag {
-		return nil, nil, HandleErrorRespectJSON("cannot combine --if-assignee/--if-status with --claim (--claim is already an atomic compare-and-set)")
+		return nil, nil, nil, HandleErrorRespectJSON("cannot combine --if-assignee/--if-status/--if-acceptance with --claim (--claim is already an atomic compare-and-set)")
 	}
 	hasFieldUpdate := false
 	for k := range updates {
@@ -961,9 +971,9 @@ func updateGuardsFromFlags(cmd *cobra.Command, claimFlag bool, updates map[strin
 		}
 	}
 	if !hasFieldUpdate {
-		return nil, nil, HandleErrorRespectJSON("--if-assignee/--if-status require at least one field update (e.g. -a, -s); label and parent edits are not covered by the guard")
+		return nil, nil, nil, HandleErrorRespectJSON("--if-assignee/--if-status/--if-acceptance require at least one field update (e.g. -a, -s); label and parent edits are not covered by the guard")
 	}
-	return ifAssignee, ifStatus, nil
+	return ifAssignee, ifStatus, ifAcceptance, nil
 }
 
 func init() {
@@ -988,6 +998,7 @@ func init() {
 	// Conditional (compare-and-set) update guards (bd-wsqvw)
 	updateCmd.Flags().String("if-assignee", "", "Apply the update only if the current assignee equals this value (--if-assignee '' requires unassigned); a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim")
 	updateCmd.Flags().String("if-status", "", "Apply the update only if the current status equals this value; a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim")
+	updateCmd.Flags().String("if-acceptance", "", "Apply the update only if the current acceptance criteria equal this value, given as the full text or its sha256 in hex (--if-acceptance '' requires an empty field); a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim")
 	// --force (unconditional bypass of the reassign fence) and --if-assignee
 	// (write only while a specific assignee still holds it) encode
 	// contradictory intent — same rationale as unclaim's pairing. Rejecting the

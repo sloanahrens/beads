@@ -281,6 +281,9 @@ func (s *DoltStore) updateIssueChecked(ctx context.Context, id string, updates m
 			if err := issueops.CheckExpectedFieldsInTx(ctx, tx, id, opts.ExpectedAssignee, opts.ExpectedStatus); err != nil {
 				return err
 			}
+			if err := issueops.CheckExpectedAcceptanceInTx(ctx, tx, id, opts.ExpectedAcceptance); err != nil {
+				return err
+			}
 			return s.demoteToWispInTx(ctx, tx, id, updates, actor)
 		})
 	}
@@ -301,6 +304,9 @@ func (s *DoltStore) updateIssueChecked(ctx context.Context, id string, updates m
 				return err
 			}
 			if err := issueops.CheckExpectedFieldsInTx(ctx, tx, id, opts.ExpectedAssignee, opts.ExpectedStatus); err != nil {
+				return err
+			}
+			if err := issueops.CheckExpectedAcceptanceInTx(ctx, tx, id, opts.ExpectedAcceptance); err != nil {
 				return err
 			}
 			result, err := issueops.UpdateIssueInTx(ctx, tx, id, updates, actor)
