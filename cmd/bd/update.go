@@ -960,7 +960,7 @@ func updateGuardsFromFlags(cmd *cobra.Command, claimFlag bool, updates map[strin
 		return nil, nil, nil, nil
 	}
 	if claimFlag {
-		return nil, nil, nil, HandleErrorRespectJSON("cannot combine --if-assignee/--if-status with --claim (--claim is already an atomic compare-and-set)")
+		return nil, nil, nil, HandleErrorRespectJSON("cannot combine --if-assignee/--if-status/--if-acceptance with --claim (--claim is already an atomic compare-and-set)")
 	}
 	hasFieldUpdate := false
 	for k := range updates {
@@ -971,7 +971,7 @@ func updateGuardsFromFlags(cmd *cobra.Command, claimFlag bool, updates map[strin
 		}
 	}
 	if !hasFieldUpdate {
-		return nil, nil, nil, HandleErrorRespectJSON("--if-assignee/--if-status require at least one field update (e.g. -a, -s); label and parent edits are not covered by the guard")
+		return nil, nil, nil, HandleErrorRespectJSON("--if-assignee/--if-status/--if-acceptance require at least one field update (e.g. -a, -s); label and parent edits are not covered by the guard")
 	}
 	return ifAssignee, ifStatus, ifAcceptance, nil
 }
