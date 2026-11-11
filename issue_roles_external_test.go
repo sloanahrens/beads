@@ -372,6 +372,41 @@ func TestMemoriesExposesTypedUnsupportedError(t *testing.T) {
 	}
 }
 
+// TestSamplesKeepsTelemetryOutermost is the samples plane's answer, and it is
+// the Memories answer for the same reason: Add WRITES, but the hook vocabulary
+// is on_create, on_update and on_close, each handing a script an ISSUE, and a
+// sample is not one. There is no on_sample to fire.
+// See internal/storage/hook_samples.go.
+func TestSamplesKeepsTelemetryOutermost(t *testing.T) {
+	t.Setenv("BD_OTEL_STDOUT", "true")
+	instrumented, ok := telemetry.WrapStorage(&dolt.DoltStore{}).(*telemetry.InstrumentedStorage)
+	if !ok {
+		t.Fatal("WrapStorage() did not create InstrumentedStorage")
+	}
+
+	samples, err := storage.NewHookFiringStore(instrumented, nil).Samples()
+	if err != nil {
+		t.Fatalf("Samples() error = %v", err)
+	}
+	if got := reflect.TypeOf(samples).String(); got != "*telemetry.instrumentedSamples" {
+		t.Fatalf("outer layer = %s, want the telemetry wrapper unwrapped by the hook decorator", got)
+	}
+}
+
+// TestSamplesExposesTypedUnsupportedError pins the typed refusal a backend
+// gives when it cannot serve the samples role, reachable through the public
+// alias without importing internal/storage.
+func TestSamplesExposesTypedUnsupportedError(t *testing.T) {
+	samples, err := (*dolt.DoltStore)(nil).Samples()
+	if samples != nil {
+		t.Fatalf("Samples() samples = %T, want nil", samples)
+	}
+	var unsupported *beads.ErrUnsupported
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("Samples() error = %v, want *beads.ErrUnsupported", err)
+	}
+}
+
 // TestVersionReconcilerKeepsTelemetryOutermost is the settings role's reason
 // plus one this role has on its own: it runs from PersistentPreRun on every
 // startup, so a hook wrapper here would run a user's script before every

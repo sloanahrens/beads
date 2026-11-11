@@ -603,6 +603,17 @@ var roleContractCases = []roleContract{
 		RunReleaserDoesNotMutateTheCallerRequest,
 	),
 
+	roleCases("Samples", "Samples()", oncePerRole,
+		func(b RoleContractBundle) func(t *testing.T) *SamplesFixture { return b.Samples },
+		RunSamplesAddReturnsTheStoredRow,
+		RunSamplesListByKindIsNewestFirstAndScoped,
+		RunSamplesListSinceIsInclusive,
+		RunSamplesListLimitKeepsTheNewestRows,
+		RunSamplesListOfAKindWithNoRowsIsEmpty,
+		RunSamplesAddRefusesAnInvalidRequest,
+		RunSamplesListRefusesANegativeLimit,
+	),
+
 	roleCases("StatsReporter", "StatsReporter()", oncePerRole,
 		func(b RoleContractBundle) func(t *testing.T) *StatsReporterFixture { return b.StatsReporter },
 		RunStatsReporterCountsEveryDurableRowByStatus,

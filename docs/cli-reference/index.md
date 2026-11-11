@@ -7,7 +7,7 @@ description: Generated reference for every bd command
 
 Generated from `bd help --docs-root`.
 
-This reference covers all 80 live top-level `bd` commands. Regenerate it with:
+This reference covers all 81 live top-level `bd` commands. Regenerate it with:
 
 ```bash
 ./scripts/generate-cli-docs.sh
@@ -100,6 +100,7 @@ These flags apply to all commands:
 - [`bd rename-prefix`](/cli-reference/rename-prefix)
 - [`bd reopen`](/cli-reference/reopen)
 - [`bd repo`](/cli-reference/repo)
+- [`bd sample`](/cli-reference/sample)
 - [`bd schema`](/cli-reference/schema)
 - [`bd search`](/cli-reference/search)
 - [`bd set-state`](/cli-reference/set-state)

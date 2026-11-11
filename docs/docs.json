@@ -405,6 +405,7 @@
               "cli-reference/rename",
               "cli-reference/reopen",
               "cli-reference/repo",
+              "cli-reference/sample",
               "cli-reference/schema",
               "cli-reference/search",
               "cli-reference/set-state",

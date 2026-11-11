@@ -89,6 +89,7 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 	publicops "github.com/steveyegge/beads/issueops"
 	"github.com/steveyegge/beads/memoryops"
+	"github.com/steveyegge/beads/samplesops"
 )
 
 // hookRunner is the subset of *hooks.Runner this plumbing needs — the same
@@ -306,6 +307,10 @@ func (p *notifyingProvider) MetadataCAS() (publicops.MetadataCAS, error) { retur
 func (p *notifyingProvider) Releaser() (publicops.Releaser, error) { return NewReleaser(p) }
 
 func (p *notifyingProvider) Memories() (memoryops.Memories, error) { return NewMemories(p) }
+
+// Samples builds on THIS provider so a sample write opened through a notifying
+// provider is still the one its inner layer will commit.
+func (p *notifyingProvider) Samples() (samplesops.Samples, error) { return NewSamples(p) }
 
 // EventsJournalCursor builds on THIS provider, like every role above it, so a
 // journal read taken through a notifying provider still runs in a unit of work

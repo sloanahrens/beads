@@ -21,7 +21,7 @@ fail, the remaining issues are still updated, every failed ID is reported on
 stderr, and the command exits nonzero.
 
 Exit codes: 1 for general failures; 13 when every failure is a stale
---if-assignee/--if-status guard (the precondition no longer held, nothing was
+--if-assignee/--if-status/--if-acceptance guard (the precondition no longer held, nothing was
 written — another actor won the race, so retrying the same guard is
 pointless).
 
@@ -50,6 +50,7 @@ bd update [id...] [flags]
       --external-ref string          External reference (e.g., 'gh-9', 'jira-ABC', Linear URL)
       --force                        Override two refusals: let -a/--assignee overwrite another actor's live in_progress claim (use only for abandoned claims — crashed agent, expired lease; prefer bd reclaim), and let -s/--status move the issue into closed (or a configured done status) despite open children or a live blocker (same as bd close --force)
       --history                      Clear no-history flag (re-enable Dolt commit history)
+      --if-acceptance string         Apply the update only if the current acceptance criteria equal this value, given as the full text or its sha256 in hex (--if-acceptance '' requires an empty field); a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim
       --if-assignee string           Apply the update only if the current assignee equals this value (--if-assignee '' requires unassigned); a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim
       --if-status string             Apply the update only if the current status equals this value; a mismatch writes nothing and exits 13 (vs 1 for other failures). Requires a field update; cannot combine with --claim
       --metadata string              Set custom metadata (JSON string or @file.json to read from file)
