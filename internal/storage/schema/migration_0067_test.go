@@ -21,9 +21,12 @@ func TestSamplesDownMigrationRefusesToDropAPopulatedTable(t *testing.T) {
 	for _, want := range []string{
 		"@bd_migrate_force", // the force switch, read in-session
 		"FROM samples)",     // the row count that decides refusal
-		"samples_down_migration_refused_table_holds_rows_set_BD_MIGRATE_FORCE", // refusal names the fix
-		"IF(@has_samples = 0 OR @samples_rows = 0 OR @bd_migrate_force = 1",    // drop only when empty or forced
-		"'DROP TABLE IF EXISTS samples'",                                       // the DROP is dynamic, so SQL decides
+		// The refusal names the variable the guard actually reads — the
+		// session variable — not a shell variable nothing in this repo maps
+		// onto it.
+		"samples_down_refused_rows_present_set_session_bd_migrate_force",
+		"IF(@has_samples = 0 OR @samples_rows = 0 OR @bd_migrate_force = 1", // drop only when empty or forced
+		"'DROP TABLE IF EXISTS samples'",                                    // the DROP is dynamic, so SQL decides
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("0067 down migration does not contain %q:\n%s", want, sql)

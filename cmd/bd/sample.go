@@ -189,12 +189,14 @@ var sampleListCmd = &cobra.Command{
 the default, is uncapped. With --json the output is the usual envelope:
 
   {"schema_version": 1,
-   "data": [{"id": "...", "kind": "...", "at": "2026-11-11T09:30:00Z",
+   "data": [{"id": "...", "kind": "...", "at": "2026-11-11T09:30:00.000000Z",
              "payload": {"used": 1200}, "created_at": "..."}]}
 
-at and created_at are RFC3339 timestamps in UTC; payload is the stored JSON
-object embedded as compact JSON — the value is unchanged, but the encoder
-normalizes whitespace and key order, so the bytes may differ from those added.
+at and created_at are RFC3339 timestamps in UTC with microsecond precision,
+the precision the table stores (for example 2026-11-11T09:30:00.000000Z);
+payload is the stored JSON object embedded as compact JSON — the value is
+unchanged, but the encoder normalizes whitespace and key order, so the bytes
+may differ from those added.
 
 Examples:
   bd sample list --kind deepseek_balance --limit 10 --json
@@ -289,6 +291,16 @@ type sampleJSON struct {
 	CreatedAt string          `json:"created_at"`
 }
 
+// sampleTimeLayout is the timestamp form of every bd sample surface: RFC3339
+// in UTC at the microsecond precision the samples table stores. The fraction
+// is fixed at six digits rather than trimmed, so one row always renders the
+// same string the column round-trips.
+const sampleTimeLayout = "2006-01-02T15:04:05.000000Z07:00"
+
+func formatSampleTime(t time.Time) string {
+	return t.UTC().Format(sampleTimeLayout)
+}
+
 func printSampleList(samples []samplesops.Sample) error {
 	if jsonOutput {
 		rows := make([]sampleJSON, len(samples))
@@ -296,9 +308,9 @@ func printSampleList(samples []samplesops.Sample) error {
 			rows[i] = sampleJSON{
 				ID:        sample.ID,
 				Kind:      sample.Kind,
-				At:        sample.At.Format(time.RFC3339Nano),
+				At:        formatSampleTime(sample.At),
 				Payload:   json.RawMessage(sample.Payload),
-				CreatedAt: sample.CreatedAt.Format(time.RFC3339Nano),
+				CreatedAt: formatSampleTime(sample.CreatedAt),
 			}
 		}
 		return outputJSON(rows)
@@ -308,7 +320,7 @@ func printSampleList(samples []samplesops.Sample) error {
 		return nil
 	}
 	for _, sample := range samples {
-		fmt.Printf("%s  %s  %s\n", sample.At.Format(time.RFC3339Nano), sample.Kind, sample.ID)
+		fmt.Printf("%s  %s  %s\n", formatSampleTime(sample.At), sample.Kind, sample.ID)
 	}
 	return nil
 }

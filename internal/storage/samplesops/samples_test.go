@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,8 +14,10 @@ import (
 
 // tableRunner is an in-process model of the samples table. It enforces the
 // PRIMARY KEY the way Dolt does: a repeated id is a duplicate-key error unless
-// the statement carries ON DUPLICATE KEY UPDATE, in which case the stored row
-// is left alone.
+// the statement carries ON DUPLICATE KEY UPDATE. It also models the guarded
+// duplicate branch AddInTx writes: a duplicate whose fields all match the
+// stored row is the retry no-op, while a duplicate that differs makes the
+// statement assign NULL to the NOT NULL id column, which the engine refuses.
 type tableRunner struct {
 	rows     map[string][]any
 	inserted int
@@ -27,15 +30,24 @@ func (r *tableRunner) ExecContext(_ context.Context, query string, args ...any) 
 	if !ok || id == "" {
 		return nil, fmt.Errorf("insert carried no id: %#v", args)
 	}
-	if _, exists := r.rows[id]; exists {
-		if !strings.Contains(query, "ON DUPLICATE KEY UPDATE") {
-			return nil, fmt.Errorf("Error 1062: Duplicate entry %q for key 'PRIMARY'", id)
-		}
+	stored, exists := r.rows[id]
+	if !exists {
+		r.rows[id] = args
+		r.inserted++
+		return fakeResult{affected: 1}, nil
+	}
+	if !strings.Contains(query, "ON DUPLICATE KEY UPDATE") {
+		return nil, fmt.Errorf("Error 1062: Duplicate entry %q for key 'PRIMARY'", id)
+	}
+	if !strings.Contains(query, "IF(kind = VALUES(kind)") {
+		// The unguarded `ON DUPLICATE KEY UPDATE id = id` Dolt accepts: it
+		// swallows every collision, including one with a different row.
 		return fakeResult{affected: 0}, nil
 	}
-	r.rows[id] = args
-	r.inserted++
-	return fakeResult{affected: 1}, nil
+	if !reflect.DeepEqual(stored, args) {
+		return nil, fmt.Errorf("Error 1048 (23000): Column 'id' cannot be null")
+	}
+	return fakeResult{affected: 0}, nil
 }
 
 func (r *tableRunner) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
@@ -82,6 +94,41 @@ func TestAddInTxLandsOneRowWhenARetryReusesThePreparedRow(t *testing.T) {
 	}
 	if table.inserted != 1 {
 		t.Errorf("inserted %d rows into the model, want 1", table.inserted)
+	}
+}
+
+// TestAddInTxRefusesAPrimaryKeyCollisionWithADifferentRow pins the guard on
+// the duplicate branch: an id already held by a DIFFERENT sample is a refusal,
+// not a silent success that hands back somebody else's row. A bare
+// `ON DUPLICATE KEY UPDATE id = id` swallows this case, so removing the IF
+// guard from the statement turns this test red.
+func TestAddInTxRefusesAPrimaryKeyCollisionWithADifferentRow(t *testing.T) {
+	ctx := context.Background()
+	table := newTableRunner()
+	first := Prepare(publicops.AddRequest{
+		Kind:    "usage_record",
+		At:      time.Date(2026, 11, 11, 9, 31, 0, 0, time.UTC),
+		Payload: []byte(`{"used":1200}`),
+	})
+	if _, err := AddInTx(ctx, table, first); err != nil {
+		t.Fatalf("first AddInTx: %v", err)
+	}
+
+	// A different observation that collides on the minted id.
+	collision := first
+	collision.Payload = `{"used":9999}`
+	_, err := AddInTx(ctx, table, collision)
+	if err == nil {
+		t.Fatal("AddInTx with a colliding id returned nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), first.ID) {
+		t.Errorf("refusal %q does not name the colliding id %q", err, first.ID)
+	}
+	if got, want := table.rows[first.ID][3], `{"used":1200}`; got != want {
+		t.Errorf("stored payload = %v, want the original row %q", got, want)
+	}
+	if table.inserted != 1 {
+		t.Errorf("inserted %d rows, want 1 (a collision must not add a row)", table.inserted)
 	}
 }
 

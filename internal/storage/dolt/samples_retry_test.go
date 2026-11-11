@@ -3,93 +3,149 @@ package dolt
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/steveyegge/beads/internal/storage/domain/db"
+	mysql "github.com/go-sql-driver/mysql"
+
 	"github.com/steveyegge/beads/samplesops"
 )
 
-// retrySampleTable is an in-process model of the samples table. It enforces
-// the PRIMARY KEY the way Dolt does: a repeated id is a duplicate-key error
-// unless the statement carries ON DUPLICATE KEY UPDATE.
-type retrySampleTable struct{ rows map[string][]any }
-
-func newRetrySampleTable() *retrySampleTable {
-	return &retrySampleTable{rows: map[string][]any{}}
-}
-
-func (r *retrySampleTable) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
-	id, _ := args[0].(string)
-	if _, exists := r.rows[id]; exists {
-		if !strings.Contains(query, "ON DUPLICATE KEY UPDATE") {
-			return nil, fmt.Errorf("Error 1062: Duplicate entry %q for key 'PRIMARY'", id)
-		}
-		return retryResult(0), nil
-	}
-	r.rows[id] = args
-	return retryResult(1), nil
-}
-
-func (r *retrySampleTable) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, fmt.Errorf("retrySampleTable: QueryContext is not used by Add")
-}
-
-func (r *retrySampleTable) QueryRowContext(context.Context, string, ...any) *sql.Row { return nil }
-
-type retryResult int64
-
-func (retryResult) LastInsertId() (int64, error)   { return 0, nil }
-func (r retryResult) RowsAffected() (int64, error) { return int64(r), nil }
-
-// TestSamplesAddLandsOneRowAcrossARetriedWrite pins acceptance's retry clause
-// at the accessor, where the id is minted: the write boundary replays the
-// whole transaction, and because the row was prepared BEFORE the boundary both
-// attempts carry the same id. Minting inside the transaction would leave two
-// rows and a duplicate-key error here.
+// samplesRetryDriver is an in-process samples table behind a database/sql
+// driver, so the test drives the REAL retry boundary — DoltStore.Samples()
+// wiring Add through withRetryTx — instead of a hand-written stand-in for it.
 //
-// Production's withRetryTx refuses to replay an indeterminate commit; this
-// test pins the stronger property that a boundary which does replay cannot
-// double-apply either.
-func TestSamplesAddLandsOneRowAcrossARetriedWrite(t *testing.T) {
-	table := newRetrySampleTable()
-	attempts := 0
-	accessor := &samples{runWriteTx: func(ctx context.Context, fn func(db.Runner) error) error {
-		for {
-			attempts++
-			if err := fn(table); err != nil {
-				return err
-			}
-			if attempts == 1 {
-				// The first attempt committed, but its result was lost, so
-				// the boundary replays the whole transaction.
-				continue
-			}
-			return nil
-		}
-	}}
+// The first transaction's INSERT fails with MySQL 1213 (serialization
+// conflict), the one failure withRetryTx replays because it guarantees the
+// server rolled the write back. The driver stages rows per transaction and
+// only publishes them on Commit, so a rolled-back attempt leaves no row.
+type samplesRetryDriver struct {
+	mu        sync.Mutex
+	committed map[string][]driver.Value
+	attempts  int
+	insertIDs []string
+}
 
-	result, err := accessor.Add(context.Background(), samplesops.AddRequest{
+func (d *samplesRetryDriver) Driver() driver.Driver { return d }
+
+func (d *samplesRetryDriver) Open(string) (driver.Conn, error) {
+	return d.Connect(context.Background())
+}
+
+func (d *samplesRetryDriver) Connect(context.Context) (driver.Conn, error) {
+	return &samplesRetryConn{driver: d}, nil
+}
+
+type samplesRetryConn struct {
+	driver *samplesRetryDriver
+	staged map[string][]driver.Value
+}
+
+func (c *samplesRetryConn) Prepare(string) (driver.Stmt, error) {
+	return nil, fmt.Errorf("samples retry driver does not prepare statements")
+}
+
+func (c *samplesRetryConn) Close() error { return nil }
+
+func (c *samplesRetryConn) Begin() (driver.Tx, error) {
+	c.driver.mu.Lock()
+	defer c.driver.mu.Unlock()
+	c.driver.attempts++
+	c.staged = map[string][]driver.Value{}
+	return &samplesRetryTx{conn: c}, nil
+}
+
+func (c *samplesRetryConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if !strings.Contains(query, "INSERT INTO samples") {
+		return nil, fmt.Errorf("samples retry driver does not execute %q", query)
+	}
+	c.driver.mu.Lock()
+	defer c.driver.mu.Unlock()
+
+	values := make([]driver.Value, len(args))
+	for i, arg := range args {
+		values[i] = arg.Value
+	}
+	id, _ := values[0].(string)
+	c.driver.insertIDs = append(c.driver.insertIDs, id)
+
+	if c.driver.attempts == 1 {
+		// Serialization conflict: the server rolled this write back, so
+		// nothing is staged for a commit.
+		return nil, &mysql.MySQLError{Number: 1213, Message: "serialization failure: retry"}
+	}
+	c.staged[id] = values
+	return driver.RowsAffected(1), nil
+}
+
+type samplesRetryTx struct{ conn *samplesRetryConn }
+
+func (t *samplesRetryTx) Commit() error {
+	t.conn.driver.mu.Lock()
+	defer t.conn.driver.mu.Unlock()
+	for id, values := range t.conn.staged {
+		t.conn.driver.committed[id] = values
+	}
+	t.conn.staged = nil
+	return nil
+}
+
+func (t *samplesRetryTx) Rollback() error {
+	t.conn.driver.mu.Lock()
+	defer t.conn.driver.mu.Unlock()
+	t.conn.staged = nil
+	return nil
+}
+
+// TestSamplesAddRetriesThroughWithRetryTx pins the retry clause at the
+// production boundary: a serialization conflict makes withRetryTx replay the
+// whole transaction, and because the row is PREPARED before that boundary both
+// attempts carry the same id. Minting the id inside the closure would insert
+// under two ids and turn this red on the equality check; a boundary that did
+// not retry would leave attempts at one.
+func TestSamplesAddRetriesThroughWithRetryTx(t *testing.T) {
+	driver := &samplesRetryDriver{committed: map[string][]driver.Value{}}
+	store := &DoltStore{db: sql.OpenDB(driver)}
+	t.Cleanup(func() { _ = store.db.Close() })
+
+	role, err := store.Samples()
+	if err != nil {
+		t.Fatalf("Samples: %v", err)
+	}
+
+	result, err := role.Add(context.Background(), samplesops.AddRequest{
 		Kind:    "usage_record",
 		At:      time.Date(2026, 11, 11, 9, 31, 0, 0, time.UTC),
 		Payload: []byte(`{"used":1200}`),
 	})
 	if err != nil {
-		t.Fatalf("Add: %v", err)
+		t.Fatalf("Add through withRetryTx: %v", err)
 	}
-	if attempts != 2 {
-		t.Fatalf("write boundary ran %d attempts, want 2", attempts)
+
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.attempts != 2 {
+		t.Fatalf("write boundary ran %d transactions, want 2 (one serialization replay)", driver.attempts)
 	}
-	if got := len(table.rows); got != 1 {
-		t.Fatalf("a retried add stored %d rows, want 1", got)
+	if len(driver.insertIDs) != 2 {
+		t.Fatalf("the insert ran %d times, want 2", len(driver.insertIDs))
 	}
-	if result.Sample.ID == "" {
-		t.Error("Add returned no id")
+	if driver.insertIDs[0] != driver.insertIDs[1] {
+		t.Fatalf("the replay inserted id %q after %q; the row must be prepared before the boundary so both attempts reuse one id",
+			driver.insertIDs[1], driver.insertIDs[0])
 	}
-	if _, ok := table.rows[result.Sample.ID]; !ok {
-		t.Errorf("Add returned id %q, which is not the row stored", result.Sample.ID)
+	if result.Sample.ID != driver.insertIDs[0] {
+		t.Errorf("Add returned id %q, but the insert carried %q", result.Sample.ID, driver.insertIDs[0])
+	}
+	if got := len(driver.committed); got != 1 {
+		t.Fatalf("a retried add committed %d rows, want 1", got)
+	}
+	if _, ok := driver.committed[result.Sample.ID]; !ok {
+		t.Errorf("the committed row is not the id Add returned (%q)", result.Sample.ID)
 	}
 }
 

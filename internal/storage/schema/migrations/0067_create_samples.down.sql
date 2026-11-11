@@ -41,7 +41,7 @@ DEALLOCATE PREPARE samples_down_count;
 
 SET @sql = IF(@has_samples = 0 OR @samples_rows = 0 OR @bd_migrate_force = 1,
     'DROP TABLE IF EXISTS samples',
-    'SELECT * FROM samples_down_migration_refused_table_holds_rows_set_BD_MIGRATE_FORCE');
+    'SELECT * FROM samples_down_refused_rows_present_set_session_bd_migrate_force');
 PREPARE samples_down_drop FROM @sql;
 EXECUTE samples_down_drop;
 DEALLOCATE PREPARE samples_down_drop;

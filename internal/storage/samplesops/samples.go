@@ -69,10 +69,16 @@ func Prepare(request samplesops.AddRequest) Prepared {
 //
 // The insert is IDEMPOTENT on the primary key: if a previous attempt committed
 // but its result was lost, the retry carrying the same Prepared row inserts
-// nothing and cannot double-count an observation. ON DUPLICATE KEY UPDATE is
-// the MySQL/Dolt spelling of that no-op.
+// nothing and cannot double-count an observation.
+//
+// The duplicate branch is GUARDED rather than a bare no-op, so a primary-key
+// collision with a DIFFERENT row is not silently swallowed as if it were a
+// retry. The update re-stores id only when every stored field equals the
+// incoming one; otherwise it assigns NULL to the primary key, which the column
+// is NOT NULL against, so the engine refuses the statement. A caller therefore
+// gets an error instead of a success that points at somebody else's row.
 func AddInTx(ctx context.Context, runner db.Runner, row Prepared) (samplesops.AddResult, error) {
-	const insert = `INSERT INTO samples (id, kind, at, payload, created_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`
+	const insert = `INSERT INTO samples (id, kind, at, payload, created_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = IF(kind = VALUES(kind) AND at = VALUES(at) AND payload = VALUES(payload) AND created_at = VALUES(created_at), id, NULL)`
 	if _, err := runner.ExecContext(ctx, insert, row.ID, row.Kind, row.At, row.Payload, row.CreatedAt); err != nil {
 		return samplesops.AddResult{}, fmt.Errorf("storing sample %s: %w", row.ID, err)
 	}

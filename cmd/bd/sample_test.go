@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -315,7 +316,7 @@ func TestSampleAddReturnsAStoreFailureAsItIs(t *testing.T) {
 func TestSampleCommandDocumentsBothVerbs(t *testing.T) {
 	wanted := map[string][]string{
 		"add":  {"--kind", "--at", "--json", "RFC3339", "exact bytes given"},
-		"list": {"--kind", "--since", "--limit", "newest first", "compact JSON"},
+		"list": {"--kind", "--since", "--limit", "newest first", "compact JSON", "microsecond precision"},
 	}
 	found := map[string]bool{}
 	for _, sub := range sampleCmd.Commands() {
@@ -334,6 +335,44 @@ func TestSampleCommandDocumentsBothVerbs(t *testing.T) {
 		if !found[name] {
 			t.Errorf("bd sample has no %q subcommand", name)
 		}
+	}
+}
+
+// TestSampleListJSONRendersTheDocumentedTimestamps pins the docs' promise for
+// the --json envelope: at and created_at are RFC3339 timestamps in UTC at the
+// microsecond precision the table stores. A nanosecond layout trims trailing
+// zeros, so the same row renders at varying widths and the promise is only
+// accidentally true.
+func TestSampleListJSONRendersTheDocumentedTimestamps(t *testing.T) {
+	oldJSON := jsonOutput
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = oldJSON })
+
+	sample := samplesops.Sample{
+		ID:        "sample-1",
+		Kind:      "usage_record",
+		At:        time.Date(2026, 11, 11, 9, 31, 0, 123456789, time.UTC),
+		Payload:   `{"used":1200}`,
+		CreatedAt: time.Date(2026, 11, 11, 9, 31, 1, 500000000, time.UTC),
+	}
+	out := captureStdout(t, func() error {
+		return printSampleList([]samplesops.Sample{sample})
+	})
+
+	var envelope struct {
+		Data []sampleJSON `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("decode bd sample list --json output: %v\n%s", err, out)
+	}
+	if len(envelope.Data) != 1 {
+		t.Fatalf("envelope carried %d rows, want 1:\n%s", len(envelope.Data), out)
+	}
+	if got, want := envelope.Data[0].At, "2026-11-11T09:31:00.123456Z"; got != want {
+		t.Errorf("at = %q, want %q", got, want)
+	}
+	if got, want := envelope.Data[0].CreatedAt, "2026-11-11T09:31:01.500000Z"; got != want {
+		t.Errorf("created_at = %q, want %q", got, want)
 	}
 }
 
