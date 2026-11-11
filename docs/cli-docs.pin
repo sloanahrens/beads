@@ -17,4 +17,4 @@
 # until the release that ships bd sample, the pinned commit is the branch
 # commit that produced the docs and ./scripts/generate-cli-docs.sh --check
 # builds it from here. Re-pin to the origin/main tip at the next release.
-df958063
+f5e12b1f0a613a613c54b43cdd403cc94d07eddc

@@ -2407,12 +2407,14 @@ List one kind's samples, newest first by event time.
 the default, is uncapped. With --json the output is the usual envelope:
 
   &#123;"schema_version": 1,
-   "data": [&#123;"id": "...", "kind": "...", "at": "2026-11-11T09:30:00Z",
+   "data": [&#123;"id": "...", "kind": "...", "at": "2026-11-11T09:30:00.000000Z",
              "payload": &#123;"used": 1200&#125;, "created_at": "..."&#125;]&#125;
 
-at and created_at are RFC3339 timestamps in UTC; payload is the stored JSON
-object embedded as compact JSON — the value is unchanged, but the encoder
-normalizes whitespace and key order, so the bytes may differ from those added.
+at and created_at are RFC3339 timestamps in UTC with microsecond precision,
+the precision the table stores (for example 2026-11-11T09:30:00.000000Z);
+payload is the stored JSON object embedded as compact JSON — the value is
+unchanged, but the encoder normalizes whitespace and key order, so the bytes
+may differ from those added.
 
 Examples:
   bd sample list --kind deepseek_balance --limit 10 --json
