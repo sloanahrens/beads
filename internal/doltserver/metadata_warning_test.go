@@ -35,21 +35,28 @@ func captureStderr(t *testing.T, fn func()) string {
 	os.Stderr = w
 	t.Cleanup(func() { os.Stderr = orig })
 
-	out := make(chan string)
+	type read struct {
+		text string
+		err  error
+	}
+	out := make(chan read)
 	go func() {
-		b, _ := io.ReadAll(r)
-		out <- string(b)
+		b, err := io.ReadAll(r)
+		out <- read{string(b), err}
 	}()
 	fn()
 	os.Stderr = orig
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	s := <-out
+	got := <-out
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return got.text
 }
 
 // TestDeprecatedMetadataPortNoticeOncePerProcess pins that resolving the port
