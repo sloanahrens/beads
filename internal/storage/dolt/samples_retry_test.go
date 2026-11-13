@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -83,6 +84,46 @@ func (c *samplesRetryConn) ExecContext(_ context.Context, query string, args []d
 	}
 	c.staged[id] = values
 	return driver.RowsAffected(1), nil
+}
+
+// QueryContext answers the read-back AddInTx runs after its insert, against the
+// rows this transaction has staged and the rows an earlier attempt committed.
+func (c *samplesRetryConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if !strings.Contains(query, "SELECT kind, at, payload, created_at FROM samples WHERE id = ?") {
+		return nil, fmt.Errorf("samples retry driver does not query %q", query)
+	}
+	id, ok := args[0].Value.(string)
+	if !ok {
+		return nil, fmt.Errorf("lookup carried no string id: %#v", args[0].Value)
+	}
+	c.driver.mu.Lock()
+	defer c.driver.mu.Unlock()
+	stored, ok := c.staged[id]
+	if !ok {
+		stored, ok = c.driver.committed[id]
+	}
+	rows := &samplesRetryRows{columns: []string{"kind", "at", "payload", "created_at"}}
+	if ok {
+		rows.values = [][]driver.Value{{stored[1], stored[2], stored[3], stored[4]}}
+	}
+	return rows, nil
+}
+
+type samplesRetryRows struct {
+	columns []string
+	values  [][]driver.Value
+	next    int
+}
+
+func (r *samplesRetryRows) Columns() []string { return r.columns }
+func (r *samplesRetryRows) Close() error      { return nil }
+func (r *samplesRetryRows) Next(dest []driver.Value) error {
+	if r.next >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.next])
+	r.next++
+	return nil
 }
 
 type samplesRetryTx struct{ conn *samplesRetryConn }
