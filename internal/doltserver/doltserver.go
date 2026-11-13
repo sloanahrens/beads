@@ -859,7 +859,13 @@ var portSources = []portSource{
 			if err != nil || metaCfg == nil || metaCfg.DoltServerPort <= 0 {
 				return 0, false
 			}
-			emitDeprecatedMetadataPortWarning(os.Stderr, quietDeprecationNotices.Load())
+			// A port file that names a port already gave the port, so this read
+			// is only the be-60t reconciliation looking past it; stay silent.
+			if readPortFile(beadsDir) <= 0 {
+				metadataPortNotice.Do(func() {
+					emitDeprecatedMetadataPortWarning(os.Stderr, quietDeprecationNotices.Load())
+				})
+			}
 			return metaCfg.DoltServerPort, true
 		},
 	},
@@ -878,6 +884,12 @@ var portSources = []portSource{
 // one reader is the metadata.json arm of portSources; the one writer is the
 // setter below.
 var quietDeprecationNotices atomic.Bool
+
+// metadataPortNotice limits the metadata.json dolt_server_port notice to one
+// write per process: DefaultConfig walks portSources more than once, and the
+// arm would otherwise repeat the three lines on every walk. Tests replace it
+// to re-arm the notice.
+var metadataPortNotice = &sync.Once{}
 
 // QuietDeprecationNotices sets whether this process suppresses deprecation
 // notices because its output is consumed by a machine. Text mode leaves it
