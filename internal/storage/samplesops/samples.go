@@ -18,6 +18,8 @@ package samplesops
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -49,8 +51,9 @@ type Prepared struct {
 // instant and a payload, and both are legitimate observations.
 //
 // Callers must call this ONCE per add and pass the result to every attempt of
-// the transaction. AddInTx's insert is idempotent on ID, so a retry after an
-// ambiguous commit lands no second row.
+// the transaction. AddInTx's insert is idempotent on ID and reads the stored
+// row back, so a retry after an ambiguous commit lands no second row and finds
+// the row it prepared.
 func Prepare(request samplesops.AddRequest) Prepared {
 	// Both timestamps are truncated to the DATETIME(6) precision the columns
 	// store BEFORE the insert, so the row Add returns is the row that was
@@ -68,19 +71,48 @@ func Prepare(request samplesops.AddRequest) Prepared {
 // returns the row as it was stored.
 //
 // The insert is IDEMPOTENT on the primary key: if a previous attempt committed
-// but its result was lost, the retry carrying the same Prepared row inserts
-// nothing and cannot double-count an observation.
+// but its result was lost, the retry carrying the same Prepared row matches the
+// stored row and cannot double-count an observation.
 //
-// The duplicate branch is GUARDED rather than a bare no-op, so a primary-key
-// collision with a DIFFERENT row is not silently swallowed as if it were a
-// retry. The update re-stores id only when every stored field equals the
-// incoming one; otherwise it assigns NULL to the primary key, which the column
-// is NOT NULL against, so the engine refuses the statement. A caller therefore
-// gets an error instead of a success that points at somebody else's row.
+// The duplicate branch alone cannot tell a retry from a collision, and the
+// engine is not asked to refuse one. Dolt does not refuse the statement this
+// package used to carry (assign NULL to the key when a stored field differed):
+// it exits 0 and leaves the stored row with a NULL key, so no error would reach
+// the caller (be-8o10). Instead the insert writes idempotently and AddInTx then
+// reads the row back INSIDE THE SAME TRANSACTION. An identical row is the retry
+// and is returned as prepared; a row whose fields differ, or no row at all, is
+// a primary-key collision with a different write and is an error naming the id,
+// never a success that points at somebody else's row.
 func AddInTx(ctx context.Context, runner db.Runner, row Prepared) (samplesops.AddResult, error) {
-	const insert = `INSERT INTO samples (id, kind, at, payload, created_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = IF(kind = VALUES(kind) AND at = VALUES(at) AND payload = VALUES(payload) AND created_at = VALUES(created_at), id, NULL)`
+	// `id = id` leaves whatever row already holds the key exactly as it is;
+	// the read-back below decides whether that row is this write's retry.
+	const insert = `INSERT INTO samples (id, kind, at, payload, created_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`
 	if _, err := runner.ExecContext(ctx, insert, row.ID, row.Kind, row.At, row.Payload, row.CreatedAt); err != nil {
 		return samplesops.AddResult{}, fmt.Errorf("storing sample %s: %w", row.ID, err)
+	}
+
+	const read = `SELECT kind, at, payload, created_at FROM samples WHERE id = ?`
+	var (
+		storedKind      string
+		storedAt        time.Time
+		storedPayload   string
+		storedCreatedAt time.Time
+	)
+	err := runner.QueryRowContext(ctx, read, row.ID).Scan(&storedKind, &storedAt, &storedPayload, &storedCreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		// The insert reported success but no row holds the id — the shape of
+		// the NULL-key write be-8o10 removes. Success here would tell the
+		// caller it landed an observation that is not stored.
+		return samplesops.AddResult{}, fmt.Errorf("sample %s is not stored after its insert", row.ID)
+	}
+	if err != nil {
+		return samplesops.AddResult{}, fmt.Errorf("reading sample %s after its insert: %w", row.ID, err)
+	}
+	// The columns carry no zone, so compare instants rather than the values'
+	// Locations; Prepare already truncated both to the columns' precision.
+	if storedKind != row.Kind || storedPayload != row.Payload ||
+		!storedAt.Equal(row.At) || !storedCreatedAt.Equal(row.CreatedAt) {
+		return samplesops.AddResult{}, fmt.Errorf("sample %s already holds a different row: id collision, not a retry", row.ID)
 	}
 	return samplesops.AddResult{Sample: samplesops.Sample{
 		ID:        row.ID,
