@@ -859,13 +859,6 @@ var portSources = []portSource{
 			if err != nil || metaCfg == nil || metaCfg.DoltServerPort <= 0 {
 				return 0, false
 			}
-			// A port file that names a port already gave the port, so this read
-			// is only the be-60t reconciliation looking past it; stay silent.
-			if readPortFile(beadsDir) <= 0 {
-				metadataPortNotice.Do(func() {
-					emitDeprecatedMetadataPortWarning(os.Stderr, quietDeprecationNotices.Load())
-				})
-			}
 			return metaCfg.DoltServerPort, true
 		},
 	},
@@ -881,15 +874,38 @@ var portSources = []portSource{
 // sink is the process's own stderr: a caller passing a writer would have to
 // thread it through the portSources chain to every DefaultConfig call site, and
 // the notice is emitted deep inside a resolver that callers do not reach. The
-// one reader is the metadata.json arm of portSources; the one writer is the
-// setter below.
+// one reader is metadataPortNotice.note; the one writer is the setter below.
 var quietDeprecationNotices atomic.Bool
 
-// metadataPortNotice limits the metadata.json dolt_server_port notice to one
-// write per process: DefaultConfig walks portSources more than once, and the
-// arm would otherwise repeat the three lines on every walk. Tests replace it
-// to re-arm the notice.
-var metadataPortNotice = &sync.Once{}
+// metadataPortNotice writes the metadata.json dolt_server_port deprecation
+// notice at most once per instance. DefaultConfig walks portSources more than
+// once per call, so the notice is not emitted from the resolver: note is called
+// once with the Config DefaultConfig decided, and it writes only when the
+// metadata.json key is the source that set that port. A port file, the
+// environment variable or a config.yaml source that won stays silent.
+//
+// The writer and quiet flag are fields so a test builds its own instance and
+// its own buffer. Production wires one instance for the process, below.
+type metadataPortNotice struct {
+	once  sync.Once
+	w     io.Writer
+	quiet *atomic.Bool
+}
+
+// processMetadataPortNotice is the process's one notice: it writes to stderr,
+// and its quiet flag is the one QuietDeprecationNotices sets.
+var processMetadataPortNotice = &metadataPortNotice{w: os.Stderr, quiet: &quietDeprecationNotices}
+
+// note emits the notice when cfg's port came from metadata.json, at most once
+// per instance. It does nothing for any other source.
+func (n *metadataPortNotice) note(cfg *Config) {
+	if cfg.PortSource != PortSourceMetadataJSON {
+		return
+	}
+	n.once.Do(func() {
+		emitDeprecatedMetadataPortWarning(n.w, n.quiet.Load())
+	})
+}
 
 // QuietDeprecationNotices sets whether this process suppresses deprecation
 // notices because its output is consumed by a machine. Text mode leaves it
@@ -902,7 +918,7 @@ func QuietDeprecationNotices(quiet bool) {
 // emitDeprecatedMetadataPortWarning writes the metadata.json dolt_server_port
 // deprecation notice to w unless quiet. Both inputs are parameters so the
 // notice can be tested against a buffer without redirecting the process's
-// stderr, and so the only package state involved is quietDeprecationNotices.
+// stderr. It touches no package state.
 func emitDeprecatedMetadataPortWarning(w io.Writer, quiet bool) {
 	if quiet {
 		return
@@ -955,6 +971,13 @@ func PortSourceLabels() []string {
 // server that is gone, and it yields to an authoritative configured port with
 // a live listener (be-60t); see the reconciliation after the walk.
 func DefaultConfig(beadsDir string) *Config {
+	return defaultConfig(beadsDir, processMetadataPortNotice)
+}
+
+// defaultConfig is DefaultConfig with the deprecation notice injected, so a test
+// can resolve against its own notice instance and buffer. Every resolution path
+// below ends at the one return, where notice.note sees the source that decided.
+func defaultConfig(beadsDir string, notice *metadataPortNotice) *Config {
 	// In shared mode, use the shared server directory for port resolution
 	sharedMode := false
 	if IsSharedServerMode() {
@@ -1058,6 +1081,7 @@ func DefaultConfig(beadsDir string) *Config {
 		}
 	}
 
+	notice.note(cfg)
 	return cfg
 }
 
