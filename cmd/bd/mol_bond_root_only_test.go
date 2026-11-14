@@ -14,14 +14,14 @@ import (
 
 // makeMolBondTestCmd builds a cobra.Command with the same flag schema as the
 // real `bd mol bond` command, with the given flag values set as defaults (so
-// runMolBond reads them back without needing arg parsing). Parsing the real
+// the bond path reads them back without needing arg parsing). Parsing the real
 // command would run cobra's Execute and os.Exit paths; this mirrors the
 // makeWispTestCmd seam in wisp_test.go.
-func makeMolBondTestCmd(rootOnly bool) *cobra.Command {
+func makeMolBondTestCmd(rootOnly, dryRun bool) *cobra.Command {
 	c := &cobra.Command{Use: "bond"}
 	c.Flags().String("type", types.BondTypeSequential, "")
 	c.Flags().String("as", "", "")
-	c.Flags().Bool("dry-run", false, "")
+	c.Flags().Bool("dry-run", dryRun, "")
 	c.Flags().StringArray("var", []string{}, "")
 	c.Flags().Bool("ephemeral", false, "")
 	c.Flags().Bool("pour", false, "")
@@ -102,8 +102,15 @@ func (t *bondRootOnlyTx) GetConfig(context.Context, string) (string, error) {
 	return "", nil
 }
 
+// testMolBondEnv is the ambient state the bond path reads, with fakes injected
+// instead of package-level globals.
+func testMolBondEnv(s storage.DoltStorage) molBondEnv {
+	return molBondEnv{ctx: context.Background(), store: s, actor: "tester"}
+}
+
 // newBondRootOnlyFixture builds a proto root with the given number of step
-// issues under it, plus the bead the formula is bonded to.
+// issues under it, plus the beads the formula can be bonded to: one molecule,
+// a second molecule, and a second proto with no steps.
 func newBondRootOnlyFixture(steps int) *bondRootOnlyStore {
 	root := &types.Issue{
 		ID:         "proto-1",
@@ -127,6 +134,22 @@ func newBondRootOnlyFixture(steps int) *bondRootOnlyStore {
 		Priority:  2,
 		IssueType: types.TypeTask,
 	}
+	s.issues["mol-2"] = &types.Issue{
+		ID:        "mol-2",
+		Title:     "Second bond target",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+	}
+	s.issues["proto-2"] = &types.Issue{
+		ID:         "proto-2",
+		Title:      "Proto Without Steps",
+		Status:     types.StatusOpen,
+		Priority:   2,
+		IssueType:  types.TypeEpic,
+		Labels:     []string{MoleculeLabel},
+		IsTemplate: true,
+	}
 	for i := 1; i <= steps; i++ {
 		childID := fmt.Sprintf("proto-1.%d", i)
 		child := &types.Issue{
@@ -148,20 +171,6 @@ func newBondRootOnlyFixture(steps int) *bondRootOnlyStore {
 		}}
 	}
 	return s
-}
-
-// withBondTestGlobals saves and restores the package-level globals runMolBond
-// reads, since the command handler uses them directly.
-func withBondTestGlobals(t *testing.T, s storage.DoltStorage) {
-	t.Helper()
-	oldStore, oldCtx, oldActor := store, rootCtx, actor
-	oldJSON, oldCommit := jsonOutput, commandDidExplicitDoltCommit
-	t.Cleanup(func() {
-		store, rootCtx, actor = oldStore, oldCtx, oldActor
-		jsonOutput, commandDidExplicitDoltCommit = oldJSON, oldCommit
-	})
-	store, rootCtx, actor = s, context.Background(), "tester"
-	jsonOutput = false
 }
 
 func TestMolBondRegistersRootOnlyFlag(t *testing.T) {
@@ -197,10 +206,9 @@ func TestMolBondRootOnlySpawnsOnlyRoot(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newBondRootOnlyFixture(steps)
-			withBondTestGlobals(t, s)
 
 			out := captureStdout(t, func() error {
-				return runMolBond(makeMolBondTestCmd(tc.rootOnly), []string{"proto-1", "mol-1"})
+				return runMolBondWith(testMolBondEnv(s), makeMolBondTestCmd(tc.rootOnly, false), []string{"proto-1", "mol-1"})
 			})
 
 			written := s.recorder.created
@@ -238,6 +246,57 @@ func TestMolBondRootOnlySpawnsOnlyRoot(t *testing.T) {
 				t.Errorf("output does not report %q:\n%s", tc.wantSkipped, out)
 			}
 		})
+	}
+}
+
+// TestMolBondRefusesRootOnlyWithoutSpawn pins that the flag is never silently
+// dropped: a bond that spawns no proto issues has no steps to skip, so asking
+// for root-only is an error rather than a no-op.
+func TestMolBondRefusesRootOnlyWithoutSpawn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		argA      string
+		argB      string
+		wantKinds string
+	}{
+		{name: "proto plus proto", argA: "proto-1", argB: "proto-2", wantKinds: "proto + proto"},
+		{name: "molecule plus molecule", argA: "mol-1", argB: "mol-2", wantKinds: "molecule + molecule"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newBondRootOnlyFixture(3)
+			var err error
+			stderr := captureStderr(t, func() {
+				err = runMolBondWith(testMolBondEnv(s), makeMolBondTestCmd(true, false), []string{tc.argA, tc.argB})
+			})
+
+			if err == nil {
+				t.Fatal("--root-only on a bond that spawns no issues returned nil")
+			}
+			if !strings.Contains(stderr, "--root-only") || !strings.Contains(stderr, tc.wantKinds) {
+				t.Errorf("stderr = %q, want it to name --root-only and %q", stderr, tc.wantKinds)
+			}
+			if len(s.recorder.created) != 0 {
+				t.Errorf("refused bond wrote %d issues: %v", len(s.recorder.created), titlesOf(s.recorder.created))
+			}
+		})
+	}
+}
+
+// TestMolBondDryRunRefusesRootOnlyWithoutSpawn keeps the preview honest: the
+// dry run resolves the same operand kinds and refuses the same combinations
+// instead of promising a skip the real bond would not make.
+func TestMolBondDryRunRefusesRootOnlyWithoutSpawn(t *testing.T) {
+	s := newBondRootOnlyFixture(3)
+	var err error
+	stderr := captureStderr(t, func() {
+		err = runMolBondWith(testMolBondEnv(s), makeMolBondTestCmd(true, true), []string{"mol-1", "mol-2"})
+	})
+
+	if err == nil {
+		t.Fatal("dry run with --root-only on a molecule+molecule bond returned nil")
+	}
+	if !strings.Contains(stderr, "--root-only") {
+		t.Errorf("stderr = %q, want it to name --root-only", stderr)
 	}
 }
 

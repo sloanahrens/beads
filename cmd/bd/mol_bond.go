@@ -49,7 +49,9 @@ Phase control:
 Step issues:
   --root-only spawns the formula's root issue only, skipping its step issues.
   Use it when the caller renders the steps from the formula text instead of
-  tracking them as beads.
+  tracking them as beads. It applies only when exactly one operand is a proto
+  to spawn; proto+proto and molecule+molecule bonds spawn no steps and are
+  refused.
 
   Example:
     bd mol bond mol-polecat-work bd-abc123 --root-only
@@ -91,38 +93,61 @@ type BondResult struct {
 	IDMapping    map[string]string `json:"id_mapping,omitempty"`    // Old ID -> new ID for spawned issues
 }
 
+// molBondEnv carries the ambient state that `bd mol bond` reads from
+// package-level globals. The command handler builds it once; tests build one
+// with fakes instead of writing the globals.
+type molBondEnv struct {
+	ctx     context.Context
+	store   storage.DoltStorage
+	actor   string
+	jsonOut bool
+}
+
 func runMolBond(cmd *cobra.Command, args []string) error {
 	CheckReadonly("mol bond")
+	return runMolBondWith(molBondEnv{
+		ctx:     rootCtx,
+		store:   store,
+		actor:   actor,
+		jsonOut: jsonOutput,
+	}, cmd, args)
+}
 
+func runMolBondWith(env molBondEnv, cmd *cobra.Command, args []string) error {
 	in, err := gatherMolBondInput(cmd, args)
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
 
-	ctx := rootCtx
+	ctx := env.ctx
 
-	if store == nil {
+	if env.store == nil {
 		return HandleErrorRespectJSON("no database connection")
 	}
 
 	if in.dryRun {
-		issueA, formulaA, err := resolveOrDescribe(ctx, store, in.argA, in.vars)
+		issueA, formulaA, err := resolveOrDescribe(ctx, env.store, in.argA, in.vars)
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
 		}
-		issueB, formulaB, err := resolveOrDescribe(ctx, store, in.argB, in.vars)
+		issueB, formulaB, err := resolveOrDescribe(ctx, env.store, in.argB, in.vars)
 		if err != nil {
 			return HandleErrorRespectJSON("%v", err)
+		}
+		aIsProto := resolvedOperandIsProto(issueA, formulaA)
+		bIsProto := resolvedOperandIsProto(issueB, formulaB)
+		if in.rootOnly && !rootOnlyApplies(aIsProto, bIsProto) {
+			return refuseRootOnlyWithoutSpawn(aIsProto, bIsProto)
 		}
 		renderMolBondDryRun(in, issueA, formulaA, issueB, formulaB)
 		return nil
 	}
 
-	subgraphA, cookedA, err := resolveOrCookToSubgraph(ctx, store, in.argA, in.vars)
+	subgraphA, cookedA, err := resolveOrCookToSubgraph(ctx, env.store, in.argA, in.vars)
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
-	subgraphB, cookedB, err := resolveOrCookToSubgraph(ctx, store, in.argB, in.vars)
+	subgraphB, cookedB, err := resolveOrCookToSubgraph(ctx, env.store, in.argB, in.vars)
 	if err != nil {
 		return HandleErrorRespectJSON("%v", err)
 	}
@@ -131,31 +156,49 @@ func runMolBond(cmd *cobra.Command, args []string) error {
 	issueB := subgraphB.Root
 	aIsProto := issueA.IsTemplate || cookedA
 	bIsProto := issueB.IsTemplate || cookedB
+	if in.rootOnly && !rootOnlyApplies(aIsProto, bIsProto) {
+		return refuseRootOnlyWithoutSpawn(aIsProto, bIsProto)
+	}
 
 	var result *BondResult
 	switch {
 	case aIsProto && bIsProto:
-		result, err = bondProtoProto(ctx, store, issueA, issueB, in.bondType, in.customTitle, actor)
+		result, err = bondProtoProto(ctx, env.store, issueA, issueB, in.bondType, in.customTitle, env.actor)
 	case aIsProto && !bIsProto:
 		if cookedA {
-			result, err = bondProtoMolWithSubgraph(ctx, store, subgraphA, issueA, issueB, in.bondType, in.vars, in.childRef, actor, in.ephemeral, in.pour, in.rootOnly)
+			result, err = bondProtoMolWithSubgraph(ctx, env.store, subgraphA, issueA, issueB, in.bondType, in.vars, in.childRef, env.actor, in.ephemeral, in.pour, in.rootOnly)
 		} else {
-			result, err = bondProtoMol(ctx, store, issueA, issueB, in.bondType, in.vars, in.childRef, actor, in.ephemeral, in.pour, in.rootOnly)
+			result, err = bondProtoMol(ctx, env.store, issueA, issueB, in.bondType, in.vars, in.childRef, env.actor, in.ephemeral, in.pour, in.rootOnly)
 		}
 	case !aIsProto && bIsProto:
 		if cookedB {
-			result, err = bondProtoMolWithSubgraph(ctx, store, subgraphB, issueB, issueA, in.bondType, in.vars, in.childRef, actor, in.ephemeral, in.pour, in.rootOnly)
+			result, err = bondProtoMolWithSubgraph(ctx, env.store, subgraphB, issueB, issueA, in.bondType, in.vars, in.childRef, env.actor, in.ephemeral, in.pour, in.rootOnly)
 		} else {
-			result, err = bondMolProto(ctx, store, issueA, issueB, in.bondType, in.vars, in.childRef, actor, in.ephemeral, in.pour, in.rootOnly)
+			result, err = bondMolProto(ctx, env.store, issueA, issueB, in.bondType, in.vars, in.childRef, env.actor, in.ephemeral, in.pour, in.rootOnly)
 		}
 	default:
-		result, err = bondMolMol(ctx, store, issueA, issueB, in.bondType, actor)
+		result, err = bondMolMol(ctx, env.store, issueA, issueB, in.bondType, env.actor)
 	}
 	if err != nil {
 		return HandleErrorRespectJSON("bonding: %v", err)
 	}
 
-	return renderMolBondResult(result, issueA.ID, issueB.ID, in.ephemeral, in.pour)
+	return renderMolBondResult(result, issueA.ID, issueB.ID, in.ephemeral, in.pour, env.jsonOut)
+}
+
+// rootOnlyApplies reports whether a bond of these operand kinds spawns a
+// proto's issues, the only bond --root-only can change. Exactly one operand
+// must be a proto: proto+proto bonds two templates together and molecule+
+// molecule bonds no issues at all.
+func rootOnlyApplies(aIsProto, bIsProto bool) bool {
+	return aIsProto != bIsProto
+}
+
+// refuseRootOnlyWithoutSpawn is the error for --root-only on a bond that
+// spawns nothing, so the flag is never silently dropped.
+func refuseRootOnlyWithoutSpawn(aIsProto, bIsProto bool) error {
+	return HandleErrorRespectJSON("--root-only applies only when exactly one operand is a proto to spawn; this bond is %s + %s",
+		operandType(aIsProto), operandType(bIsProto))
 }
 
 type molBondInput struct {
@@ -200,23 +243,15 @@ func gatherMolBondInput(cmd *cobra.Command, args []string) (molBondInput, error)
 func renderMolBondDryRun(in molBondInput, issueA *types.Issue, formulaA string, issueB *types.Issue, formulaB string) {
 	idA := in.argA
 	idB := in.argB
-	aIsProto := false
-	bIsProto := false
 
 	if issueA != nil {
 		idA = issueA.ID
-		aIsProto = isProto(issueA)
 	}
 	if issueB != nil {
 		idB = issueB.ID
-		bIsProto = isProto(issueB)
 	}
-	if formulaA != "" {
-		aIsProto = true
-	}
-	if formulaB != "" {
-		bIsProto = true
-	}
+	aIsProto := resolvedOperandIsProto(issueA, formulaA)
+	bIsProto := resolvedOperandIsProto(issueB, formulaB)
 
 	fmt.Printf("\nDry run: bond %s + %s\n", idA, idB)
 	if formulaA != "" {
@@ -257,8 +292,8 @@ func renderMolBondDryRun(in molBondInput, issueA *types.Issue, formulaA string, 
 	}
 }
 
-func renderMolBondResult(result *BondResult, idA, idB string, ephemeral, pour bool) error {
-	if jsonOutput {
+func renderMolBondResult(result *BondResult, idA, idB string, ephemeral, pour, jsonOut bool) error {
+	if jsonOut {
 		return outputJSON(result)
 	}
 
@@ -286,6 +321,13 @@ func isProto(issue *types.Issue) bool {
 		}
 	}
 	return false
+}
+
+// resolvedOperandIsProto reports whether a resolved bond operand is a proto: a
+// formula always cooks to a proto subgraph, and an issue is a proto when it
+// carries the template label.
+func resolvedOperandIsProto(issue *types.Issue, formula string) bool {
+	return formula != "" || (issue != nil && isProto(issue))
 }
 
 // operandType returns a human-readable type string
@@ -672,7 +714,7 @@ func init() {
 	molBondCmd.Flags().StringArray("var", []string{}, "Variable substitution for spawned protos (key=value)")
 	molBondCmd.Flags().Bool("ephemeral", false, "Force spawn as vapor (ephemeral, Ephemeral=true)")
 	molBondCmd.Flags().Bool("pour", false, "Force spawn as liquid (persistent, Ephemeral=false)")
-	molBondCmd.Flags().Bool("root-only", false, "Spawn only the formula's root issue; skip its step issues")
+	molBondCmd.Flags().Bool("root-only", false, "Spawn only the formula's root issue; skip its step issues (requires a proto to spawn)")
 	molBondCmd.Flags().String("ref", "", "Custom child reference with {{var}} substitution (e.g., arm-{{polecat_name}})")
 
 	molCmd.AddCommand(molBondCmd)
