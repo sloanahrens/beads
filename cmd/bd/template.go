@@ -66,6 +66,11 @@ type CloneOptions struct {
 	// AttachToID within the same transaction as the clone, preventing orphans.
 	AttachToID    string               // Molecule ID to attach spawned root to
 	AttachDepType types.DependencyType // Dependency type for the attachment
+
+	// RootOnly: if true, create only the root issue and skip every child step
+	// issue. Used by callers that render a formula's steps from its text
+	// instead of tracking them as beads.
+	RootOnly bool
 }
 
 // bondedIDPattern validates bonded IDs (alphanumeric, dash, underscore, dot)
@@ -674,6 +679,12 @@ func cloneSubgraphInto(ctx context.Context, w molWriter, subgraph *TemplateSubgr
 
 	// First pass: build all issues with new IDs
 	for _, oldIssue := range subgraph.Issues {
+		// RootOnly: skip child issues, only create the root. The second pass
+		// below drops edges to anything skipped, because their ends are absent
+		// from position.
+		if opts.RootOnly && oldIssue.ID != subgraph.Root.ID {
+			continue
+		}
 		// Determine assignee: use override for root epic, otherwise keep template's
 		issueAssignee := oldIssue.Assignee
 		if oldIssue.ID == subgraph.Root.ID && opts.Assignee != "" {
