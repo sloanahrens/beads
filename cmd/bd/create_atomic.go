@@ -7,6 +7,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/domain"
+	"github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -29,6 +30,11 @@ func (e createDepEdges) empty() bool {
 // permanently-ready bead behind for orchestrators to dispatch prematurely.
 // Here any edge failure rolls back the create and is returned as a fatal
 // error naming the failing edge.
+//
+// The transaction callback is safe to run again from the top: reset() restores
+// the caller's empty IDs at the start of every attempt, so a replay starts from
+// the request as it was passed in rather than from a rolled-back attempt's
+// minted IDs.
 //
 // With no edges requested it delegates to store.CreateIssue so a bare create
 // keeps its store-specific routing and commit behavior.
@@ -62,7 +68,15 @@ func createIssueWithDeps(ctx context.Context, st storage.DoltStorage, issue *typ
 		commitMsg = "bd: create " + issue.ID
 	}
 
+	// A replay must start from the caller's request, not from the IDs the
+	// rolled-back attempt minted into this struct: those rows do not exist, so a
+	// create that saw them would upsert under a dead ID instead of minting fresh
+	// ones. Snapshot once, before the transaction, then restore at the top of
+	// every attempt (GH#8457).
+	reset := issueops.SnapshotUnsetCreateIDs([]*types.Issue{issue})
+
 	return transactHonoringAutoCommit(ctx, st, commitMsg, func(tx storage.Transaction) error {
+		reset()
 		if err := tx.CreateIssue(ctx, issue, actor); err != nil {
 			return err
 		}

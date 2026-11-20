@@ -14,14 +14,20 @@ import (
 // createAtomicFakeTx records mutations made inside a fake transaction.
 type createAtomicFakeTx struct {
 	storage.Transaction
-	created []*types.Issue
-	deps    []*types.Dependency
-	failDep string // DependsOnID whose AddDependency fails
+	created  []*types.Issue
+	deps     []*types.Dependency
+	entryIDs []string // issue.ID as CreateIssue received it, before minting
+	mint     string   // ID assigned to an issue whose ID is empty; "" means "fake-1"
+	failDep  string   // DependsOnID whose AddDependency fails
 }
 
 func (t *createAtomicFakeTx) CreateIssue(_ context.Context, issue *types.Issue, _ string) error {
+	t.entryIDs = append(t.entryIDs, issue.ID)
 	if issue.ID == "" {
-		issue.ID = "fake-1"
+		issue.ID = t.mint
+		if issue.ID == "" {
+			issue.ID = "fake-1"
+		}
 	}
 	cp := *issue
 	t.created = append(t.created, &cp)
@@ -97,6 +103,31 @@ func (s *createAtomicFakeStore) RunInTransaction(_ context.Context, _ string, fn
 	}
 	s.committedIssues = append(s.committedIssues, tx.created...)
 	s.committedDeps = append(s.committedDeps, tx.deps...)
+	return nil
+}
+
+// createAtomicReplayStore runs the transaction callback again after the first
+// attempt fails, the way storage.RunReplayableTransaction replays a transaction
+// that lost a commit-time write conflict. Each attempt mints a different ID so a
+// test can tell a fresh mint from a kept one.
+type createAtomicReplayStore struct {
+	*createAtomicFakeStore
+	attempts []*createAtomicFakeTx
+}
+
+func (s *createAtomicReplayStore) RunInTransaction(_ context.Context, _ string, fn func(tx storage.Transaction) error) error {
+	first := &createAtomicFakeTx{mint: "fake-attempt-1", failDep: "fake-missing"}
+	s.attempts = append(s.attempts, first)
+	if err := fn(first); err == nil {
+		return errors.New("first attempt unexpectedly succeeded")
+	}
+	second := &createAtomicFakeTx{mint: "fake-attempt-2"}
+	s.attempts = append(s.attempts, second)
+	if err := fn(second); err != nil {
+		return err
+	}
+	s.committedIssues = append(s.committedIssues, second.created...)
+	s.committedDeps = append(s.committedDeps, second.deps...)
 	return nil
 }
 
@@ -183,6 +214,42 @@ func TestCreateIssueWithDepsRollsBackOnDepFailure(t *testing.T) {
 	}
 	if len(st.committedDeps) != 0 {
 		t.Errorf("committed deps = %+v, want none", st.committedDeps)
+	}
+}
+
+// TestCreateIssueWithDepsReplayStartsWithCallerRequest drives a create whose
+// first attempt mints an ID and then rolls back, then is replayed. The replay
+// must start from the caller's request — an empty ID — not from the ID the
+// rolled-back attempt minted into the same struct.
+func TestCreateIssueWithDepsReplayStartsWithCallerRequest(t *testing.T) {
+	saveCreateAtomicGlobals(t)
+	st := &createAtomicReplayStore{createAtomicFakeStore: &createAtomicFakeStore{}}
+	issue := &types.Issue{Title: "replayed create", Status: types.StatusOpen, IssueType: types.TypeTask}
+	edges := createDepEdges{
+		specs: []domain.DependencySpec{{Type: types.DepBlocks, TargetID: "fake-missing"}},
+	}
+
+	if err := createIssueWithDeps(context.Background(), st, issue, "tester", edges); err != nil {
+		t.Fatalf("createIssueWithDeps: %v", err)
+	}
+	if len(st.attempts) != 2 {
+		t.Fatalf("transaction attempts = %d, want 2 (first fails, replay succeeds)", len(st.attempts))
+	}
+	if got := st.attempts[0].entryIDs; len(got) != 1 || got[0] != "" {
+		t.Fatalf("first attempt CreateIssue entry IDs = %q, want one empty ID", got)
+	}
+	if got := st.attempts[1].entryIDs; len(got) != 1 || got[0] != "" {
+		t.Errorf("replayed attempt started with issue ID %q, want empty: the caller supplied none, so the rolled-back ID must not be reused", got)
+	}
+	committedIDs := make([]string, len(st.committedIssues))
+	for i, committed := range st.committedIssues {
+		committedIDs[i] = committed.ID
+	}
+	if len(committedIDs) != 1 || committedIDs[0] != "fake-attempt-2" {
+		t.Errorf("committed issue IDs = %q, want one minted afresh as fake-attempt-2", committedIDs)
+	}
+	if issue.ID != "fake-attempt-2" {
+		t.Errorf("caller issue ID = %q, want the committed fake-attempt-2", issue.ID)
 	}
 }
 
