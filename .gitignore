@@ -33,6 +33,9 @@ pkg/
 .claude/*.log
 .claude/*.lock
 
+# Seat runtime state, never committed
+.claude/commands/
+
 # Codex CLI - local marker
 .codex
 
