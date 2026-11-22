@@ -50,6 +50,82 @@ time, as a cherry-pick of a named fix onto a branch, with a test that shows the
 fix. Upstream main is never merged in. This is the stance as of 2026-11-18, and
 only the operator may change it.
 
+## The schema collision
+
+The file merge is not the only collision. Each side also numbers its database
+migrations, and the number is what a database records: a migration's version is
+parsed from its filename, the runner reads the cursor's `MAX(version)` and
+applies the files numbered above it, and it does not match a pending file by
+name. Two sides that choose the same number for different SQL therefore collide
+at the database, and whichever binary applies its version first decides what
+that number means there.
+
+Each series has its own cursor:
+
+| Series | Cursor table | Migration files |
+|---|---|---|
+| main | `schema_migrations` | `internal/storage/schema/migrations/` |
+| ignored | `ignored_schema_migrations` | `internal/storage/schema/migrations/ignored/` |
+
+The ignored series carries the clone-local schema repairs, and its cursor is
+Dolt-ignored like the work it records.
+
+### The numbers the two sides share
+
+| Number | This fork | Upstream |
+|---|---|---|
+| main 0067 | `0067_create_samples` | `0067_add_versioned_beads_schema` |
+| ignored 0026 | `0026_add_wisp_dependency_target_indexes` | `0026_dep_rekey_dedup_marker` |
+
+Upstream's main series runs to `0074` and its ignored series to `0031`, so these
+are the first numbers where the two sides disagree, not the last.
+
+The fork's main 0067 file is
+`internal/storage/schema/migrations/0067_create_samples.up.sql` in this tree.
+The fork's ignored 0026 is
+`internal/storage/schema/migrations/ignored/0026_add_wisp_dependency_target_indexes.up.sql`
+here and in the pin `b7e5e9ce`; the numbered directory beside it holds the
+fork's `0026_update_blocked_issues_view`, a migration for the other series.
+
+### The live database levels
+
+The overseer's tracker bird read the Dolt server on 2026-11-19 at about 00:30
+UTC, taking `max(version)` from `schema_migrations` and
+`ignored_schema_migrations` on each database. All 12 databases — gt, be, claude,
+hq, devops, beaver, om, mango, fractals, agentlab, hm and toolbox — are at
+main 66 and ignored 26.
+
+That fixes the collision's position: `0067_create_samples` is applied on no live
+database yet, while the fork's ignored 0026 is applied on every one.
+
+### What the collision would do
+
+This is the expected result of the cursor model, not a behaviour observed in a
+migration runner:
+
+- A binary carrying upstream's ignored 0026 meets a live database whose claimed
+  ignored version is already 26. Matching is by number, so it does not see the
+  upstream data fix as pending: it applies the versions above 26 and leaves
+  `0026_dep_rekey_dedup_marker` expected never to run, with no error.
+- In the other direction, once any database has a version 67, a binary from the
+  other side treats its own 0067 as done. A fork binary then never creates the
+  samples table on a database that took upstream's
+  `0067_add_versioned_beads_schema`, and an upstream binary never applies the
+  fork's `0067_create_samples`.
+
+Neither is a malformed migration. Each is a correct migration under a number
+the other side had already used.
+
+### The rule
+
+- A fork binary is never swapped for an upstream build; the town stays on the
+  pinned commit.
+- No upstream migration file is taken under a number the fork already used.
+- A merge that takes upstream migrations renumbers or re-bases the fork's own
+  migrations first — out of the numbers upstream uses — on a restored backup,
+  in the attended window: the gt-v5bo2v rehearsal, run in the gt-jgsmoj window.
+  It never runs against a live database.
+
 ## Reproducing the numbers
 
 The upstream remote is a setting local to your clone, not something this
