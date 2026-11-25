@@ -344,12 +344,13 @@ func TestExportImportRoundTrip(t *testing.T) {
 		"exp-6", "Round Trip", "round trip test", "", "", "", "open", 1, "feature"); err != nil {
 		t.Fatalf("insert issue: %v", err)
 	}
-	if err := s.AddDependency(ctx, &types.Dependency{
-		IssueID:     "exp-6",
-		DependsOnID: "mkt-456",
-		Type:        types.DepRelated,
-	}, "test"); err != nil {
-		t.Fatalf("add cross-prefix dependency: %v", err)
+	// Seed the historical edge the export must carry. The add path refuses a
+	// plain cross-prefix target since be-39t0, so the already-stored shape is
+	// written directly: this test is about export/import of existing data, not
+	// about the add verdict.
+	if _, err := s.DB().ExecContext(ctx, `INSERT INTO dependencies (id, issue_id, depends_on_external, type, created_by) VALUES (UUID(), ?, ?, ?, ?)`,
+		"exp-6", "mkt-456", string(types.DepRelated), "test"); err != nil {
+		t.Fatalf("seed cross-prefix dependency: %v", err)
 	}
 
 	// Export

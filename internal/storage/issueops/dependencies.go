@@ -91,6 +91,28 @@ func IsExternalDepTarget(sourceID, targetID string) bool {
 		types.ExtractPrefix(sourceID) != types.ExtractPrefix(targetID)
 }
 
+// ErrCrossPrefixDependency is returned by AddDependencyInTx for a plain
+// (non-"external:") target that names another project. Such an edge is stored
+// in depends_on_external and counted, but never honored as a blocker, so the
+// add is refused before anything is written; the other project is reached
+// through the external form instead. A same-prefix target, a target with no
+// prefix and an "external:" reference keep their existing handling.
+var ErrCrossPrefixDependency = errors.New("a plain cross-project target is not honored as a blocker; use external:<project>:<capability>")
+
+// isPlainCrossPrefixDependency reports whether the edge names another project
+// as a plain target — the case AddDependencyInTx refuses. It mirrors the
+// command's refusal (cmd/bd/dep.go refuseCrossPrefixDependency): an "external:"
+// reference is the supported way to name another project, and a target with no
+// prefix cannot name one at all, so neither is cross-prefix.
+func isPlainCrossPrefixDependency(sourceID, targetID string) bool {
+	if strings.HasPrefix(targetID, "external:") {
+		return false
+	}
+	sourcePrefix := types.ExtractPrefix(sourceID)
+	targetPrefix := types.ExtractPrefix(targetID)
+	return sourcePrefix != "" && targetPrefix != "" && sourcePrefix != targetPrefix
+}
+
 // ClassifyDepTarget picks the typed target column for an edge. isCrossPrefix is
 // an override for callers that already know the answer from a cached prefix
 // set; leaving it false is safe, because IsExternalDepTarget re-derives the
@@ -183,6 +205,17 @@ func AddDependencyInTx(ctx context.Context, tx *sql.Tx, dep *types.Dependency, a
 func addDependencyInTx(ctx context.Context, tx *sql.Tx, dep *types.Dependency, actor string, opts AddDependencyOpts, recomputeResult *RecomputeIsBlockedResult) (bool, error) {
 	if strings.HasPrefix(dep.DependsOnID, "external:") && dep.Type == types.DepParentChild {
 		return false, fmt.Errorf("external capability dependencies cannot use parent-child edges")
+	}
+
+	// A plain cross-project edge is stored but never honored as a blocker, so
+	// refuse it before any store access — the decision needs only the two IDs.
+	// This is the same refusal the dep add command makes (be-7pgc). The JSONL
+	// import does not pass through here (it inserts its edges in create.go), so
+	// a re-import still preserves a historical bare cross-prefix edge; callers
+	// that rebuild edges through this function (graph apply, migrate-personal)
+	// get the refusal instead of writing a dead edge.
+	if isPlainCrossPrefixDependency(dep.IssueID, dep.DependsOnID) {
+		return false, fmt.Errorf("cannot add dependency on %s: %w", dep.DependsOnID, ErrCrossPrefixDependency)
 	}
 
 	// Auto-detect source routing if not provided.
