@@ -42,6 +42,37 @@ func TestDepAddRefusesCrossPrefix(t *testing.T) {
 	}
 }
 
+// TestDepAddRefusesCrossPrefixBeforeWrite locks the refusal's position: it
+// returns before the command reaches the store. The package-level store is
+// left at its zero value (nil) and is not assigned here. A refusal that moved
+// after a store access reaches the nil store, so the call no longer returns
+// the cross-prefix refusal; a nil dereference along the way is recovered and
+// reported as a failure rather than crashing the test binary.
+func TestDepAddRefusesCrossPrefixBeforeWrite(t *testing.T) {
+	if store != nil {
+		t.Fatalf("package-level store is not nil at test start; this test needs it at its zero value to detect store access")
+	}
+
+	var (
+		runErr   error
+		panicVal any
+	)
+	got := captureStderr(t, func() {
+		defer func() { panicVal = recover() }()
+		runErr = depAddCmd.RunE(depAddCmd, []string{"gt-a", "om-b"})
+	})
+
+	if panicVal != nil {
+		t.Fatalf("dep add gt-a om-b reached the store before refusing: %v", panicVal)
+	}
+	if runErr == nil {
+		t.Fatal("dep add gt-a om-b = nil, want a refusal")
+	}
+	if !strings.Contains(got, "external:<project>:<capability>") {
+		t.Errorf("dep add gt-a om-b stderr = %q, want the supported form", got)
+	}
+}
+
 // TestDepAddCommandRefusesCrossPrefix drives the command's RunE so deleting the
 // refusal call turns this test red: without the call the cross-prefix add goes
 // on to resolve the source against a store.
