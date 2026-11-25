@@ -8,9 +8,15 @@ exec sh -c 'grep -oE "test-[a-z0-9]+" first.txt > first_id.txt'
 
 # Add dependency with nonexistent blocker should fail.
 # The target keeps the fixture's own prefix (test): a plain cross-prefix
-# target is accepted as an external reference, so it would not fail here.
+# target is refused before lookup (see below), so the missing-issue path
+# needs a same-prefix id.
 ! exec sh -c 'bd dep add $(cat first_id.txt) test-nonexistent'
 stderr 'no issue found'
+
+# A target whose prefix differs from the source's is a plain cross-prefix
+# target: it is refused before any lookup, naming the external form.
+! exec sh -c 'bd dep add $(cat first_id.txt) other-nonexistent'
+stderr 'external:<project>:<capability>'
 
 # Add self-dependency should fail
 ! exec sh -c 'bd dep add $(cat first_id.txt) $(cat first_id.txt)'
