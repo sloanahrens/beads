@@ -234,7 +234,7 @@ Examples:
 
 // refuseCrossPrefixDependency refuses a plain (non-external) dependency whose
 // target names a project other than the source's. Such an edge is stored in
-// depends_on_external and counted, but never honoured as a blocker, so the add
+// depends_on_external and counted, but never honored as a blocker, so the add
 // is refused before anything is written; the target project is reached through
 // the external form instead. A target without a prefix, a same-prefix target
 // and an external: reference are all left to their existing handling.
@@ -247,7 +247,7 @@ func refuseCrossPrefixDependency(fromID, dependsOnArg string) error {
 	if srcPrefix == "" || tgtPrefix == "" || srcPrefix == tgtPrefix {
 		return nil
 	}
-	return fmt.Errorf("cannot add dependency on %s: a plain cross-project target is not honoured as a blocker; use external:<project>:<capability> (bd dep add gt-617dce external:om:landing-queue-ready; the target project needs external_projects configured and its issue labelled provides:landing-queue-ready, closed to satisfy it)", dependsOnArg)
+	return fmt.Errorf("cannot add dependency on %s: a plain cross-project target is not honored as a blocker; use external:<project>:<capability> (bd dep add gt-617dce external:om:landing-queue-ready; the target project needs external_projects configured and its issue labelled provides:landing-queue-ready, closed to satisfy it)", dependsOnArg)
 }
 
 var depAddCmd = &cobra.Command{
