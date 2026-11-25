@@ -1,14 +1,18 @@
+//go:build cgo
+
 package issueops
 
 import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/steveyegge/beads/internal/storage/depid"
 	"github.com/steveyegge/beads/internal/types"
@@ -105,5 +109,76 @@ func TestAddDependencyRefusesCrossPrefix(t *testing.T) {
 				t.Fatalf("unmet sqlmock expectations: %v", err)
 			}
 		})
+	}
+}
+
+// TestStoredCrossPrefixEdgeStillReads is the read-side regression for the
+// cross-prefix refusal (be-39t0). A bare cross-prefix edge stored before the
+// refusal — gt-a -> om-b, which ClassifyDepTarget writes to
+// depends_on_external as a plain target — must still come back from the shared
+// dependency read, so the edges already on disk stay listable for the by-hand
+// conversion.
+//
+// The edge is seeded with a raw INSERT because AddDependencyInTx now refuses
+// that shape. The read then runs against a real SQL engine (a sqlite file under
+// t.TempDir(), the same driver the legacy-sqlite tests use), so the returned
+// target is resolved from the stored row by the production projection
+// (DepTargetExpr) instead of being restated by the test.
+func TestStoredCrossPrefixEdgeStillReads(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "deps.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+
+	// Only the columns the read touches. The three typed target columns are
+	// mutually exclusive, as they are in the real schema.
+	for _, stmt := range []string{
+		`CREATE TABLE wisps (id TEXT PRIMARY KEY)`,
+		`CREATE TABLE dependencies (
+			id TEXT PRIMARY KEY,
+			issue_id TEXT NOT NULL,
+			depends_on_issue_id TEXT,
+			depends_on_wisp_id TEXT,
+			depends_on_external TEXT,
+			type TEXT NOT NULL,
+			created_at DATETIME,
+			created_by TEXT NOT NULL,
+			metadata TEXT,
+			thread_id TEXT
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create schema: %v", err)
+		}
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+
+	if _, err := tx.Exec(
+		`INSERT INTO dependencies (id, issue_id, depends_on_external, type, created_by) VALUES (?, ?, ?, ?, ?)`,
+		depid.New("gt-a", "om-b"), "gt-a", "om-b", string(types.DepRelated), "seeder",
+	); err != nil {
+		t.Fatalf("seed stored cross-prefix edge: %v", err)
+	}
+
+	got, err := GetDependencyRecordsForIssuesInTx(context.Background(), tx, []string{"gt-a"})
+	if err != nil {
+		t.Fatalf("GetDependencyRecordsForIssuesInTx: %v", err)
+	}
+	deps := got["gt-a"]
+	if len(deps) != 1 {
+		t.Fatalf("stored cross-prefix edge: got %d records, want 1 (all: %+v)", len(deps), got)
+	}
+	if deps[0].DependsOnID != "om-b" {
+		t.Errorf("DependsOnID = %q, want %q", deps[0].DependsOnID, "om-b")
+	}
+	if deps[0].Type != types.DepRelated {
+		t.Errorf("Type = %q, want %q", deps[0].Type, types.DepRelated)
 	}
 }
