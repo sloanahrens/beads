@@ -232,6 +232,24 @@ Examples:
 	},
 }
 
+// refuseCrossPrefixDependency refuses a plain (non-external) dependency whose
+// target names a project other than the source's. Such an edge is stored in
+// depends_on_external and counted, but never honoured as a blocker, so the add
+// is refused before anything is written; the target project is reached through
+// the external form instead. A target without a prefix, a same-prefix target
+// and an external: reference are all left to their existing handling.
+func refuseCrossPrefixDependency(fromID, dependsOnArg string) error {
+	if strings.HasPrefix(dependsOnArg, "external:") {
+		return nil
+	}
+	srcPrefix := types.ExtractPrefix(fromID)
+	tgtPrefix := types.ExtractPrefix(dependsOnArg)
+	if srcPrefix == "" || tgtPrefix == "" || srcPrefix == tgtPrefix {
+		return nil
+	}
+	return fmt.Errorf("cannot add dependency on %s: a plain cross-project target is not honoured as a blocker; use external:<project>:<capability> (bd dep add gt-617dce external:om:landing-queue-ready; the target project needs external_projects configured and its issue labelled provides:landing-queue-ready, closed to satisfy it)", dependsOnArg)
+}
+
 var depAddCmd = &cobra.Command{
 	Use:   "add [issue-id] [depends-on-id]",
 	Short: "Add a dependency",
@@ -304,17 +322,8 @@ Examples:
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		CheckReadonly("dep add")
-
 		depType, _ := cmd.Flags().GetString("type")
 		file, _ := cmd.Flags().GetString("file")
-
-		if file != "" {
-			if err := addBulkDependencies(cmd, file, depType); err != nil {
-				return HandleErrorRespectJSON("%v", err)
-			}
-			return nil
-		}
 
 		blockedBy, _ := cmd.Flags().GetString("blocked-by")
 		dependsOn, _ := cmd.Flags().GetString("depends-on")
@@ -324,8 +333,26 @@ Examples:
 			dependsOnArg = blockedBy
 		} else if dependsOn != "" {
 			dependsOnArg = dependsOn
-		} else {
+		} else if file == "" {
 			dependsOnArg = args[1]
+		}
+
+		// The cross-prefix refusal precedes the readonly check and any store
+		// access: the decision needs only the two IDs, and an edge that cannot
+		// order must never be written.
+		if file == "" {
+			if err := refuseCrossPrefixDependency(args[0], dependsOnArg); err != nil {
+				return HandleErrorRespectJSON("%v", err)
+			}
+		}
+
+		CheckReadonly("dep add")
+
+		if file != "" {
+			if err := addBulkDependencies(cmd, file, depType); err != nil {
+				return HandleErrorRespectJSON("%v", err)
+			}
+			return nil
 		}
 
 		ctx := rootCtx
