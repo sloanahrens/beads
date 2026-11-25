@@ -6,8 +6,10 @@ bd create 'First issue'
 cp stdout first.txt
 exec sh -c 'grep -oE "test-[a-z0-9]+" first.txt > first_id.txt'
 
-# Add dependency with nonexistent blocker should fail
-! exec sh -c 'bd dep add $(cat first_id.txt) nonexistent-id'
+# Add dependency with nonexistent blocker should fail.
+# The target keeps the fixture's own prefix (test): a plain cross-prefix
+# target is accepted as an external reference, so it would not fail here.
+! exec sh -c 'bd dep add $(cat first_id.txt) test-nonexistent'
 stderr 'no issue found'
 
 # Add self-dependency should fail
