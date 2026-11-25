@@ -1743,6 +1743,20 @@ var ensureRunningDetailed = doltserver.EnsureRunningDetailed
 // dolt sql-server process.
 var stopRejectedAutoStartedServer = doltserver.Stop
 
+// serverFirstDialTimeout bounds newServerMode's fail-fast dial to the Dolt
+// server, which runs before the MySQL handshake. It is longer than one SYN
+// retransmit (1s on Linux) because a guest that loses its first SYN can only
+// recover on the retransmit: the VM-to-host forwarder drops SYNs beyond
+// roughly 12 simultaneous handshakes, so a dial that gives up after 500ms can
+// never observe the connection succeed. A refused connection still fails at
+// once whatever this timeout is.
+const serverFirstDialTimeout = 2 * time.Second
+
+// serverDial is the dialer for newServerMode's first connectivity check.
+// Declared as a var (not a plain call) so unit tests can stub the dial
+// instead of touching the network, matching dialProbe below.
+var serverDial = net.DialTimeout
+
 // newServerMode creates a DoltStore connected to a running dolt sql-server.
 // This path is pure Go and does not require CGO.
 func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
@@ -1777,10 +1791,10 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	var dialErr error
 	if cfg.ServerSocket != "" {
 		addr = cfg.ServerSocket
-		conn, dialErr = net.DialTimeout("unix", cfg.ServerSocket, 500*time.Millisecond)
+		conn, dialErr = serverDial("unix", cfg.ServerSocket, serverFirstDialTimeout)
 	} else {
 		addr = net.JoinHostPort(cfg.ServerHost, fmt.Sprintf("%d", cfg.ServerPort))
-		conn, dialErr = net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		conn, dialErr = serverDial("tcp", addr, serverFirstDialTimeout)
 	}
 	if dialErr != nil {
 		// Auto-start: if enabled and connecting locally via TCP, start a server.
