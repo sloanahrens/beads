@@ -247,7 +247,7 @@ func refuseCrossPrefixDependency(fromID, dependsOnArg string) error {
 	if srcPrefix == "" || tgtPrefix == "" || srcPrefix == tgtPrefix {
 		return nil
 	}
-	return fmt.Errorf("cannot add dependency on %s: a plain cross-project target is not honored as a blocker; use external:<project>:<capability> (bd dep add gt-617dce external:om:landing-queue-ready; the target project needs external_projects configured and its issue labelled provides:landing-queue-ready, closed to satisfy it)", dependsOnArg)
+	return fmt.Errorf("cannot add dependency on %s: a plain cross-project target is not honored as a blocker; use external:<project>:<capability> (bd dep add gt-617dce external:om:landing-queue-ready; the target project needs external_projects configured and its issue labeled provides:landing-queue-ready, closed to satisfy it)", dependsOnArg)
 }
 
 var depAddCmd = &cobra.Command{
