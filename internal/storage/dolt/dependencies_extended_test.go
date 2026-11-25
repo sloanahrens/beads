@@ -1,11 +1,13 @@
 package dolt
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -861,7 +863,13 @@ func TestIsCrossPrefixDep(t *testing.T) {
 	}
 }
 
-func TestAddDependency_CrossPrefix_SkipsTargetExistence(t *testing.T) {
+// TestAddDependency_CrossPrefix_Refused pins the storage-side refusal of a
+// plain cross-prefix edge (be-39t0): it would be stored in depends_on_external
+// and counted, but never honored as a blocker, so AddDependency refuses it
+// before writing anything and points at the external form instead. The
+// external: reference keeps the old "skip target existence" behavior —
+// TestAddDependency_ExternalReference covers it.
+func TestAddDependency_CrossPrefix_Refused(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
 
@@ -880,32 +888,22 @@ func TestAddDependency_CrossPrefix_SkipsTargetExistence(t *testing.T) {
 		t.Fatalf("failed to create source issue: %v", err)
 	}
 
-	// Add a cross-prefix dependency — target "other-xyz" doesn't exist in this DB,
-	// but should succeed because cross-prefix deps skip target existence check.
 	dep := &types.Dependency{
 		IssueID:     "test-source",
 		DependsOnID: "other-xyz",
 		Type:        types.DepBlocks,
 	}
 	err := store.AddDependency(ctx, dep, "tester")
-	if err != nil {
-		t.Fatalf("AddDependency should succeed for cross-prefix dep, got: %v", err)
+	if !errors.Is(err, issueops.ErrCrossPrefixDependency) {
+		t.Fatalf("AddDependency(cross-prefix) = %v, want ErrCrossPrefixDependency", err)
 	}
 
-	// Verify the dependency was stored
 	records, err := store.GetDependencyRecords(ctx, "test-source")
 	if err != nil {
 		t.Fatalf("GetDependencyRecords failed: %v", err)
 	}
-	found := false
-	for _, r := range records {
-		if r.DependsOnID == "other-xyz" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("cross-prefix dependency was not stored")
+	if len(records) != 0 {
+		t.Fatalf("dependencies after refused add = %#v, want none", records)
 	}
 }
 
