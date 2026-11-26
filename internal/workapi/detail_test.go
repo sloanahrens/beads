@@ -3,6 +3,7 @@ package workapi
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -770,6 +771,90 @@ func TestBuildIssueDetailsRejectsNilIssue(t *testing.T) {
 	store, _ := fixtureSources(fx)
 	if _, err := BuildIssueDetails(context.Background(), store, nil, false, DetailOptions{}); err == nil {
 		t.Fatal("expected an error for a nil issue")
+	}
+}
+
+// depReadSource answers the two dependency reads with canned results and reads
+// every other seam from the wrapped source, so a test can make either read fail
+// or answer with a count its list does not match.
+type depReadSource struct {
+	DetailSource
+	deps     []*types.IssueWithDependencyMetadata
+	depsErr  error
+	count    int64
+	countErr error
+}
+
+func (s depReadSource) Dependencies(context.Context, string, bool) ([]*types.IssueWithDependencyMetadata, error) {
+	return s.deps, s.depsErr
+}
+
+func (s depReadSource) CountDependencies(context.Context, string, bool) (int64, error) {
+	return s.count, s.countErr
+}
+
+// TestBuildIssueDetailsDependenciesUnread: a failed dependency read must say so.
+// The view still ships, but an empty list and a 0 count are also what an issue
+// with no dependencies looks like, so without the flag a caller reads a failed
+// read as "no dependencies" (gt-rxlpuq). A not-found and a dependency whose
+// target has no row are quiet omissions and leave the flag absent.
+func TestBuildIssueDetailsDependenciesUnread(t *testing.T) {
+	ctx := context.Background()
+	fx := newDetailFixture()
+	boom := errors.New("dependency query exploded")
+	notFoundErr := fmt.Errorf("%w: dependency target", storage.ErrNotFound)
+	bd1 := fx.issues["bd-1"]
+	healthyDeps := fx.deps["bd-1"]
+	healthyCount := int64(len(healthyDeps))
+
+	for _, tc := range []struct {
+		name string
+		src  depReadSource
+		want bool // dependencies_unread expected on the wire
+	}{
+		{"dependency list read fails", depReadSource{depsErr: boom, count: healthyCount}, true},
+		{"dependency count read fails", depReadSource{deps: healthyDeps, countErr: boom}, true},
+		{"both dependency reads fail", depReadSource{depsErr: boom, countErr: boom}, true},
+		{"list read reports not-found", depReadSource{depsErr: notFoundErr, count: healthyCount}, false},
+		{"count read reports not-found", depReadSource{deps: healthyDeps, countErr: notFoundErr}, false},
+		// The store skips a dependency whose target has no row: the list comes
+		// back short while the count still includes the edge, and neither read
+		// errors (be-bbe2). That is a quiet omission, not an unread.
+		{"target has no row is a quiet omission", depReadSource{count: 1}, false},
+		{"both dependency reads answer", depReadSource{deps: healthyDeps, count: healthyCount}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := tc.src
+			src.DetailSource = NewStoreDetailSource(fakeStoreReader{fx: fx})
+
+			details, err := BuildIssueDetails(ctx, src, bd1, false, DetailOptions{})
+			if err != nil {
+				t.Fatalf("BuildIssueDetails: %v", err)
+			}
+			if details.Title != bd1.Title {
+				t.Errorf("title = %q, want %q: the view must still ship", details.Title, bd1.Title)
+			}
+
+			raw, err := json.Marshal(details)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			if tc.want {
+				if details.DependenciesUnread == nil || !*details.DependenciesUnread {
+					t.Fatalf("dependencies_unread = %v, want true", details.DependenciesUnread)
+				}
+				if !strings.Contains(string(raw), `"dependencies_unread":true`) {
+					t.Errorf("wire form lacks dependencies_unread:true: %s", raw)
+				}
+				return
+			}
+			if details.DependenciesUnread != nil {
+				t.Errorf("dependencies_unread = %v, want absent", *details.DependenciesUnread)
+			}
+			if strings.Contains(string(raw), "dependencies_unread") {
+				t.Errorf("wire form carries dependencies_unread for a clean read: %s", raw)
+			}
+		})
 	}
 }
 
