@@ -1166,6 +1166,13 @@ type IssueDetails struct {
 	// Comments slice or a zero count: a true empty stays plain omission.
 	CommentsOmitted *bool `json:"comments_omitted,omitempty"`
 
+	// DependenciesUnread is set true only when the dependency list or its
+	// count could not be read (an error other than not-found). The failed
+	// one is then empty or 0 because the read failed, not because the issue
+	// has no dependencies; without this flag the two look the same. Left nil
+	// when both reads answered, so a healthy view is unchanged.
+	DependenciesUnread *bool `json:"dependencies_unread,omitempty"`
+
 	// Epic progress fields (populated only for issue_type=epic with children)
 	EpicTotalChildren  *int  `json:"epic_total_children,omitempty"`
 	EpicClosedChildren *int  `json:"epic_closed_children,omitempty"`

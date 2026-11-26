@@ -108,9 +108,10 @@ func GetIssueOrWisp(ctx context.Context, src DetailSource, id string) (*types.Is
 //
 // Labels, dependencies, and counts are best effort, matching what both CLI
 // paths have always shipped: a detail view missing an edge list still beats
-// refusing to show the issue. The opt-in row streams are not best effort,
-// because a caller that asked for the rows gets a truthful answer or an
-// error rather than a silently short list.
+// refusing to show the issue. A failed dependency read is not silent, though:
+// it sets DependenciesUnread, so an empty list is not read as "none" (gt-rxlpuq).
+// The opt-in row streams are not best effort, because a caller that asked for
+// the rows gets a truthful answer or an error rather than a silently short list.
 func BuildIssueDetails(ctx context.Context, src DetailSource, issue *types.Issue, isWisp bool, opts DetailOptions) (*types.IssueDetails, error) {
 	if issue == nil {
 		return nil, errors.New("build issue details: issue must not be nil")
@@ -119,11 +120,14 @@ func BuildIssueDetails(ctx context.Context, src DetailSource, issue *types.Issue
 	var rows detailRows
 
 	rows.labels, _ = src.Labels(ctx, id, isWisp)
-	rows.dependencies, _ = src.Dependencies(ctx, id, isWisp)
+	var depsErr error
+	rows.dependencies, depsErr = src.Dependencies(ctx, id, isWisp)
 
 	// Aggregate counts - O(1) queries, no row materialization.
 	rows.dependentCount, _ = src.CountDependents(ctx, id, isWisp)
-	rows.dependencyCount, _ = src.CountDependencies(ctx, id, isWisp)
+	var countErr error
+	rows.dependencyCount, countErr = src.CountDependencies(ctx, id, isWisp)
+	rows.dependenciesUnread = unreadDependencies(depsErr) || unreadDependencies(countErr)
 	rows.commentCount, _ = src.CountComments(ctx, id, isWisp)
 
 	if opts.IncludeDependents {
@@ -163,6 +167,17 @@ type detailRows struct {
 	commentCount    int64
 	dependents      []*types.IssueWithDependencyMetadata // already shallow
 	comments        []*types.Comment
+
+	// dependenciesUnread is set when the dependency read or its count failed.
+	// Only BuildIssueDetails can know this; the batch path has no error to report.
+	dependenciesUnread bool
+}
+
+// unreadDependencies reports whether a dependency read failed without giving an
+// answer. Not-found is an answer - the seams use it for "no such row" - so it is
+// not an unread.
+func unreadDependencies(err error) bool {
+	return err != nil && !isNotFound(err)
 }
 
 // assembleIssueDetails shapes rows into the detail view. It performs no reads:
@@ -176,6 +191,11 @@ func assembleIssueDetails(issue *types.Issue, rows detailRows, opts DetailOption
 	details.DependentCount = &rows.dependentCount
 	details.DependencyCount = &rows.dependencyCount
 	details.CommentCount = &rows.commentCount
+
+	if rows.dependenciesUnread {
+		unread := true
+		details.DependenciesUnread = &unread
+	}
 
 	if opts.IncludeDependents {
 		details.Dependents = rows.dependents
