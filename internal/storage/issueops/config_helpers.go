@@ -59,7 +59,7 @@ func ResolveCustomConfigInTx(ctx context.Context, tx DBTX) (statuses []types.Cus
 		return statuses, customTypes, nil
 	}
 
-	cfg, err := getConfigKeysInTx(ctx, tx, "status.custom", "types.custom")
+	cfg, err := GetConfigKeysInTx(ctx, tx, "status.custom", "types.custom")
 	if err != nil {
 		if !statusesFromTable {
 			if yamlStatuses := config.GetCustomStatusesFromYAML(); len(yamlStatuses) > 0 {
@@ -136,7 +136,9 @@ func resolveCustomTypesFromTableInTx(ctx context.Context, tx DBTX) ([]string, bo
 	return result, len(result) > 0, nil
 }
 
-func getConfigKeysInTx(ctx context.Context, tx DBTX, keys ...string) (map[string]string, error) {
+// GetConfigKeysInTx retrieves the values of the named config keys in one query;
+// a key with no row is absent, and no keys returns an empty map without querying.
+func GetConfigKeysInTx(ctx context.Context, tx DBTX, keys ...string) (map[string]string, error) {
 	if len(keys) == 0 {
 		return map[string]string{}, nil
 	}
