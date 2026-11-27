@@ -74,30 +74,68 @@ func (e *Evaluator) Evaluate(node Node) (*QueryResult, error) {
 // - Simple comparisons
 // - AND chains of simple comparisons
 // - NOT with certain fields
+// - One OR group of status equality comparisons (answered by filter.Statuses)
+// - An OR group of label equality comparisons (answered by filter.LabelsAny)
+//
+// Two status OR groups joined by AND would union, not intersect, if both were
+// appended to filter.Statuses, so that shape keeps predicate mode.
 func (e *Evaluator) canUseFilterOnly(node Node) bool {
+	statusOrGroups := 0
+	return e.filterOnlyShape(node, &statusOrGroups) && statusOrGroups <= 1
+}
+
+// filterOnlyShape reports whether node is filter-compatible, counting the
+// status OR groups it contains.
+func (e *Evaluator) filterOnlyShape(node Node, statusOrGroups *int) bool {
 	switch n := node.(type) {
 	case *ComparisonNode:
 		return true
 	case *AndNode:
-		return e.canUseFilterOnly(n.Left) && e.canUseFilterOnly(n.Right)
+		return e.filterOnlyShape(n.Left, statusOrGroups) && e.filterOnlyShape(n.Right, statusOrGroups)
 	case *NotNode:
 		// NOT is only filter-compatible for certain fields
 		if comp, ok := n.Operand.(*ComparisonNode); ok {
 			switch comp.Field {
-			case "status":
+			case "status", "type":
 				return comp.Op == OpEquals
-			case "type":
-				return comp.Op == OpEquals
-			default:
-				return false
 			}
 		}
 		return false
 	case *OrNode:
-		// OR can be filter-compatible for labels
+		// OR can be filter-compatible for a status list or for labels
+		if e.collectOrStatuses(n) != nil {
+			*statusOrGroups++
+			return true
+		}
 		return e.canUseLabelsAnyOptimization(n)
 	default:
 		return false
+	}
+}
+
+// collectOrStatuses returns the status values of an OR chain whose leaves are
+// all status=<valid status> equality comparisons, and nil for any other OR, so
+// that OR keeps predicate mode.
+func (e *Evaluator) collectOrStatuses(node Node) []types.Status {
+	switch n := node.(type) {
+	case *ComparisonNode:
+		if n.Field != "status" || n.Op != OpEquals {
+			return nil
+		}
+		status := types.Status(strings.ToLower(n.Value))
+		if !status.IsValid() {
+			return nil
+		}
+		return []types.Status{status}
+	case *OrNode:
+		left := e.collectOrStatuses(n.Left)
+		right := e.collectOrStatuses(n.Right)
+		if left == nil || right == nil {
+			return nil
+		}
+		return append(left, right...)
+	default:
+		return nil
 	}
 }
 
@@ -141,6 +179,11 @@ func (e *Evaluator) buildFilter(node Node, filter *types.IssueFilter) error {
 	case *NotNode:
 		return e.applyNot(n, filter)
 	case *OrNode:
+		// Status list: answered by filter.Statuses (SQL status IN (...)).
+		if statuses := e.collectOrStatuses(n); statuses != nil {
+			filter.Statuses = append(filter.Statuses, statuses...)
+			return nil
+		}
 		// Only reached for LabelsAny optimization
 		labels := e.collectOrLabels(n)
 		if labels != nil {

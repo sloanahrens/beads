@@ -27,7 +27,7 @@ func TestBuildQueryPlanLeavesAPredicateQueryUNBOUNDED(t *testing.T) {
 	for _, expression := range []string{
 		"type=bug OR type=feature",
 		"NOT priority>2",
-		"(status=open OR status=blocked) AND priority<2",
+		"(status=open OR status=blocked) AND (priority<2 OR type=bug)",
 		"type=bug OR (label=urgent AND assignee=none)",
 	} {
 		t.Run(expression, func(t *testing.T) {
