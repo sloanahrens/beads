@@ -1,6 +1,7 @@
 package query
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -484,8 +485,11 @@ func TestEvaluatorComplexQueries(t *testing.T) {
 			requiresPredicate: true,
 		},
 		{
-			name:              "nested OR requires predicate",
-			query:             "(status=open OR status=blocked) AND priority<2",
+			// A single status OR group under AND is answered by
+			// filter.Statuses (see TestEvaluatorStatusOr); the second OR here
+			// mixes fields, so the whole query still needs a predicate.
+			name:              "nested OR with a mixed branch requires predicate",
+			query:             "(status=open OR status=blocked) AND (priority<2 OR type=bug)",
 			requiresPredicate: true,
 		},
 		{
@@ -920,5 +924,42 @@ func TestMetadataPredicateEvaluation(t *testing.T) {
 	}
 	if !result.Predicate(issueClosed) {
 		t.Error("predicate should match closed issue via OR")
+	}
+}
+
+func TestEvaluatorStatusOr(t *testing.T) {
+	now := time.Date(2025, 2, 4, 12, 0, 0, 0, time.UTC)
+	open, hooked, inProgress := types.StatusOpen, types.StatusHooked, types.StatusInProgress
+	falseVal, assignee := false, "x"
+
+	tests := []struct {
+		name              string
+		query             string
+		requiresPredicate bool
+		want              types.IssueFilter
+	}{
+		{name: "status OR group under an AND", query: "ephemeral=false AND (status=open OR status=hooked OR status=in_progress)", want: types.IssueFilter{Statuses: []types.Status{open, hooked, inProgress}, Ephemeral: &falseVal}},
+		{name: "assignee with status OR group", query: "assignee=x AND (status=open OR status=hooked)", want: types.IssueFilter{Statuses: []types.Status{open, hooked}, Assignee: &assignee}},
+		{name: "status term plus OR group keeps both", query: "status=open AND (status=hooked OR status=in_progress)", want: types.IssueFilter{Status: &open, Statuses: []types.Status{hooked, inProgress}}},
+		{name: "two status OR groups joined by AND", query: "(status=open OR status=hooked) AND (status=blocked OR status=deferred)", requiresPredicate: true},
+		{name: "status OR priority", query: "status=open OR priority>1", requiresPredicate: true},
+		{name: "status != in OR", query: "status!=closed OR status=open", requiresPredicate: true},
+		{name: "invalid status in OR", query: "status=not_a_status OR status=open", requiresPredicate: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := EvaluateAt(tt.query, now)
+			if err != nil {
+				t.Fatalf("EvaluateAt(%q) error = %v", tt.query, err)
+			}
+			if result.RequiresPredicate != tt.requiresPredicate || (result.Predicate != nil) != tt.requiresPredicate {
+				t.Errorf("RequiresPredicate = %v, predicate set = %v, want %v",
+					result.RequiresPredicate, result.Predicate != nil, tt.requiresPredicate)
+			}
+			if !reflect.DeepEqual(result.Filter, tt.want) {
+				t.Errorf("Filter = %+v, want %+v", result.Filter, tt.want)
+			}
+		})
 	}
 }
