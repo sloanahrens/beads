@@ -846,6 +846,22 @@ func printDepListEdges(anchors []issueops.AnchorEdges) error {
 	return nil
 }
 
+// droppedDepEdges returns the edges whose target ID is not in shown, in their
+// stored order — for the Relations role, the "down" edges it left out.
+func droppedDepEdges(edges []*types.Dependency, shown []string) []*types.Dependency {
+	known := make(map[string]struct{}, len(shown))
+	for _, id := range shown {
+		known[id] = struct{}{}
+	}
+	var dropped []*types.Dependency
+	for _, dep := range edges {
+		if _, ok := known[dep.DependsOnID]; !ok {
+			dropped = append(dropped, dep)
+		}
+	}
+	return dropped
+}
+
 // warnDroppedDepEdges prints a stderr-only notice for every stored "down"
 // dependency edge of anchorID that shown (the Relations role's answer) left
 // out because its target has no row in this database — i.e. a cross-repo or
@@ -867,16 +883,11 @@ func warnDroppedDepEdges(ctx context.Context, reader issueops.EdgeReader, anchor
 	if err != nil || len(result.Anchors) != 1 {
 		return
 	}
-	known := make(map[string]struct{}, len(shown))
+	shownIDs := make([]string, 0, len(shown))
 	for _, iss := range shown {
-		known[iss.ID] = struct{}{}
+		shownIDs = append(shownIDs, iss.ID)
 	}
-	var dropped []*types.Dependency
-	for _, dep := range result.Anchors[0].Edges {
-		if _, ok := known[dep.DependsOnID]; !ok {
-			dropped = append(dropped, dep)
-		}
-	}
+	dropped := droppedDepEdges(result.Anchors[0].Edges, shownIDs)
 	if len(dropped) == 0 {
 		return
 	}
