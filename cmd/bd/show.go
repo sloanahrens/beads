@@ -200,7 +200,7 @@ var showCmd = &cobra.Command{
 			relatedSeen := make(map[string]*types.IssueWithDependencyMetadata)
 
 			// Show dependencies - grouped by dependency type for clarity
-			depsWithMeta, _ := issueStore.GetDependenciesWithMetadata(ctx, issue.ID) // Best effort: show issue even if deps unavailable
+			depsWithMeta, depsErr := issueStore.GetDependenciesWithMetadata(ctx, issue.ID) // Best effort: show issue even if deps unavailable
 			for _, sec := range groupDepSections(depsWithMeta, true, relatedSeen) {
 				printDepSection(sec)
 			}
@@ -215,6 +215,14 @@ var showCmd = &cobra.Command{
 			}
 
 			printRelatedSection(relatedSeen)
+
+			// Edges whose target has no row here (external or cross-repo) are
+			// not neighbors, so Relations left them out above. Only render them
+			// when the dependency read succeeded: a failed read gives an empty
+			// list, which would make every edge look dropped.
+			if depsErr == nil {
+				fmt.Print(showExternalDependenciesSection(ctx, issueStore, issue.ID, depsWithMeta))
+			}
 
 			// Show comments
 			comments, _ := issueStore.GetIssueComments(ctx, issue.ID) // Best effort: show issue even if comments unavailable
