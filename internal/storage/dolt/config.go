@@ -76,6 +76,17 @@ func (s *DoltStore) GetAllConfig(ctx context.Context) (map[string]string, error)
 	return result, err
 }
 
+// GetConfigs retrieves the values of the named keys in one read.
+func (s *DoltStore) GetConfigs(ctx context.Context, keys ...string) (map[string]string, error) {
+	var result map[string]string
+	err := s.withReadTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetConfigKeysInTx(ctx, tx, keys...)
+		return err
+	})
+	return result, err
+}
+
 // DeleteConfig removes a configuration value
 func (s *DoltStore) DeleteConfig(ctx context.Context, key string) error {
 	return s.withRetryTx(ctx, func(tx *sql.Tx) error {

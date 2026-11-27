@@ -512,6 +512,9 @@ type Storage interface {
 	SetConfig(ctx context.Context, key, value string) error
 	GetConfig(ctx context.Context, key string) (string, error)
 	GetAllConfig(ctx context.Context) (map[string]string, error)
+	// GetConfigs returns the values of the named keys in one read. A key with
+	// no stored row is absent; no keys returns an empty map without querying.
+	GetConfigs(ctx context.Context, keys ...string) (map[string]string, error)
 
 	// Local metadata operations (dolt-ignored, clone-local state).
 	// Used for tip timestamps, version stamps, tracker sync cursors, etc.

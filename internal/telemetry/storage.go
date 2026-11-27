@@ -558,6 +558,13 @@ func (s *InstrumentedStorage) GetAllConfig(ctx context.Context) (map[string]stri
 	return v, err
 }
 
+func (s *InstrumentedStorage) GetConfigs(ctx context.Context, keys ...string) (map[string]string, error) {
+	ctx, span, t := s.op(ctx, "GetConfigs")
+	v, err := s.inner.GetConfigs(ctx, keys...)
+	s.done(ctx, span, t, err)
+	return v, err
+}
+
 func (s *InstrumentedStorage) SetLocalMetadata(ctx context.Context, key, value string) error {
 	attrs := []attribute.KeyValue{attribute.String("bd.local_metadata.key", key)}
 	ctx, span, t := s.op(ctx, "SetLocalMetadata", attrs...)
