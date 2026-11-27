@@ -51,16 +51,11 @@ func getRoutingConfigValue(ctx context.Context, store storage.DoltStorage, key s
 func determineAutoRoutedRepoPath(ctx context.Context, store storage.DoltStorage) (string, routing.RoutingRule) {
 	var dbValues map[string]string
 	if store != nil {
-		all, allErr := store.GetAllConfig(ctx)
-		if allErr != nil {
-			debug.Logf("DEBUG: failed to read config from store: %v\n", allErr)
+		values, valuesErr := store.GetConfigs(ctx, routingConfigKeys...)
+		if valuesErr != nil {
+			debug.Logf("DEBUG: failed to read config from store: %v\n", valuesErr)
 		} else {
-			dbValues = make(map[string]string, len(routingConfigKeys))
-			for _, key := range routingConfigKeys {
-				if v, ok := all[key]; ok {
-					dbValues[key] = v
-				}
-			}
+			dbValues = values
 		}
 	}
 
