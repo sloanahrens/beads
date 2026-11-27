@@ -122,7 +122,7 @@ func displayShowIssueReturn(ctx context.Context, issueID string) *types.Issue {
 
 	// Dependencies (what this issue depends on)
 	relatedSeen := make(map[string]*types.IssueWithDependencyMetadata)
-	depsWithMeta, _ := issueStore.GetDependenciesWithMetadata(ctx, issue.ID)
+	depsWithMeta, depsErr := issueStore.GetDependenciesWithMetadata(ctx, issue.ID)
 	for _, sec := range groupDepSections(depsWithMeta, true, relatedSeen) {
 		printDepSection(sec)
 	}
@@ -135,6 +135,14 @@ func displayShowIssueReturn(ctx context.Context, issueID string) *types.Issue {
 
 	// Related (bidirectional, deduplicated)
 	printRelatedSection(relatedSeen)
+
+	// Edges whose target has no row here (external or cross-repo) are not
+	// neighbors, so Relations left them out above. Only render them when the
+	// dependency read succeeded: a failed read gives an empty list, which
+	// would make every edge look dropped.
+	if depsErr == nil {
+		fmt.Print(showExternalDependenciesSection(ctx, issueStore, issue.ID, depsWithMeta))
+	}
 
 	// Comments
 	comments, _ := issueStore.GetIssueComments(ctx, issue.ID)
