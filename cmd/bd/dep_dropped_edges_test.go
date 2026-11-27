@@ -11,7 +11,9 @@ import (
 // edges whose target ID was not shown, in their stored order.
 func TestDroppedDepEdges(t *testing.T) {
 	t.Parallel()
-	dep := func(target string) *types.Dependency { return &types.Dependency{IssueID: "anchor", DependsOnID: target} }
+	dep := func(target string) *types.Dependency {
+		return &types.Dependency{IssueID: "anchor", DependsOnID: target}
+	}
 	tests := []struct {
 		name  string
 		edges []*types.Dependency
