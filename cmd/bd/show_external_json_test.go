@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -152,4 +153,55 @@ func TestShowExternalJSONApply(t *testing.T) {
 			t.Errorf("%s has dependencies_unread, want it untouched", id)
 		}
 	}
+}
+
+// TestShowExternalJSONGroups pins fillShowExternalDeps across a batch: a failed
+// group does not stop the later ones, and each failure is warned about once, on
+// one line, naming only the views the group could not answer.
+func TestShowExternalJSONGroups(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failed group does not stop later ones", func(t *testing.T) {
+		t.Parallel()
+		details := map[string]*issueops.IssueDetails{"bd-1": {Issue: types.Issue{ID: "bd-1"}}, "bd-3": {Issue: types.Issue{ID: "bd-3"}}}
+		groups := []showBatchGroup{
+			{store: &edgeReaderStore{reader: &fakeEdgeReader{err: errors.New("edge read failed")}}, ids: []string{"bd-1"}},
+			{store: &edgeReaderStore{reader: &fakeEdgeReader{edges: map[string][]*types.Dependency{
+				"bd-3": {{IssueID: "bd-3", DependsOnID: "ext-9", Type: types.DepRelated}},
+			}}}, ids: []string{"bd-3"}},
+		}
+		var warnings []string
+		fillShowExternalDeps(context.Background(), groups, details, func(format string, args ...interface{}) {
+			warnings = append(warnings, fmt.Sprintf(format, args...))
+		})
+
+		if got := details["bd-1"].ExternalDependenciesUnread; got == nil || !*got {
+			t.Errorf("failed group's view is not marked external_dependencies_unread")
+		}
+		later := details["bd-3"]
+		if len(later.ExternalDependencies) != 1 || later.ExternalDependencies[0].ID != "ext-9" {
+			t.Errorf("later group's external_dependencies = %+v, want the ext-9 edge", later.ExternalDependencies)
+		}
+		if later.ExternalDependenciesUnread != nil {
+			t.Errorf("later group's view is marked unread, want it untouched")
+		}
+		if len(warnings) != 1 {
+			t.Fatalf("warnings = %q, want one for the failed group only", warnings)
+		}
+	})
+
+	t.Run("warning counts views and folds a two-line error", func(t *testing.T) {
+		t.Parallel()
+		details := map[string]*issueops.IssueDetails{"bd-1": {Issue: types.Issue{ID: "bd-1"}}}
+		group := showBatchGroup{store: &edgeReaderStore{reader: &fakeEdgeReader{err: errors.New("edge read failed\nand more")}}, ids: []string{"bd-1", "bd-2"}}
+		var warnings []string
+		fillShowExternalDeps(context.Background(), []showBatchGroup{group}, details, func(format string, args ...interface{}) {
+			warnings = append(warnings, fmt.Sprintf(format, args...))
+		})
+
+		want := "external dependencies unread for 1 issue(s): edge read failed and more"
+		if len(warnings) != 1 || warnings[0] != want {
+			t.Fatalf("warnings = %q, want %q", warnings, want)
+		}
+	})
 }
