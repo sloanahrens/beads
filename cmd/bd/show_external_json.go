@@ -42,3 +42,31 @@ func readExternalDeps(ctx context.Context, group showBatchGroup, detailsByID map
 	}
 	return external, nil
 }
+
+// fillExternalDeps applies readExternalDeps' answer to one store group's
+// detail views. A failed read marks every view of this group
+// ExternalDependenciesUnread and returns the error, so a failure never
+// marshals as "no external edges"; DependenciesUnread answers another read.
+func fillExternalDeps(ctx context.Context, group showBatchGroup, detailsByID map[string]*issueops.IssueDetails) error {
+	external, err := readExternalDeps(ctx, group, detailsByID)
+	if err != nil {
+		unread := true
+		for _, id := range group.ids {
+			if details, ok := detailsByID[id]; ok {
+				details.ExternalDependenciesUnread = &unread
+			}
+		}
+		return err
+	}
+	for id, deps := range external {
+		details, ok := detailsByID[id]
+		if !ok {
+			continue
+		}
+		for _, dep := range deps {
+			details.ExternalDependencies = append(details.ExternalDependencies,
+				types.ExternalDependency{ID: dep.DependsOnID, Type: dep.Type})
+		}
+	}
+	return nil
+}
