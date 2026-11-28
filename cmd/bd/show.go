@@ -518,6 +518,11 @@ func showIssuesJSON(ctx context.Context, args []string, includeDependents, inclu
 		}
 	}
 
+	// Fill each store group's dependency edges whose target has no row. A
+	// failed edge read marks that group's views unread and warns once on
+	// stderr, so the answer still marshals as JSON.
+	fillShowExternalDeps(ctx, groups, detailsByID, WarnError)
+
 	allDetails := make([]interface{}, 0, len(resolved))
 	for _, id := range resolved {
 		details, ok := detailsByID[id]
