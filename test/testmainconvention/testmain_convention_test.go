@@ -10,10 +10,12 @@
 package testmainconvention
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -106,13 +108,15 @@ func bodyHasCall(body *ast.BlockStmt, match func(ast.Expr) bool) bool {
 	return found
 }
 
-// TestNoTestMainDefersTerminateDoltContainerBeforeOsExit is a repo-wide
-// structural regression test for be-5kkk6. See the package doc for the bug.
-func TestNoTestMainDefersTerminateDoltContainerBeforeOsExit(t *testing.T) {
-	root := repoRoot()
+// scanTestMains reports the violating _test.go paths under root, resolving a symlinked root and refusing an empty tree.
+func scanTestMains(root string) ([]string, error) {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", root, err)
+	}
 	var violations []string
-
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	scanned := 0
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -126,18 +130,16 @@ func TestNoTestMainDefersTerminateDoltContainerBeforeOsExit(t *testing.T) {
 		if !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-
+		scanned++
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+			return fmt.Errorf("parse %s: %w", path, err)
 		}
-
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
-			t.Fatalf("relativize %s: %v", path, err)
+			return fmt.Errorf("relativize %s: %w", path, err)
 		}
-
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || !isTestMain(fn) {
@@ -152,12 +154,48 @@ func TestNoTestMainDefersTerminateDoltContainerBeforeOsExit(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
+		return nil, err
+	}
+	if scanned == 0 {
+		return nil, fmt.Errorf("no _test.go file found under %s", root)
+	}
+	return violations, nil
+}
+
+func TestNoTestMainDefersTerminateDoltContainerBeforeOsExit(t *testing.T) {
+	violations, err := scanTestMains(repoRoot())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
 	}
 
 	if len(violations) > 0 {
 		sort.Strings(violations)
 		t.Errorf("TestMain defers TerminateDoltContainer and also calls os.Exit in the same function body — os.Exit skips deferred calls, so the container is never cleaned up. Convert to the testMainInner pattern (TestMain reduces to os.Exit(testMainInner(m)); the defer and every os.Exit call site move inside testMainInner as returns). Violations:\n  %s",
 			strings.Join(violations, "\n  "))
+	}
+}
+
+// violatingTestMain is a _test.go body with the shape the guard rejects.
+const violatingTestMain = `package p; import ("os"; "testing"); type c struct{}; func (c) TerminateDoltContainer() {}; func TestMain(m *testing.M) { defer c{}.TerminateDoltContainer(); os.Exit(m.Run()) }`
+
+func TestScanFollowsSymlinkedRoot(t *testing.T) {
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "violating_test.go"), []byte(violatingTestMain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "checkout")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if violations, err := scanTestMains(link); err != nil || len(violations) != 1 || violations[0] != "violating_test.go" {
+		t.Fatalf("scan %s = %v, %v; want [violating_test.go]", link, violations, err)
+	}
+}
+
+func TestScanRefuses(t *testing.T) {
+	for _, root := range []string{filepath.Join(t.TempDir(), "absent"), t.TempDir()} {
+		if violations, err := scanTestMains(root); err == nil {
+			t.Errorf("scan %s = %v, nil; want an error", root, violations)
+		}
 	}
 }
