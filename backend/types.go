@@ -22,6 +22,7 @@ type (
 	EpicStatus                  = types.EpicStatus
 	Event                       = types.Event
 	EventType                   = types.EventType
+	ExternalDependency          = types.ExternalDependency
 	Issue                       = types.Issue
 	IssueDetails                = types.IssueDetails
 	IssueFilter                 = types.IssueFilter

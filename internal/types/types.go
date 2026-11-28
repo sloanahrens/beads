@@ -1119,6 +1119,13 @@ type Dependency struct {
 	ThreadID string `json:"thread_id,omitempty"`
 }
 
+// ExternalDependency is a dependency edge whose target has no row in this
+// database, carrying the id the edge points at and the edge type.
+type ExternalDependency struct {
+	ID   string         `json:"id"`
+	Type DependencyType `json:"type"`
+}
+
 // DependencyCounts holds counts for dependencies and dependents
 type DependencyCounts struct {
 	DependencyCount int `json:"dependency_count"` // Number of issues this issue depends on
@@ -1151,6 +1158,10 @@ type IssueDetails struct {
 	Comments     []*Comment                     `json:"comments,omitempty"`
 	Parent       *string                        `json:"parent,omitempty"`
 
+	// ExternalDependencies lists the issue's edges whose target has no row
+	// here; Dependencies drops them because it cannot hydrate the target.
+	ExternalDependencies []ExternalDependency `json:"external_dependencies,omitempty"`
+
 	// Cardinality fields — emitted by default (count-only mode).
 	// Slice fields (Dependents, Comments) are nil when count-only is active.
 	// Use --include-dependents / --include-comments to populate the slices.
@@ -1172,6 +1183,10 @@ type IssueDetails struct {
 	// has no dependencies; without this flag the two look the same. Left nil
 	// when both reads answered, so a healthy view is unchanged.
 	DependenciesUnread *bool `json:"dependencies_unread,omitempty"`
+
+	// ExternalDependenciesUnread is true only when the read of the edges
+	// whose target has no row failed, and left nil otherwise.
+	ExternalDependenciesUnread *bool `json:"external_dependencies_unread,omitempty"`
 
 	// Epic progress fields (populated only for issue_type=epic with children)
 	EpicTotalChildren  *int  `json:"epic_total_children,omitempty"`
