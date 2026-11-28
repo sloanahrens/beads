@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/issueops"
@@ -69,4 +70,20 @@ func fillExternalDeps(ctx context.Context, group showBatchGroup, detailsByID map
 		}
 	}
 	return nil
+}
+
+// fillShowExternalDeps fills every store group in order. A failed group's views
+// are marked unread and warned about once, on one line; later groups still fill.
+func fillShowExternalDeps(ctx context.Context, groups []showBatchGroup, detailsByID map[string]*issueops.IssueDetails, warn func(string, ...interface{})) {
+	for _, group := range groups {
+		if err := fillExternalDeps(ctx, group, detailsByID); err != nil {
+			marked := make(map[string]bool, len(group.ids))
+			for _, id := range group.ids {
+				if _, ok := detailsByID[id]; ok {
+					marked[id] = true
+				}
+			}
+			warn("external dependencies unread for %d issue(s): %s", len(marked), strings.ReplaceAll(err.Error(), "\n", " "))
+		}
+	}
 }
